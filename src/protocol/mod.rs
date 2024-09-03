@@ -94,7 +94,8 @@ impl<'a, B: AsMut<[u8]>> Builder<'a, B> {
         slice[3] = t_4;
         Ok(self)
     }
-    pub fn src_id(&mut self, src: NodeID) -> std::io::Result<&mut Self> {
+    pub fn src_id<T: Into<NodeID>>(&mut self, src: T) -> std::io::Result<&mut Self> {
+        let src = src.into();
         let slice = self.0.as_mut();
         let bytes = src.as_ref();
         if bytes.len() != self.1 {
@@ -103,7 +104,8 @@ impl<'a, B: AsMut<[u8]>> Builder<'a, B> {
         slice[4..4 + self.1].copy_from_slice(bytes);
         Ok(self)
     }
-    pub fn dest_id(&mut self, dest: NodeID) -> std::io::Result<&mut Self> {
+    pub fn dest_id<T: Into<NodeID>>(&mut self, dest: T) -> std::io::Result<&mut Self> {
+        let dest = dest.into();
         let slice = self.0.as_mut();
         let bytes = dest.as_ref();
         if bytes.len() != self.1 {
@@ -140,9 +142,9 @@ mod a {
             .unwrap()
             .protocol(ProtocolType::Unknown(1))
             .unwrap()
-            .src_id(1i32.into())
+            .src_id(1i32)
             .unwrap()
-            .dest_id(2i32.into())
+            .dest_id(2i32)
             .unwrap();
         assert_eq!(buf, [0u8, 4u8, 1u8, 0b10101010u8, 0, 0, 0, 1, 0, 0, 0, 2]);
         assert_eq!(1i32, i32::try_from(NodeID::Bit32([0, 0, 0, 1])).unwrap());
