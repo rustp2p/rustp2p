@@ -14,6 +14,8 @@
 
 use std::io;
 
+use node_id::NodeID;
+
 use crate::protocol::protocol_type::ProtocolType;
 
 pub mod node_id;
@@ -60,5 +62,86 @@ impl<B: AsRef<[u8]>> NetPacket<B> {
     pub fn payload(&self) -> &[u8] {
         let start = 4 + self.id_length() as usize * 2;
         &self.buffer.as_ref()[start..]
+    }
+}
+
+pub struct Builder<'a, B>(&'a mut B, usize);
+
+impl<'a, B: AsMut<[u8]>> Builder<'a, B> {
+    pub fn new(buf: &'a mut B, id_len: u8) -> std::io::Result<Self> {
+        let slice = buf.as_mut();
+        let head_len = 4 + 2 * id_len as usize;
+        if slice.len() < head_len {
+            return Err(std::io::Error::other("out of bounds"));
+        }
+        if id_len % 2 != 0 {
+            return Err(std::io::Error::other("invalid id len"));
+        }
+        slice[1] = id_len;
+        Ok(Builder(buf, id_len as usize))
+    }
+    pub fn protocol(&mut self, p: ProtocolType) -> std::io::Result<&mut Self> {
+        let slice = self.0.as_mut();
+        slice[2] = p.into();
+        Ok(self)
+    }
+    pub fn ttl(&mut self, t: u8) -> std::io::Result<&mut Self> {
+        let slice = self.0.as_mut();
+        if t > 15 {
+            return Err(std::io::Error::other("out of ttl bounds"));
+        }
+        let t_4 = (t << 4) | t;
+        slice[3] = t_4;
+        Ok(self)
+    }
+    pub fn src_id(&mut self, src: NodeID) -> std::io::Result<&mut Self> {
+        let slice = self.0.as_mut();
+        let bytes = src.as_ref();
+        if bytes.len() != self.1 {
+            return Err(std::io::Error::other("invalid src len"));
+        }
+        slice[4..4 + self.1].copy_from_slice(bytes);
+        Ok(self)
+    }
+    pub fn dest_id(&mut self, dest: NodeID) -> std::io::Result<&mut Self> {
+        let slice = self.0.as_mut();
+        let bytes = dest.as_ref();
+        if bytes.len() != self.1 {
+            return Err(std::io::Error::other("invalid dest len"));
+        }
+        slice[4 + self.1..4 + 2 * self.1].copy_from_slice(bytes);
+        Ok(self)
+    }
+    pub fn payload(&mut self, data: &[u8]) -> std::io::Result<&mut Self> {
+        let slice = self.0.as_mut();
+        let total = slice.len();
+        let head_len = 4 + 2 * self.1 as usize;
+        let need_size = head_len + data.len();
+        if need_size > total {
+            return Err(std::io::Error::other("no free storage to store data"));
+        }
+        slice[head_len..need_size].copy_from_slice(data);
+        Ok(self)
+    }
+}
+
+#[cfg(test)]
+mod a {
+    use super::{node_id::NodeID, protocol_type::ProtocolType, Builder};
+
+    #[test]
+    fn test_build() {
+        let mut buf = [0u8; 12];
+        let mut build = Builder::new(&mut buf, 4).unwrap();
+        build
+            .ttl(10)
+            .unwrap()
+            .protocol(ProtocolType::Unknown(1))
+            .unwrap()
+            .src_id(NodeID::Bit32(1i32.to_be_bytes()))
+            .unwrap()
+            .dest_id(NodeID::Bit32(2i32.to_be_bytes()))
+            .unwrap();
+        assert_eq!(buf, [0u8, 4u8, 1u8, 0b10101010u8, 0, 0, 0, 1, 0, 0, 0, 2]);
     }
 }
