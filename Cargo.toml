@@ -14,7 +14,7 @@ log = "0.4.17"
 thiserror = "1.0.63"
 protobuf = { version = "3.5.1", features = ["bytes"] }
 bytes = "1.7.1"
-
+crossbeam-utils = "0.8"
 
 [build-dependencies]
 protobuf-codegen = "3.5.1"

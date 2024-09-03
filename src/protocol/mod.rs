@@ -74,8 +74,34 @@ impl<B: AsRef<[u8]>> NetPacket<B> {
         let start = 4 + self.id_length() as usize * 2;
         &self.buffer.as_ref()[start..]
     }
+    pub fn buffer(&self) -> &[u8] {
+        self.buffer.as_ref()
+    }
 }
 impl<B: AsRef<[u8]> + AsMut<[u8]>> NetPacket<B> {
+    pub fn incr_ttl(&mut self) {
+        let ttl = self.ttl();
+        if ttl == 0 {
+            return;
+        }
+        self.buffer.as_mut()[3] &= 0xF0 | (ttl - 1)
+    }
+    pub fn set_ttl(&mut self, ttl: u8) {
+        self.buffer.as_mut()[3] = (ttl << 4) | ttl
+    }
+    pub fn exchange_id(&mut self) {
+        let src_start = 4;
+        let dest_start = src_start + self.id_length() as usize;
+
+        for index in 0..self.id_length() as usize {
+            let tmp = self.buffer.as_ref()[src_start + index];
+            self.buffer.as_mut()[src_start + index] = self.buffer.as_ref()[dest_start + index];
+            self.buffer.as_mut()[dest_start + index] = tmp;
+        }
+    }
+    pub fn set_protocol(&mut self, protocol_type: ProtocolType) {
+        self.buffer.as_mut()[2] = protocol_type.into();
+    }
     pub fn payload_mut(&mut self) -> &mut [u8] {
         let start = 4 + self.id_length() as usize * 2;
         &mut self.buffer.as_mut()[start..]

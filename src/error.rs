@@ -1,3 +1,4 @@
+use std::time::SystemTimeError;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -10,6 +11,10 @@ pub enum Error {
     Io(#[from] std::io::Error),
     #[error(transparent)]
     Any(#[from] anyhow::Error),
+    #[error(transparent)]
+    Core(#[from] rust_p2p_core::error::Error),
+    #[error(transparent)]
+    SystemTimeError(#[from] SystemTimeError),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

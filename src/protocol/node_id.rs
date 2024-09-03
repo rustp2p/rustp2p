@@ -24,6 +24,14 @@ impl NodeID {
             _ => Err(std::io::Error::from(std::io::ErrorKind::InvalidData)),
         }
     }
+    pub fn is_unspecified(&self) -> bool {
+        let buf = self.as_ref();
+        buf.iter().all(|v| *v == 0)
+    }
+    pub fn is_broadcast(&self) -> bool {
+        let buf = self.as_ref();
+        buf.iter().all(|v| *v == 1)
+    }
 }
 
 macro_rules! impl_from_integer {
