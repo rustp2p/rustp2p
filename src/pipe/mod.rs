@@ -103,7 +103,11 @@ impl PipeLine {
         }
         let _self_id = if let Some(self_id) = self.self_node_id.load() {
             if self_id != dest_id && !dest_id.is_broadcast() {
-                return Ok(HandleResult::Turn(packet));
+                return if packet.incr_ttl() {
+                    Ok(HandleResult::Turn(packet))
+                } else {
+                    Ok(HandleResult::Done)
+                };
             }
             self_id
         } else {
@@ -151,6 +155,9 @@ impl PipeLine {
             }
             ProtocolType::IDRouteQuery => {}
             ProtocolType::IDRouteReply => {}
+            ProtocolType::UserData => {
+                return Ok(HandleResult::UserData(packet, dest_id, route_key))
+            }
             _ => {}
         }
         if add_route {

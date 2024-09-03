@@ -79,12 +79,13 @@ impl<B: AsRef<[u8]>> NetPacket<B> {
     }
 }
 impl<B: AsRef<[u8]> + AsMut<[u8]>> NetPacket<B> {
-    pub fn incr_ttl(&mut self) {
+    pub fn incr_ttl(&mut self) -> bool {
         let ttl = self.ttl();
         if ttl == 0 {
-            return;
+            return false;
         }
-        self.buffer.as_mut()[3] &= 0xF0 | (ttl - 1)
+        self.buffer.as_mut()[3] &= 0xF0 | (ttl - 1);
+        true
     }
     pub fn set_ttl(&mut self, ttl: u8) {
         self.buffer.as_mut()[3] = (ttl << 4) | ttl
