@@ -1,4 +1,5 @@
 #[non_exhaustive]
+#[derive(Hash, Eq, PartialEq, Copy, Clone)]
 pub enum NodeID {
     Bit32([u8; 4]),
     Bit64([u8; 8]),

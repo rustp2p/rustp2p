@@ -12,6 +12,7 @@ pub enum ProtocolType {
     /// ID route query
     IDRouteQuery,
     IDRouteReply,
+    UserData,
     Unknown(u8),
 }
 
@@ -27,6 +28,7 @@ impl From<u8> for ProtocolType {
             7 => ProtocolType::TimestampReply,
             8 => ProtocolType::IDRouteQuery,
             9 => ProtocolType::IDRouteReply,
+            10 => ProtocolType::UserData,
             val => ProtocolType::Unknown(val),
         }
     }
@@ -43,6 +45,7 @@ impl Into<u8> for ProtocolType {
             ProtocolType::TimestampReply => 7,
             ProtocolType::IDRouteQuery => 8,
             ProtocolType::IDRouteReply => 9,
+            ProtocolType::UserData => 10,
             ProtocolType::Unknown(val) => val,
         }
     }
