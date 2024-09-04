@@ -31,6 +31,9 @@ pub struct NetPacket<B> {
 }
 
 impl<B: AsRef<[u8]>> NetPacket<B> {
+    pub fn unchecked(buffer: B) -> NetPacket<B> {
+        Self { buffer }
+    }
     pub fn new(buffer: B) -> Result<NetPacket<B>> {
         let len = buffer.as_ref().len();
         if len < 4 {
@@ -99,6 +102,9 @@ impl<B: AsRef<[u8]> + AsMut<[u8]>> NetPacket<B> {
             self.buffer.as_mut()[src_start + index] = self.buffer.as_ref()[dest_start + index];
             self.buffer.as_mut()[dest_start + index] = tmp;
         }
+    }
+    pub fn set_id_length(&mut self, id_length: u8) {
+        self.buffer.as_mut()[1] = id_length;
     }
     pub fn set_protocol(&mut self, protocol_type: ProtocolType) {
         self.buffer.as_mut()[2] = protocol_type.into();
