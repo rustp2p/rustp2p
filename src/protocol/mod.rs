@@ -22,7 +22,6 @@ use crate::protocol::protocol_type::ProtocolType;
 pub mod echo;
 pub mod id_route;
 pub mod node_id;
-pub mod proto;
 pub mod protocol_type;
 pub mod punch;
 pub mod timestamp;
@@ -165,7 +164,7 @@ impl<'a, B: AsRef<[u8]>> Debug for Builder<'a, B> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let buf = self.0.as_ref();
         if buf.len() < 4 {
-            return f.write_str("");
+            return f.write_str("Invalid Protocol Buffer");
         }
         let ttl = buf[3];
         let id_len = self.1;
