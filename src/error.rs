@@ -8,6 +8,8 @@ pub enum Error {
     InvalidArgument(String),
     #[error(transparent)]
     Io(#[from] std::io::Error),
+	#[error(transparent)]
+	Any(#[from] anyhow::Error)
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

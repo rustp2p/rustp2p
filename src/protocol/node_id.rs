@@ -15,8 +15,18 @@ impl AsRef<[u8]> for NodeID {
         }
     }
 }
+impl NodeID {
+    pub fn new(buf: &[u8]) -> std::io::Result<Self> {
+        match buf.len() {
+            4 => Ok(NodeID::Bit32(buf.try_into().unwrap())),
+            8 => Ok(NodeID::Bit32(buf.try_into().unwrap())),
+            16 => Ok(NodeID::Bit32(buf.try_into().unwrap())),
+            _ => Err(std::io::Error::from(std::io::ErrorKind::InvalidData)),
+        }
+    }
+}
 
-macro_rules! impl_from_integer{
+macro_rules! impl_from_integer {
 	($p0:ident:$t0:ty)=>{
 		impl From<$t0> for $crate::protocol::node_id::NodeID{
 			fn from(value: $t0) -> Self {
