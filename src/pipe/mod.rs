@@ -1,4 +1,5 @@
 use crate::config::PipeConfig;
+use crate::error::{Error, Result};
 use crate::protocol::node_id::NodeID;
 use crate::protocol::protocol_type::ProtocolType;
 use crate::protocol::NetPacket;
@@ -32,13 +33,10 @@ pub struct PipeLine {
     pipe_line: rust_p2p_core::pipe::PipeLine,
 }
 impl PipeLine {
-    pub async fn recv_from<'a>(
-        &mut self,
-        buf: &'a mut [u8],
-    ) -> Option<std::io::Result<RecvResult<'a>>> {
+    pub async fn recv_from<'a>(&mut self, buf: &'a mut [u8]) -> Option<Result<RecvResult<'a>>> {
         let (len, route_key) = match self.pipe_line.recv_from(buf).await? {
             Ok((len, route_key)) => (len, route_key),
-            Err(e) => return Some(Err(e)),
+            Err(e) => return Some(Err(Error::Io(e))),
         };
         let packet = match NetPacket::new(&mut buf[..len]) {
             Ok(packet) => packet,

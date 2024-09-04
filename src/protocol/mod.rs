@@ -12,10 +12,9 @@
   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 */
 
-use std::io;
-
 use node_id::NodeID;
 
+use crate::error::{Error, Result};
 use crate::protocol::protocol_type::ProtocolType;
 
 pub mod node_id;
@@ -26,15 +25,21 @@ pub struct NetPacket<B> {
 }
 
 impl<B: AsRef<[u8]>> NetPacket<B> {
-    pub fn new(buffer: B) -> io::Result<NetPacket<B>> {
+    pub fn new(buffer: B) -> Result<NetPacket<B>> {
         let len = buffer.as_ref().len();
         if len < 4 {
-            return Err(io::Error::from(io::ErrorKind::InvalidData));
+            return Err(Error::Overflow {
+                cap: len,
+                required: 4,
+            });
         }
         let packet = Self { buffer };
         let head_len = 4 + 2 * packet.id_length() as usize;
         if len < head_len {
-            return Err(io::Error::from(io::ErrorKind::InvalidData));
+            return Err(Error::Overflow {
+                cap: len,
+                required: head_len,
+            });
         }
         Ok(packet)
     }
@@ -74,59 +79,75 @@ impl<B: AsRef<[u8]> + AsMut<[u8]>> NetPacket<B> {
 pub struct Builder<'a, B>(&'a mut B, usize);
 
 impl<'a, B: AsMut<[u8]>> Builder<'a, B> {
-    pub fn new(buf: &'a mut B, id_len: u8) -> std::io::Result<Self> {
+    pub fn new(buf: &'a mut B, id_len: u8) -> Result<Self> {
         let slice = buf.as_mut();
         let head_len = 4 + 2 * id_len as usize;
         if slice.len() < head_len {
-            return Err(std::io::Error::other("out of bounds"));
+            return Err(Error::Overflow {
+                cap: slice.len(),
+                required: head_len,
+            });
         }
         if id_len % 2 != 0 {
-            return Err(std::io::Error::other("invalid id len"));
+            return Err(Error::InvalidArgument(format!(
+                "node_id len must be a non-zero integer power of two, the checked one is {id_len}"
+            )));
         }
         slice[1] = id_len;
         Ok(Builder(buf, id_len as usize))
     }
-    pub fn protocol(&mut self, p: ProtocolType) -> std::io::Result<&mut Self> {
+    pub fn protocol(&mut self, p: ProtocolType) -> Result<&mut Self> {
         let slice = self.0.as_mut();
         slice[2] = p.into();
         Ok(self)
     }
-    pub fn ttl(&mut self, t: u8) -> std::io::Result<&mut Self> {
+    pub fn ttl(&mut self, t: u8) -> Result<&mut Self> {
         let slice = self.0.as_mut();
         if t > 15 {
-            return Err(std::io::Error::other("out of ttl bounds"));
+            return Err(Error::InvalidArgument(
+                "ttl must be less or equal than 15".to_string(),
+            ));
         }
         let t_4 = (t << 4) | t;
         slice[3] = t_4;
         Ok(self)
     }
-    pub fn src_id<T: Into<NodeID>>(&mut self, src: T) -> std::io::Result<&mut Self> {
+    pub fn src_id<T: Into<NodeID>>(&mut self, src: T) -> Result<&mut Self> {
         let src = src.into();
         let slice = self.0.as_mut();
         let bytes = src.as_ref();
         if bytes.len() != self.1 {
-            return Err(std::io::Error::other("invalid src len"));
+            return Err(Error::InvalidArgument(format!(
+                "the length of source node_id must equal to {}",
+                self.1
+            )));
         }
         slice[4..4 + self.1].copy_from_slice(bytes);
         Ok(self)
     }
-    pub fn dest_id<T: Into<NodeID>>(&mut self, dest: T) -> std::io::Result<&mut Self> {
+    pub fn dest_id<T: Into<NodeID>>(&mut self, dest: T) -> Result<&mut Self> {
         let dest = dest.into();
         let slice = self.0.as_mut();
         let bytes = dest.as_ref();
         if bytes.len() != self.1 {
-            return Err(std::io::Error::other("invalid dest len"));
+            return Err(Error::InvalidArgument(format!(
+                "the length of destination node_id must equal to {}",
+                self.1
+            )));
         }
         slice[4 + self.1..4 + 2 * self.1].copy_from_slice(bytes);
         Ok(self)
     }
-    pub fn payload(&mut self, data: &[u8]) -> std::io::Result<&mut Self> {
+    pub fn payload(&mut self, data: &[u8]) -> Result<&mut Self> {
         let slice = self.0.as_mut();
         let total = slice.len();
         let head_len = 4 + 2 * self.1 as usize;
         let need_size = head_len + data.len();
         if need_size > total {
-            return Err(std::io::Error::other("no free storage to store data"));
+            return Err(Error::Overflow {
+                cap: total,
+                required: need_size,
+            });
         }
         slice[head_len..need_size].copy_from_slice(data);
         Ok(self)
