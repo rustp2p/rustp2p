@@ -12,6 +12,8 @@
   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 */
 
+use std::fmt::Debug;
+
 use node_id::NodeID;
 
 use crate::error::{Error, Result};
@@ -154,6 +156,55 @@ impl<'a, B: AsMut<[u8]>> Builder<'a, B> {
     }
 }
 
+impl<'a, B: AsRef<[u8]>> Debug for Builder<'a, B> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let buf = self.0.as_ref();
+        if buf.len() < 4 {
+            return f.write_str("");
+        }
+        let ttl = buf[3];
+        let id_len = self.1;
+        let src_id = if buf.len() < (4 + id_len) {
+            "".to_string()
+        } else {
+            format!("{:?}", &buf[4..4 + id_len])
+        };
+        let dest_id = if buf.len() < (4 + 2 * id_len) {
+            "".to_string()
+        } else {
+            format!("{:?}", &buf[4 + id_len..4 + 2 * id_len])
+        };
+        let payload_size = if buf.len() > 4 + 2 * id_len {
+            buf.len() - (4 + 2 * id_len)
+        } else {
+            0
+        };
+        let s = format!(
+            "
+   0                                           15                                               31
+   0  1  2  3  4  5  6  7  8  9  0  1  2  3  4  5  6  7  8  9  0  1  2  3  4  5  6  7  8  9  0  1
+  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+  |    unused(8)        | {0:^20}| {1:^22}| {2:^12} | {3:^6}   |
+  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+  | {4:^91} |
+  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+  | {5:^91} |
+  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+  | {6:^91} |
+  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+		",
+            format!("{}bytes", buf[1]),
+            format!("{:?}", ProtocolType::from(buf[2])),
+            format!("{:0b}", ttl >> 4),
+            format!("{:0b}", ttl & 0b00001111),
+            src_id,
+            dest_id,
+            format!("{}bytes", payload_size)
+        );
+        f.write_str(&s)
+    }
+}
+
 #[cfg(test)]
 mod test {
     use crate::protocol::node_id::NodeID;
@@ -167,18 +218,19 @@ mod test {
         build
             .ttl(10)
             .unwrap()
-            .protocol(ProtocolType::Unknown)
+            .protocol(ProtocolType::TimestampRequest)
             .unwrap()
             .src_id(1i32)
             .unwrap()
             .dest_id(2i32)
             .unwrap();
+        println!("{:?}", build);
         assert_eq!(
             buf,
             [
                 0u8,
                 4u8,
-                ProtocolType::Unknown as u8,
+                ProtocolType::TimestampRequest as u8,
                 0b10101010u8,
                 0,
                 0,
