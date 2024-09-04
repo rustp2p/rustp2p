@@ -1,4 +1,5 @@
 #[derive(Eq, PartialEq, Copy, Clone, Debug)]
+#[repr(u8)]
 pub enum ProtocolType {
     PunchConsult,
     PunchRequest,
@@ -13,40 +14,36 @@ pub enum ProtocolType {
     IDRouteQuery,
     IDRouteReply,
     UserData,
-    Unknown(u8),
+    Unknown = 255,
 }
 
 impl From<u8> for ProtocolType {
     fn from(value: u8) -> Self {
+        const MAX: u8 = ProtocolType::UserData as u8;
+        let mut ret = ProtocolType::Unknown;
         match value {
-            1 => ProtocolType::PunchConsult,
-            2 => ProtocolType::PunchRequest,
-            3 => ProtocolType::PunchReply,
-            4 => ProtocolType::EchoRequest,
-            5 => ProtocolType::EchoReply,
-            6 => ProtocolType::TimestampRequest,
-            7 => ProtocolType::TimestampReply,
-            8 => ProtocolType::IDRouteQuery,
-            9 => ProtocolType::IDRouteReply,
-            10 => ProtocolType::UserData,
-            val => ProtocolType::Unknown(val),
+            0..=MAX => unsafe {
+                let ptr = &mut ret as *mut _ as *mut u8;
+                *ptr = value;
+            },
+            _ => {}
         }
+        ret
     }
 }
 impl Into<u8> for ProtocolType {
     fn into(self) -> u8 {
-        match self {
-            ProtocolType::PunchConsult => 1,
-            ProtocolType::PunchRequest => 2,
-            ProtocolType::PunchReply => 3,
-            ProtocolType::EchoRequest => 4,
-            ProtocolType::EchoReply => 5,
-            ProtocolType::TimestampRequest => 6,
-            ProtocolType::TimestampReply => 7,
-            ProtocolType::IDRouteQuery => 8,
-            ProtocolType::IDRouteReply => 9,
-            ProtocolType::UserData => 10,
-            ProtocolType::Unknown(val) => val,
-        }
+        self as u8
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::ProtocolType;
+
+    #[test]
+    fn test_new_protocol() {
+        assert_eq!(ProtocolType::from(2), ProtocolType::PunchReply);
+        assert_eq!(ProtocolType::from(128), ProtocolType::Unknown);
     }
 }

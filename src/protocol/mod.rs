@@ -134,7 +134,7 @@ impl<'a, B: AsMut<[u8]>> Builder<'a, B> {
 }
 
 #[cfg(test)]
-mod a {
+mod test {
     use crate::protocol::node_id::NodeID;
 
     use super::{protocol_type::ProtocolType, Builder};
@@ -146,13 +146,29 @@ mod a {
         build
             .ttl(10)
             .unwrap()
-            .protocol(ProtocolType::Unknown(1))
+            .protocol(ProtocolType::Unknown)
             .unwrap()
             .src_id(1i32)
             .unwrap()
             .dest_id(2i32)
             .unwrap();
-        assert_eq!(buf, [0u8, 4u8, 1u8, 0b10101010u8, 0, 0, 0, 1, 0, 0, 0, 2]);
+        assert_eq!(
+            buf,
+            [
+                0u8,
+                4u8,
+                ProtocolType::Unknown as u8,
+                0b10101010u8,
+                0,
+                0,
+                0,
+                1,
+                0,
+                0,
+                0,
+                2
+            ]
+        );
         assert_eq!(1i32, i32::try_from(NodeID::Bit32([0, 0, 0, 1])).unwrap());
     }
 }
