@@ -32,6 +32,9 @@ impl NodeID {
         let buf = self.as_ref();
         buf.iter().all(|v| *v == 1)
     }
+    pub fn len(&self) -> usize {
+        self.as_ref().len()
+    }
 }
 
 macro_rules! impl_from_integer {

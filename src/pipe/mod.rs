@@ -1,40 +1,39 @@
-use crate::config::PipeConfig;
-use crate::error::{Error, Result};
-use crate::protocol::node_id::NodeID;
-use crate::protocol::protocol_type::ProtocolType;
-use crate::protocol::NetPacket;
-use crossbeam_utils::atomic::AtomicCell;
-use rust_p2p_core::pipe::PipeWriter;
-use rust_p2p_core::route::route_table::RouteTable;
-use rust_p2p_core::route::{Route, RouteKey};
-use std::io;
 use std::net::SocketAddr;
-use std::sync::Arc;
 use std::time::UNIX_EPOCH;
 
+use rust_p2p_core::pipe::PipeWriter;
+use rust_p2p_core::route::{Route, RouteKey};
+use rust_p2p_core::route::route_table::RouteTable;
+
+use crate::config::PipeConfig;
+use crate::error::{Error, Result};
+use crate::pipe::pipe_context::PipeContext;
+use crate::protocol::NetPacket;
+use crate::protocol::node_id::NodeID;
+use crate::protocol::protocol_type::ProtocolType;
+
+mod pipe_context;
+
 pub struct Pipe {
-    self_node_id: Arc<AtomicCell<Option<NodeID>>>,
+    pipe_context: PipeContext,
     pipe: rust_p2p_core::pipe::Pipe<NodeID>,
     puncher: rust_p2p_core::punch::Puncher<NodeID>,
     idle_route_manager: rust_p2p_core::idle::IdleRouteManager<NodeID>,
 }
+
 impl Pipe {
     pub fn new(config: PipeConfig) -> Result<Pipe> {
         let (pipe, puncher, idle_route_manager) =
             rust_p2p_core::pipe::pipe::<NodeID>(config.into())?;
         Ok(Self {
-            self_node_id: Arc::new(AtomicCell::new(None)),
+            pipe_context: PipeContext::default(),
             pipe,
             puncher,
             idle_route_manager,
         })
     }
     pub fn store_self_id(&self, node_id: NodeID) -> Result<()> {
-        if node_id.is_unspecified() || node_id.is_broadcast() {
-            return Err(Error::InvalidArgument("invalid node id".into()));
-        }
-        self.self_node_id.store(Some(node_id));
-        Ok(())
+        self.pipe_context.store_self_id(node_id)
     }
 }
 
@@ -42,7 +41,7 @@ impl Pipe {
     pub async fn accept(&mut self) -> anyhow::Result<PipeLine> {
         let pipe_line = self.pipe.accept().await?;
         Ok(PipeLine {
-            self_node_id: self.self_node_id.clone(),
+            pipe_context: self.pipe_context.clone(),
             pipe_line,
             pipe_writer: self.pipe.writer_ref().to_owned(),
             route_table: self.pipe.route_table().clone(),
@@ -51,29 +50,22 @@ impl Pipe {
 }
 
 pub struct PipeLine {
-    self_node_id: Arc<AtomicCell<Option<NodeID>>>,
+    pipe_context: PipeContext,
     pipe_line: rust_p2p_core::pipe::PipeLine,
     pipe_writer: PipeWriter<NodeID>,
     route_table: RouteTable<NodeID>,
 }
+
 impl PipeLine {
     pub fn store_self_id(&self, node_id: NodeID) -> Result<()> {
-        if node_id.is_unspecified() || node_id.is_broadcast() {
-            return Err(Error::InvalidArgument("invalid node id".into()));
-        }
-        self.self_node_id.store(Some(node_id));
-        Ok(())
+        self.pipe_context.store_self_id(node_id)
     }
     pub async fn recv_from<'a>(&mut self, buf: &'a mut [u8]) -> Option<Result<RecvResult<'a>>> {
         let (len, route_key) = match self.pipe_line.recv_from(buf).await? {
             Ok((len, route_key)) => (len, route_key),
             Err(e) => return Some(Err(Error::Io(e))),
         };
-        let packet = match NetPacket::new(&mut buf[..len]) {
-            Ok(packet) => packet,
-            Err(e) => return Some(Err(e)),
-        };
-        Some(Ok(RecvResult { packet, route_key }))
+        Some(Ok(RecvResult::new(&mut buf[..len], route_key)))
     }
     pub async fn send_to(&self, buf: &[u8], id: &NodeID) -> Result<()> {
         self.pipe_writer.send_to_id(buf, id).await?;
@@ -84,15 +76,16 @@ impl PipeLine {
         Ok(())
     }
     pub async fn handle<'a>(&mut self, recv_result: RecvResult<'a>) -> Result<HandleResult<'a>> {
-        let src_id = recv_result.src_id()?;
+        let mut packet = NetPacket::new(recv_result.buf)?;
+        let src_id = NodeID::new(packet.src_id())?;
+
         if src_id.is_unspecified() || src_id.is_broadcast() {
             return Err(Error::InvalidArgument("src id is unspecified".into()));
         }
-        let dest_id = recv_result.dest_id()?;
+        let dest_id = NodeID::new(packet.dest_id())?;
         if src_id.is_unspecified() {
             return Err(Error::InvalidArgument("src id is unspecified".into()));
         }
-        let mut packet = recv_result.packet;
 
         if packet.first_ttl() < packet.ttl() {
             return Err(Error::InvalidArgument("ttl error".into()));
@@ -101,7 +94,10 @@ impl PipeLine {
         if packet.ttl() == 0 {
             return Ok(HandleResult::Done);
         }
-        let _self_id = if let Some(self_id) = self.self_node_id.load() {
+        let _self_id = if let Some(self_id) = self.pipe_context.load_id() {
+            if self_id.len() != dest_id.len() {
+                return Err(Error::InvalidArgument("id len error".into()));
+            }
             if self_id != dest_id && !dest_id.is_broadcast() {
                 return if packet.incr_ttl() {
                     Ok(HandleResult::Turn(packet))
@@ -169,31 +165,22 @@ impl PipeLine {
 }
 
 pub struct RecvResult<'a> {
-    packet: NetPacket<&'a mut [u8]>,
+    buf: &'a mut [u8],
     route_key: RouteKey,
 }
+
 impl<'a> RecvResult<'a> {
-    #[inline]
-    pub fn is_user_data(&self) -> bool {
-        self.packet.protocol() == ProtocolType::UserData
+    pub fn new(buf: &'a mut [u8], route_key: RouteKey) -> Self {
+        Self { buf, route_key }
     }
-    pub fn user_payload_mut(&mut self) -> Option<&mut [u8]> {
-        if self.is_user_data() {
-            Some(self.packet.payload_mut())
-        } else {
-            None
-        }
-    }
-    pub fn src_id(&self) -> io::Result<NodeID> {
-        NodeID::new(self.packet.src_id())
-    }
-    pub fn dest_id(&self) -> io::Result<NodeID> {
-        NodeID::new(self.packet.dest_id())
+    pub fn buf(&mut self) -> &mut [u8] {
+        self.buf
     }
     pub fn remote_addr(&self) -> SocketAddr {
         self.route_key.addr()
     }
 }
+
 pub enum HandleResult<'a> {
     Done,
     Reply(NetPacket<&'a mut [u8]>, RouteKey),
