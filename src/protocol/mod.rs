@@ -2,7 +2,7 @@
    0                                            15                                              31
    0  1  2  3  4  5  6  7  8  9  0  1  2  3  4  5  6  7  8  9  0  1  2  3  4  5  6  7  8  9  0  1
   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-  |    unused(8)        | ID length(8)          |   protocol (8)       |first ttl(4) | ttl(4)   |
+  |    unused(8)        | ID length(8)          |   protocol (8)       |max ttl(4) |curr ttl(4) |
   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
   |                                           src ID                                            |
   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
@@ -19,8 +19,13 @@ use node_id::NodeID;
 use crate::error::{Error, Result};
 use crate::protocol::protocol_type::ProtocolType;
 
+pub mod echo;
+pub mod id_route;
 pub mod node_id;
+pub mod proto;
 pub mod protocol_type;
+pub mod punch;
+pub mod timestamp;
 
 pub struct NetPacket<B> {
     buffer: B,

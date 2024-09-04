@@ -1,0 +1,32 @@
+syntax = "proto3";
+
+
+message PunchInfo {
+    bool reply = 1;
+    PunchNatType nat_type = 2;
+    repeated fixed32 public_ip_list = 3;
+    uint32 public_port_range = 4;
+    fixed32 local_ip = 5;
+    bytes ipv6 = 6;
+    repeated uint32 local_udp_ports = 7;
+    repeated uint32 public_ports = 8;
+    uint32 local_tcp_port = 9;
+    uint32 public_tcp_port = 10;
+    PunchNatModel punch_model = 11;
+    repeated string mapping_tcp_addr = 12;
+    repeated string mapping_udp_addr = 13;
+    uint32 seq = 14;
+}
+enum PunchNatType {
+    Symmetric = 0;
+    Cone = 1;
+}
+enum PunchNatModel {
+    All = 0;
+    IPv4 = 1;
+    IPv6 = 2;
+    IPv4Tcp = 3;
+    IPv4Udp = 4;
+    IPv6Tcp = 5;
+    IPv6Udp = 6;
+}

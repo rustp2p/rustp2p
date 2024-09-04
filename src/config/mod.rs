@@ -28,8 +28,6 @@ impl LocalInterface {
         }
     }
 }
-pub(crate) const MAX_SYMMETRIC_PIPELINE_NUM: usize = 200;
-pub(crate) const MAX_MAIN_PIPELINE_NUM: usize = 10;
 pub(crate) const ROUTE_IDLE_TIME: Duration = Duration::from_secs(10);
 
 pub struct PipeConfig {
