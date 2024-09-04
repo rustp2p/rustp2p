@@ -109,7 +109,7 @@ impl<B: AsRef<[u8]>> Iterator for IDRouteReplyIter<'_, B> {
         }
         let metric_index = 4 + self.index / 2;
         let metric_offset = if self.index & 0b1 == 0b0 { 4 } else { 0 };
-        let metric = self.packet.buffer()[metric_index] >> metric_offset;
+        let metric = (self.packet.buffer()[metric_index] >> metric_offset) & 0xF;
         let node_index_start =
             4 + self.packet.metric_len() as usize + self.index * self.packet.id_len() as usize;
         let node_index_end = node_index_start + self.packet.id_len() as usize;
@@ -176,8 +176,22 @@ mod test {
             (NodeID::from(2), 1),
             (NodeID::from(1), 3),
         ];
+        test_build0(list);
+        let list = vec![
+            (NodeID::from(1), 1),
+            (NodeID::from(2), 1),
+            (NodeID::from(1), 3),
+            (NodeID::from(4), 2),
+        ];
+        test_build0(list);
+    }
+    fn test_build0(list: Vec<(NodeID, u8)>) {
         let packet = Builder::build(&list, 20).unwrap();
         let packet = IDRouteReplyPacket::new(packet.payload(), packet.id_length()).unwrap();
-        assert_eq!(packet.iter().count(), list.len())
+        assert_eq!(packet.iter().count(), list.len());
+        for (index, (node_id, metric)) in packet.iter().enumerate() {
+            assert_eq!(node_id, list[index].0);
+            assert_eq!(metric, list[index].1);
+        }
     }
 }
