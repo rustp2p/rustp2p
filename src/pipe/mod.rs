@@ -2,15 +2,15 @@ use std::net::SocketAddr;
 use std::time::UNIX_EPOCH;
 
 use rust_p2p_core::pipe::PipeWriter;
-use rust_p2p_core::route::{Route, RouteKey};
 use rust_p2p_core::route::route_table::RouteTable;
+use rust_p2p_core::route::{Route, RouteKey};
 
 use crate::config::PipeConfig;
 use crate::error::{Error, Result};
 use crate::pipe::pipe_context::PipeContext;
-use crate::protocol::NetPacket;
 use crate::protocol::node_id::NodeID;
 use crate::protocol::protocol_type::ProtocolType;
+use crate::protocol::NetPacket;
 
 mod pipe_context;
 
@@ -138,15 +138,16 @@ impl PipeLine {
             ProtocolType::TimestampReply => {
                 // update rtt
                 let time = packet.payload();
-                if time.len() != 8 {
+                if time.len() != 4 {
                     return Err(Error::InvalidArgument("time error".into()));
                 }
-                let time = i64::from_be_bytes(time.try_into().unwrap());
+                let time = u32::from_be_bytes(time.try_into().unwrap());
                 let now = std::time::SystemTime::now()
                     .duration_since(UNIX_EPOCH)?
-                    .as_millis() as i64;
+                    .as_millis() as u32;
+                let rtt = now.checked_sub(time).unwrap_or(0);
                 self.route_table
-                    .add_route(src_id, Route::from(route_key, metric, 0.max(now - time)));
+                    .add_route(src_id, Route::from(route_key, metric, rtt));
                 add_route = false;
             }
             ProtocolType::IDRouteQuery => {}
