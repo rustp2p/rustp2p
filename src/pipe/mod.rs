@@ -113,7 +113,7 @@ impl PipeLine {
         let route_key = recv_result.route_key;
         let metric = packet.first_ttl() - packet.ttl() + 1;
         let mut add_route = true;
-        match packet.protocol() {
+        match packet.protocol()? {
             ProtocolType::PunchConsult => {}
             ProtocolType::PunchRequest => {
                 packet.set_protocol(ProtocolType::PunchReply);
@@ -155,7 +155,6 @@ impl PipeLine {
             ProtocolType::UserData => {
                 return Ok(HandleResult::UserData(packet, dest_id, route_key))
             }
-            _ => {}
         }
         if add_route {
             self.route_table

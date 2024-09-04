@@ -14,23 +14,21 @@ pub enum ProtocolType {
     IDRouteQuery,
     IDRouteReply,
     UserData,
-    Unknown = 255,
 }
+impl TryFrom<u8> for ProtocolType {
+    type Error = crate::error::Error;
 
-impl From<u8> for ProtocolType {
-    fn from(value: u8) -> Self {
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
         const MAX: u8 = ProtocolType::UserData as u8;
-        let mut ret = ProtocolType::Unknown;
         match value {
-            0..=MAX => unsafe {
-                let ptr = &mut ret as *mut _ as *mut u8;
-                *ptr = value;
-            },
-            _ => {}
+            0..=MAX => unsafe { Ok(std::mem::transmute(value)) },
+            val => Err(crate::error::Error::InvalidArgument(format!(
+                "Invalid protocol {val}"
+            ))),
         }
-        ret
     }
 }
+
 impl Into<u8> for ProtocolType {
     fn into(self) -> u8 {
         self as u8
@@ -43,7 +41,7 @@ mod test {
 
     #[test]
     fn test_new_protocol() {
-        assert_eq!(ProtocolType::from(2), ProtocolType::PunchReply);
-        assert_eq!(ProtocolType::from(128), ProtocolType::Unknown);
+        assert_eq!(ProtocolType::try_from(2).unwrap(), ProtocolType::PunchReply);
+        assert!(ProtocolType::try_from(128).is_err());
     }
 }

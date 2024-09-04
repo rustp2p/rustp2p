@@ -52,8 +52,8 @@ impl<B: AsRef<[u8]>> NetPacket<B> {
     pub fn id_length(&self) -> u8 {
         self.buffer.as_ref()[1]
     }
-    pub fn protocol(&self) -> ProtocolType {
-        self.buffer.as_ref()[2].into()
+    pub fn protocol(&self) -> Result<ProtocolType> {
+        self.buffer.as_ref()[2].try_into()
     }
     pub fn first_ttl(&self) -> u8 {
         self.buffer.as_ref()[3] >> 4
@@ -210,6 +210,10 @@ impl<'a, B: AsRef<[u8]>> Debug for Builder<'a, B> {
         } else {
             0
         };
+        let protocol_type = match ProtocolType::try_from(buf[2]) {
+            Ok(protocol_type) => format!("{protocol_type:?}"),
+            Err(_) => "Unknown".to_string(),
+        };
         let s = format!(
             "
    0                                           15                                               31
@@ -225,7 +229,7 @@ impl<'a, B: AsRef<[u8]>> Debug for Builder<'a, B> {
   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 		",
             format!("{}bytes", buf[1]),
-            format!("{:?}", ProtocolType::from(buf[2])),
+            format!("{protocol_type}"),
             format!("{:0b}", ttl >> 4),
             format!("{:0b}", ttl & 0b00001111),
             src_id,
