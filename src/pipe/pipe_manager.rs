@@ -70,7 +70,7 @@ async fn poll_route_table_peer_node(
     let route_table = pipe_writer.pipe_writer.route_table().route_table_one();
     for (peer_id, route) in route_table {
         if !direct_nodes.contains(&peer_id) {
-            if let Err(e) = pipe_writer.send_to(buf, &route.route_key()).await {
+            if let Err(e) = pipe_writer.send_to_route(buf, &route.route_key()).await {
                 log::warn!(
                     "poll_route_table_peer_node, e={e:?},peer_id={peer_id:?},route={route:?}"
                 );

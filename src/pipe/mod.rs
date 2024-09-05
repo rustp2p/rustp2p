@@ -13,29 +13,45 @@ use crate::protocol::node_id::NodeID;
 use crate::protocol::protocol_type::ProtocolType;
 use crate::protocol::NetPacket;
 
+mod maintain;
 mod pipe_context;
+pub use pipe_context::NodeAddress;
 mod pipe_manager;
 
 pub struct Pipe {
     pipe_context: PipeContext,
     pipe: rust_p2p_core::pipe::Pipe<NodeID>,
     puncher: rust_p2p_core::punch::Puncher<NodeID>,
-    idle_route_manager: rust_p2p_core::idle::IdleRouteManager<NodeID>,
 }
 
 impl Pipe {
-    pub fn new(config: PipeConfig) -> Result<Pipe> {
+    pub async fn new(mut config: PipeConfig) -> Result<Pipe> {
+        let pipe_context = PipeContext::default();
+        if let Some(node_id) = config.self_id.take() {
+            pipe_context.store_self_id(node_id)?;
+        }
+        if let Some(addrs) = config.direct_addrs.take() {
+            let x = addrs.into_iter().map(|v| (v, None)).collect();
+            pipe_context.set_direct_nodes(x);
+        }
         let (pipe, puncher, idle_route_manager) =
             rust_p2p_core::pipe::pipe::<NodeID>(config.into())?;
+        let pipe_writer = PipeWriter {
+            pipe_context: pipe_context.clone(),
+            pipe_writer: pipe.writer_ref().to_owned(),
+        };
+        maintain::start_task(&pipe_writer, idle_route_manager);
         Ok(Self {
-            pipe_context: PipeContext::default(),
+            pipe_context,
             pipe,
             puncher,
-            idle_route_manager,
         })
     }
-    pub fn store_self_id(&self, node_id: NodeID) -> Result<()> {
-        self.pipe_context.store_self_id(node_id)
+    pub fn writer(&self) -> PipeWriter {
+        PipeWriter {
+            pipe_context: self.pipe_context.clone(),
+            pipe_writer: self.pipe.writer_ref().to_owned(),
+        }
     }
 }
 
@@ -59,11 +75,11 @@ impl PipeWriter {
     pub fn pipe_context(&self) -> &PipeContext {
         &self.pipe_context
     }
-    pub async fn send_to(&self, buf: &[u8], route_key: &RouteKey) -> Result<usize> {
+    pub(crate) async fn send_to_route(&self, buf: &[u8], route_key: &RouteKey) -> Result<usize> {
         let len = self.pipe_writer.send_to(buf, route_key).await?;
         Ok(len)
     }
-    pub async fn send_to_id(&self, buf: &[u8], peer_id: &NodeID) -> Result<usize> {
+    pub async fn send_to(&self, buf: &[u8], peer_id: &NodeID) -> Result<usize> {
         let len = self.pipe_writer.send_to_id(buf, peer_id).await?;
         Ok(len)
     }
@@ -124,7 +140,7 @@ impl PipeLine {
         self.pipe_writer.send_to_id(buf, id).await?;
         Ok(())
     }
-    pub async fn send_to_route(&self, buf: &[u8], route_key: &RouteKey) -> Result<()> {
+    pub(crate) async fn send_to_route(&self, buf: &[u8], route_key: &RouteKey) -> Result<()> {
         self.pipe_writer.send_to(buf, route_key).await?;
         Ok(())
     }
@@ -156,7 +172,10 @@ impl PipeLine {
             if self_id.len() != dest_id.len() {
                 return Err(Error::InvalidArgument("id len error".into()));
             }
-            if self_id != dest_id && !dest_id.is_broadcast() {
+            if self_id == src_id {
+                return Err(Error::InvalidArgument("id loop error".into()));
+            }
+            if self_id != dest_id && !dest_id.is_unspecified() {
                 return if packet.incr_ttl() {
                     Ok(Some(HandleResult::Turn(packet, dest_id, route_key)))
                 } else {
@@ -177,6 +196,7 @@ impl PipeLine {
                 packet.set_protocol(ProtocolType::PunchReply);
                 packet.set_ttl(packet.first_ttl());
                 packet.exchange_id();
+                packet.set_src_id(&self_id)?;
                 self.send_to_route(packet.buffer(), &route_key).await?;
             }
             ProtocolType::PunchReply => {}
@@ -184,6 +204,7 @@ impl PipeLine {
                 packet.set_protocol(ProtocolType::EchoReply);
                 packet.set_ttl(packet.first_ttl());
                 packet.exchange_id();
+                packet.set_src_id(&self_id)?;
                 self.send_to_route(packet.buffer(), &route_key).await?;
             }
             ProtocolType::EchoReply => {}
@@ -191,6 +212,7 @@ impl PipeLine {
                 packet.set_protocol(ProtocolType::TimestampRequest);
                 packet.set_ttl(packet.first_ttl());
                 packet.exchange_id();
+                packet.set_src_id(&self_id)?;
                 self.send_to_route(packet.buffer(), &route_key).await?;
             }
             ProtocolType::TimestampReply => {
@@ -210,19 +232,29 @@ impl PipeLine {
             ProtocolType::IDRouteQuery => {
                 // reply reachable node id
                 let mut list = self.route_table.route_table_min_metric();
-                // Not supporting too many nodes
-                list.truncate(255);
-                let list: Vec<_> = list
-                    .into_iter()
-                    .map(|(node_id, route)| (node_id, route.metric()))
-                    .collect();
-                let packet =
-                    crate::protocol::id_route::Builder::build_reply(&list, list.len() as _)?;
-                self.send_to_route(packet.buffer(), &route_key).await?;
+                if !list.is_empty() {
+                    // Not supporting too many nodes
+                    list.truncate(255);
+                    let list: Vec<_> = list
+                        .into_iter()
+                        .filter(|(node_id, _)| node_id != &src_id)
+                        .map(|(node_id, route)| (node_id, route.metric()))
+                        .collect();
+                    if !list.is_empty() {
+                        let packet = crate::protocol::id_route::Builder::build_reply(
+                            &list,
+                            list.len() as _,
+                        )?;
+                        self.send_to_route(packet.buffer(), &route_key).await?;
+                    }
+                }
             }
             ProtocolType::IDRouteReply => {
                 let reply_packet = IDRouteReplyPacket::new(packet.payload(), id_length as _)?;
                 for (reachable_id, metric) in reply_packet.iter() {
+                    if reachable_id == self_id {
+                        continue;
+                    }
                     self.pipe_context
                         .update_reachable_nodes(src_id, reachable_id, metric);
                 }

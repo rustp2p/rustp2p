@@ -55,6 +55,9 @@ impl<B: AsRef<[u8]>> NetPacket<B> {
     pub fn id_length(&self) -> u8 {
         self.buffer.as_ref()[1]
     }
+    pub fn head_len(&self) -> usize {
+        4 + self.id_length() as usize * 2
+    }
     pub fn protocol(&self) -> Result<ProtocolType> {
         self.buffer.as_ref()[2].try_into()
     }
@@ -108,6 +111,38 @@ impl<B: AsRef<[u8]> + AsMut<[u8]>> NetPacket<B> {
     }
     pub fn set_protocol(&mut self, protocol_type: ProtocolType) {
         self.buffer.as_mut()[2] = protocol_type.into();
+    }
+    pub fn set_src_id(&mut self, id: &NodeID) -> Result<()> {
+        let id_len = self.id_length() as usize;
+
+        let slice = self.buffer.as_mut();
+        let bytes = id.as_ref();
+        let start = 4;
+        let end = start + id_len;
+        if bytes.len() != id_len {
+            return Err(Error::InvalidArgument(format!(
+                "the length of source node_id must equal to {}",
+                id_len
+            )));
+        }
+        slice[start..end].copy_from_slice(bytes);
+        Ok(())
+    }
+    pub fn set_dest_id(&mut self, id: &NodeID) -> Result<()> {
+        let id_len = self.id_length() as usize;
+
+        let slice = self.buffer.as_mut();
+        let bytes = id.as_ref();
+        let start = 4 + id_len;
+        let end = start + id_len;
+        if bytes.len() != id_len {
+            return Err(Error::InvalidArgument(format!(
+                "the length of source node_id must equal to {}",
+                id_len
+            )));
+        }
+        slice[start..end].copy_from_slice(bytes);
+        Ok(())
     }
     pub fn payload_mut(&mut self) -> &mut [u8] {
         let start = 4 + self.id_length() as usize * 2;

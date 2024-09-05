@@ -1,11 +1,12 @@
-use crate::error::Error;
-use crate::protocol::node_id::NodeID;
+use std::net::SocketAddr;
+use std::sync::Arc;
+
 use crossbeam_utils::atomic::AtomicCell;
 use dashmap::DashMap;
 use parking_lot::RwLock;
-use std::collections::HashMap;
-use std::net::SocketAddr;
-use std::sync::Arc;
+
+use crate::error::Error;
+use crate::protocol::node_id::NodeID;
 
 #[derive(Clone, Default)]
 pub struct PipeContext {

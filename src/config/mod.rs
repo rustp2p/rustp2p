@@ -2,6 +2,8 @@ use std::io;
 use std::net::SocketAddr;
 use std::time::Duration;
 
+use crate::pipe::NodeAddress;
+use crate::protocol::node_id::NodeID;
 use async_trait::async_trait;
 use rust_p2p_core::pipe::tcp_pipe::{Decoder, Encoder, InitCodec};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -37,6 +39,8 @@ pub struct PipeConfig {
     pub udp_pipe_config: Option<UdpPipeConfig>,
     pub tcp_pipe_config: Option<TcpPipeConfig>,
     pub enable_extend: bool,
+    pub self_id: Option<NodeID>,
+    pub direct_addrs: Option<Vec<NodeAddress>>,
 }
 
 impl Default for PipeConfig {
@@ -48,6 +52,8 @@ impl Default for PipeConfig {
             udp_pipe_config: Some(Default::default()),
             tcp_pipe_config: Some(Default::default()),
             route_idle_time: ROUTE_IDLE_TIME,
+            self_id: None,
+            direct_addrs: None,
         }
     }
 }
@@ -56,34 +62,13 @@ pub(crate) const MULTI_PIPELINE: usize = 2;
 pub(crate) const UDP_SUB_PIPELINE_NUM: usize = 82;
 
 impl PipeConfig {
-    pub fn new() -> PipeConfig {
-        let udp_pipe_config = Some(UdpPipeConfig::default());
-        let tcp_pipe_config = Some(TcpPipeConfig::default());
-        Self {
-            first_latency: false,
-            multi_pipeline: MULTI_PIPELINE,
-            enable_extend: false,
-            udp_pipe_config,
-            tcp_pipe_config,
-            route_idle_time: ROUTE_IDLE_TIME,
-        }
-    }
-}
-impl PipeConfig {
     pub fn none_tcp(self) -> Self {
         self
     }
 }
 impl PipeConfig {
     pub fn empty() -> Self {
-        Self {
-            first_latency: false,
-            multi_pipeline: MULTI_PIPELINE,
-            enable_extend: false,
-            udp_pipe_config: None,
-            tcp_pipe_config: None,
-            route_idle_time: ROUTE_IDLE_TIME,
-        }
+        Self::default()
     }
     pub fn set_first_latency(mut self, first_latency: bool) -> Self {
         self.first_latency = first_latency;
@@ -103,6 +88,14 @@ impl PipeConfig {
     }
     pub fn set_tcp_pipe_config(mut self, tcp_pipe_config: TcpPipeConfig) -> Self {
         self.tcp_pipe_config.replace(tcp_pipe_config);
+        self
+    }
+    pub fn set_node_id(mut self, self_id: NodeID) -> Self {
+        self.self_id.replace(self_id);
+        self
+    }
+    pub fn set_direct_addrs(mut self, direct_addrs: Vec<NodeAddress>) -> Self {
+        self.direct_addrs.replace(direct_addrs);
         self
     }
 }

@@ -27,6 +27,7 @@ protoc-bin-vendored = "3.0.0"
 clap = { version = "4.5.13", features = ["derive"] }
 log = "0.4.22"
 env_logger = "0.11.5"
+tun-rs = {version = "1.0.3",features = ["async"]}
 
 [[example]]
 name = "node"

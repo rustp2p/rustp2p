@@ -1,3 +1,5 @@
+use std::net::Ipv4Addr;
+
 #[non_exhaustive]
 #[derive(Hash, Eq, PartialEq, Copy, Clone, Debug)]
 pub enum NodeID {
@@ -82,4 +84,10 @@ impl_from_integer! {
     Bit64:u64,
     Bit128:i128,
     Bit128:u128
+}
+
+impl From<Ipv4Addr> for NodeID {
+    fn from(value: Ipv4Addr) -> Self {
+        NodeID::Bit32(value.octets())
+    }
 }
