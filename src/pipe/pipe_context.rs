@@ -1,7 +1,9 @@
 use crate::error::Error;
 use crate::protocol::node_id::NodeID;
 use crossbeam_utils::atomic::AtomicCell;
+use dashmap::DashMap;
 use parking_lot::RwLock;
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -9,6 +11,7 @@ use std::sync::Arc;
 pub struct PipeContext {
     self_node_id: Arc<AtomicCell<Option<NodeID>>>,
     direct_node_address_list: Arc<RwLock<Vec<(NodeAddress, Option<NodeID>)>>>,
+    reachable_nodes: Arc<DashMap<NodeID, Vec<(NodeID, u8)>>>,
 }
 
 impl PipeContext {
@@ -27,6 +30,22 @@ impl PipeContext {
     }
     pub fn get_direct_nodes(&self) -> Vec<(NodeAddress, Option<NodeID>)> {
         self.direct_node_address_list.read().clone()
+    }
+    pub fn update_reachable_nodes(&self, src_id: NodeID, reachable_id: NodeID, metric: u8) {
+        self.reachable_nodes
+            .entry(reachable_id)
+            .and_modify(|v| {
+                for (node, m) in &mut *v {
+                    if node == &src_id {
+                        *m = metric;
+                        v.sort_by_key(|(_, m)| *m);
+                        return;
+                    }
+                }
+                v.push((src_id, metric));
+                v.sort_by_key(|(_, m)| *m);
+            })
+            .or_insert_with(|| vec![(src_id, metric)]);
     }
 }
 

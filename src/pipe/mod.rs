@@ -8,6 +8,7 @@ use rust_p2p_core::route::{Route, RouteKey};
 use crate::config::PipeConfig;
 use crate::error::{Error, Result};
 use crate::pipe::pipe_context::PipeContext;
+use crate::protocol::id_route::IDRouteReplyPacket;
 use crate::protocol::node_id::NodeID;
 use crate::protocol::protocol_type::ProtocolType;
 use crate::protocol::NetPacket;
@@ -99,21 +100,20 @@ impl PipeLine {
                     if let Some(handle_result) = handle_result {
                         //return Ok(Ok(handle_result));
                         // workaround borrowing checker
-                        match handle_result {
-                            HandleResult::Turn(_, arg) => {
-                                return Ok(Ok(HandleResult::Turn(
-                                    NetPacket::new(&mut buf[..len]).unwrap(),
-                                    arg,
-                                )));
-                            }
+                        return match handle_result {
+                            HandleResult::Turn(_, arg_1, arg_2) => Ok(Ok(HandleResult::Turn(
+                                NetPacket::new(&mut buf[..len]).unwrap(),
+                                arg_1,
+                                arg_2,
+                            ))),
                             HandleResult::UserData(_, arg_1, arg_2) => {
-                                return Ok(Ok(HandleResult::UserData(
+                                Ok(Ok(HandleResult::UserData(
                                     NetPacket::new(&mut buf[..len]).unwrap(),
                                     arg_1,
                                     arg_2,
-                                )));
+                                )))
                             }
-                        }
+                        };
                     }
                 }
                 Err(e) => return Ok(Err(HandleError::new(route_key, e))),
@@ -150,13 +150,15 @@ impl PipeLine {
         if packet.ttl() == 0 {
             return Ok(None);
         }
-        let _self_id = if let Some(self_id) = self.pipe_context.load_id() {
+        let route_key = recv_result.route_key;
+
+        let self_id = if let Some(self_id) = self.pipe_context.load_id() {
             if self_id.len() != dest_id.len() {
                 return Err(Error::InvalidArgument("id len error".into()));
             }
             if self_id != dest_id && !dest_id.is_broadcast() {
                 return if packet.incr_ttl() {
-                    Ok(Some(HandleResult::Turn(packet, dest_id)))
+                    Ok(Some(HandleResult::Turn(packet, dest_id, route_key)))
                 } else {
                     Ok(None)
                 };
@@ -165,8 +167,7 @@ impl PipeLine {
         } else {
             return Err(Error::InvalidArgument("self id is none".into()));
         };
-
-        let route_key = recv_result.route_key;
+        let id_length = self_id.len();
         let metric = packet.first_ttl() - packet.ttl() + 1;
         self.route_table
             .add_route_if_absent(src_id, Route::from_default_rt(route_key, metric));
@@ -219,7 +220,13 @@ impl PipeLine {
                     crate::protocol::id_route::Builder::build_reply(&list, list.len() as _)?;
                 self.send_to_route(packet.buffer(), &route_key).await?;
             }
-            ProtocolType::IDRouteReply => {}
+            ProtocolType::IDRouteReply => {
+                let reply_packet = IDRouteReplyPacket::new(packet.payload(), id_length as _)?;
+                for (reachable_id, metric) in reply_packet.iter() {
+                    self.pipe_context
+                        .update_reachable_nodes(src_id, reachable_id, metric);
+                }
+            }
             ProtocolType::UserData => {
                 return Ok(Some(HandleResult::UserData(packet, src_id, route_key)))
             }
@@ -247,7 +254,7 @@ impl<'a> RecvResult<'a> {
 }
 
 pub enum HandleResult<'a> {
-    Turn(NetPacket<&'a mut [u8]>, NodeID),
+    Turn(NetPacket<&'a mut [u8]>, NodeID, RouteKey),
     UserData(NetPacket<&'a mut [u8]>, NodeID, RouteKey),
 }
 #[derive(Debug)]
