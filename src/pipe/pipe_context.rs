@@ -1,11 +1,14 @@
 use crate::error::Error;
 use crate::protocol::node_id::NodeID;
 use crossbeam_utils::atomic::AtomicCell;
+use parking_lot::RwLock;
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 #[derive(Clone, Default)]
 pub struct PipeContext {
     self_node_id: Arc<AtomicCell<Option<NodeID>>>,
+    direct_node_address_list: Arc<RwLock<Vec<(NodeAddress, Option<NodeID>)>>>,
 }
 
 impl PipeContext {
@@ -19,4 +22,16 @@ impl PipeContext {
     pub fn load_id(&self) -> Option<NodeID> {
         self.self_node_id.load()
     }
+    pub fn set_direct_nodes(&self, direct_node: Vec<(NodeAddress, Option<NodeID>)>) {
+        *self.direct_node_address_list.write() = direct_node;
+    }
+    pub fn get_direct_nodes(&self) -> Vec<(NodeAddress, Option<NodeID>)> {
+        self.direct_node_address_list.read().clone()
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum NodeAddress {
+    Tcp(SocketAddr),
+    Udp(SocketAddr),
 }

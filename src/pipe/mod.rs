@@ -1,7 +1,6 @@
 use std::net::SocketAddr;
 use std::time::UNIX_EPOCH;
 
-use rust_p2p_core::pipe::PipeWriter;
 use rust_p2p_core::route::route_table::RouteTable;
 use rust_p2p_core::route::{Route, RouteKey};
 
@@ -13,6 +12,7 @@ use crate::protocol::protocol_type::ProtocolType;
 use crate::protocol::NetPacket;
 
 mod pipe_context;
+mod pipe_manager;
 
 pub struct Pipe {
     pipe_context: PipeContext,
@@ -48,11 +48,29 @@ impl Pipe {
         })
     }
 }
+#[derive(Clone)]
+pub struct PipeWriter {
+    pipe_context: PipeContext,
+    pipe_writer: rust_p2p_core::pipe::PipeWriter<NodeID>,
+}
+impl PipeWriter {
+    pub fn pipe_context(&self) -> &PipeContext {
+        &self.pipe_context
+    }
+    pub async fn send_to(&self, buf: &[u8], route_key: &RouteKey) -> Result<usize> {
+        let len = self.pipe_writer.send_to(buf, route_key).await?;
+        Ok(len)
+    }
+    pub async fn send_to_id(&self, buf: &[u8], peer_id: &NodeID) -> Result<usize> {
+        let len = self.pipe_writer.send_to_id(buf, peer_id).await?;
+        Ok(len)
+    }
+}
 
 pub struct PipeLine {
     pipe_context: PipeContext,
     pipe_line: rust_p2p_core::pipe::PipeLine,
-    pipe_writer: PipeWriter<NodeID>,
+    pipe_writer: rust_p2p_core::pipe::PipeWriter<NodeID>,
     route_table: RouteTable<NodeID>,
 }
 
