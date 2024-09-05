@@ -139,7 +139,7 @@ impl Builder {
         let len = out_packet_head + 4 + metric_len + id_len * id_num;
         Ok(len)
     }
-    pub fn build(list: &[(NodeID, u8)], all_id_num: u16) -> Result<NetPacket<Vec<u8>>> {
+    pub fn build_reply(list: &[(NodeID, u8)], all_id_num: u16) -> Result<NetPacket<Vec<u8>>> {
         let len = Self::calculate_len(list)?;
         let id_len = list[0].0.len();
         let mut packet = NetPacket::unchecked(vec![0; len]);
@@ -186,7 +186,7 @@ mod test {
         test_build0(list);
     }
     fn test_build0(list: Vec<(NodeID, u8)>) {
-        let packet = Builder::build(&list, 20).unwrap();
+        let packet = Builder::build_reply(&list, 20).unwrap();
         let packet = IDRouteReplyPacket::new(packet.payload(), packet.id_length()).unwrap();
         assert_eq!(packet.iter().count(), list.len());
         for (index, (node_id, metric)) in packet.iter().enumerate() {

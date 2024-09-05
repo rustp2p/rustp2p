@@ -118,7 +118,7 @@ impl PipeLine {
             }
             if self_id != dest_id && !dest_id.is_broadcast() {
                 return if packet.incr_ttl() {
-                    Ok(HandleResult::Turn(packet))
+                    Ok(HandleResult::Turn(packet, dest_id))
                 } else {
                     Ok(HandleResult::Done)
                 };
@@ -130,7 +130,8 @@ impl PipeLine {
 
         let route_key = recv_result.route_key;
         let metric = packet.first_ttl() - packet.ttl() + 1;
-        let mut add_route = true;
+        self.route_table
+            .add_route_if_absent(src_id, Route::from_default_rt(route_key, metric));
         match packet.protocol()? {
             ProtocolType::PunchConsult => {}
             ProtocolType::PunchRequest => {
@@ -166,18 +167,24 @@ impl PipeLine {
                 let rtt = now.checked_sub(time).unwrap_or(0) as _;
                 self.route_table
                     .add_route(src_id, Route::from(route_key, metric, rtt));
-                add_route = false;
             }
-            ProtocolType::IDRouteQuery => {}
+            ProtocolType::IDRouteQuery => {
+                // reply reachable node id
+                let mut list = self.route_table.route_table_min_metric();
+                // Not supporting too many nodes
+                list.truncate(255);
+                let list: Vec<_> = list
+                    .into_iter()
+                    .map(|(node_id, route)| (node_id, route.metric()))
+                    .collect();
+                let packet =
+                    crate::protocol::id_route::Builder::build_reply(&list, list.len() as _)?;
+                return Ok(HandleResult::ReplyVec(packet, route_key));
+            }
             ProtocolType::IDRouteReply => {}
-            ProtocolType::UserData => {
-                return Ok(HandleResult::UserData(packet, dest_id, route_key))
-            }
+            ProtocolType::UserData => return Ok(HandleResult::UserData(packet, src_id, route_key)),
         }
-        if add_route {
-            self.route_table
-                .add_route_if_absent(src_id, Route::from_default_rt(route_key, metric));
-        }
+
         return Ok(HandleResult::Done);
     }
 }
@@ -202,6 +209,7 @@ impl<'a> RecvResult<'a> {
 pub enum HandleResult<'a> {
     Done,
     Reply(NetPacket<&'a mut [u8]>, RouteKey),
-    Turn(NetPacket<&'a mut [u8]>),
+    ReplyVec(NetPacket<Vec<u8>>, RouteKey),
+    Turn(NetPacket<&'a mut [u8]>, NodeID),
     UserData(NetPacket<&'a mut [u8]>, NodeID, RouteKey),
 }
