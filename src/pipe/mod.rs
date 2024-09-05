@@ -145,7 +145,7 @@ impl PipeLine {
                 let now = std::time::SystemTime::now()
                     .duration_since(UNIX_EPOCH)?
                     .as_millis() as u32;
-                let rtt = now.checked_sub(time).unwrap_or(0);
+                let rtt = now.checked_sub(time).unwrap_or(0) as _;
                 self.route_table
                     .add_route(src_id, Route::from(route_key, metric, rtt));
                 add_route = false;
