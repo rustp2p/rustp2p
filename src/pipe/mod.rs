@@ -79,9 +79,45 @@ impl PipeWriter {
         let len = self.pipe_writer.send_to(buf, route_key).await?;
         Ok(len)
     }
-    pub async fn send_to(&self, buf: &[u8], peer_id: &NodeID) -> Result<usize> {
-        let len = self.pipe_writer.send_to_id(buf, peer_id).await?;
+    /// user data is `buf[start..end]`,
+    ///
+    ///  # Panics
+    /// Panics if dst buffer is too small.
+    /// Need to ensure that start>=head_reserve .
+    ///
+    /// [`PipeWriter::head_reserve()`]
+    pub async fn send_to(
+        &self,
+        buf: &mut [u8],
+        start: usize,
+        end: usize,
+        peer_id: &NodeID,
+    ) -> Result<usize> {
+        let id = if let Some(id) = self.pipe_context.load_id() {
+            id
+        } else {
+            return Err(Error::NoIDSpecified);
+        };
+        let head_reserve = 4 + id.len() * 2;
+        let mut packet = NetPacket::unchecked(&mut buf[start - head_reserve..end]);
+        packet.set_ttl(15);
+        packet.set_protocol(ProtocolType::UserData);
+        packet.set_id_length(id.len() as _);
+        packet.set_src_id(&id)?;
+        packet.set_dest_id(peer_id)?;
+        let len = self
+            .pipe_writer
+            .send_to_id(packet.buffer(), peer_id)
+            .await?;
         Ok(len)
+    }
+    /// use [`PipeWriter::send_to()`] head reserve
+    pub fn head_reserve(&self) -> Result<usize> {
+        if let Some(id) = self.pipe_context.load_id() {
+            Ok(4 + id.len() * 2)
+        } else {
+            Err(Error::NoIDSpecified)
+        }
     }
 }
 

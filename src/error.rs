@@ -7,6 +7,8 @@ pub enum Error {
     Overflow { cap: usize, required: usize },
     #[error("invalid argument:{0}")]
     InvalidArgument(String),
+    #[error("No ID specified")]
+    NoIDSpecified,
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error(transparent)]

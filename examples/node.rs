@@ -50,6 +50,10 @@ pub async fn main() -> Result<()> {
     let device = tun_rs::create_as_async(
         tun_rs::Configuration::default()
             .address_with_prefix(self_id, mask)
+            .platform_config(|v| {
+                #[cfg(windows)]
+                v.ring_capacity(2 * 1024 * 1024);
+            })
             .up(),
     )
     .unwrap();
@@ -68,7 +72,7 @@ pub async fn main() -> Result<()> {
     let writer = pipe.writer();
     let device_r = device.clone();
     tokio::spawn(async move {
-        tun_recv(self_id.into(), writer, device_r).await.unwrap();
+        tun_recv(writer, device_r).await.unwrap();
     });
     log::info!("listen 23333");
     loop {
@@ -78,7 +82,7 @@ pub async fn main() -> Result<()> {
     }
 }
 async fn recv(mut line: PipeLine, device: Arc<AsyncDevice>) {
-    let mut buf = [0; 65535];
+    let mut buf = [0; 2000];
     loop {
         let rs = match line.recv_from(&mut buf).await {
             Ok(rs) => rs,
@@ -108,25 +112,12 @@ async fn recv(mut line: PipeLine, device: Arc<AsyncDevice>) {
         }
     }
 }
-async fn tun_recv(
-    node_id: NodeID,
-    pipe_writer: PipeWriter,
-    device: Arc<AsyncDevice>,
-) -> Result<()> {
-    let mut buf = [0; 65535];
-    Builder::new(&mut buf, node_id.len() as _)
-        .unwrap()
-        .protocol(ProtocolType::UserData)
-        .unwrap()
-        .ttl(15)
-        .unwrap()
-        .src_id(node_id)
-        .unwrap();
-    let mut packet = NetPacket::unchecked(buf);
-    let head_len = packet.head_len();
+async fn tun_recv(pipe_writer: PipeWriter, device: Arc<AsyncDevice>) -> Result<()> {
+    let head_reserve = pipe_writer.head_reserve().unwrap();
+    let mut buf = [0; 2000];
     loop {
-        let payload_len = device.recv(packet.payload_mut()).await?;
-        let payload = &packet.payload_mut()[..payload_len];
+        let payload = &mut buf[head_reserve..];
+        let payload_len = device.recv(payload).await?;
         if payload[0] >> 4 != 4 {
             continue;
         }
@@ -139,7 +130,12 @@ async fn tun_recv(
             continue;
         }
         if let Err(e) = pipe_writer
-            .send_to(&packet.buffer()[..head_len + payload_len], &dest_ip.into())
+            .send_to(
+                &mut buf,
+                head_reserve,
+                head_reserve + payload_len,
+                &dest_ip.into(),
+            )
             .await
         {
             log::warn!("{e:?},{dest_ip:?}")
