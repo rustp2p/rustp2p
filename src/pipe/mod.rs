@@ -1,3 +1,4 @@
+use std::fmt::{Display, Formatter};
 use std::net::SocketAddr;
 use std::time::UNIX_EPOCH;
 
@@ -78,12 +79,30 @@ impl PipeLine {
     pub fn store_self_id(&self, node_id: NodeID) -> Result<()> {
         self.pipe_context.store_self_id(node_id)
     }
-    pub async fn recv_from<'a>(&mut self, buf: &'a mut [u8]) -> Option<Result<RecvResult<'a>>> {
-        let (len, route_key) = match self.pipe_line.recv_from(buf).await? {
-            Ok((len, route_key)) => (len, route_key),
-            Err(e) => return Some(Err(Error::Io(e))),
-        };
-        Some(Ok(RecvResult::new(&mut buf[..len], route_key)))
+    pub async fn recv_from<'a>(
+        &mut self,
+        buf: &'a mut [u8],
+    ) -> core::result::Result<core::result::Result<HandleResult<'a>, HandleError>, RecvError> {
+        loop {
+            let (len, route_key) = match self.pipe_line.recv_from(buf).await {
+                None => return Err(RecvError::Done),
+                Some(recv_rs) => match recv_rs {
+                    Ok(rs) => rs,
+                    Err(e) => return Err(RecvError::Io(e)),
+                },
+            };
+            match self
+                .handle(RecvResult::new(&mut buf[..len], route_key))
+                .await
+            {
+                Ok(handle_result) => {
+                    if let Some(handle_result) = handle_result {
+                        return Ok(Ok(handle_result));
+                    }
+                }
+                Err(e) => return Ok(Err(HandleError::new(route_key, e))),
+            };
+        }
     }
     pub async fn send_to(&self, buf: &[u8], id: &NodeID) -> Result<()> {
         self.pipe_writer.send_to_id(buf, id).await?;
@@ -93,7 +112,10 @@ impl PipeLine {
         self.pipe_writer.send_to(buf, route_key).await?;
         Ok(())
     }
-    pub async fn handle<'a>(&mut self, recv_result: RecvResult<'a>) -> Result<HandleResult<'a>> {
+    pub async fn handle<'a>(
+        &mut self,
+        recv_result: RecvResult<'a>,
+    ) -> Result<Option<HandleResult<'a>>> {
         let mut packet = NetPacket::new(recv_result.buf)?;
         let src_id = NodeID::new(packet.src_id())?;
 
@@ -110,7 +132,7 @@ impl PipeLine {
         }
 
         if packet.ttl() == 0 {
-            return Ok(HandleResult::Done);
+            return Ok(None);
         }
         let _self_id = if let Some(self_id) = self.pipe_context.load_id() {
             if self_id.len() != dest_id.len() {
@@ -118,9 +140,9 @@ impl PipeLine {
             }
             if self_id != dest_id && !dest_id.is_broadcast() {
                 return if packet.incr_ttl() {
-                    Ok(HandleResult::Turn(packet, dest_id))
+                    Ok(Some(HandleResult::Turn(packet, dest_id)))
                 } else {
-                    Ok(HandleResult::Done)
+                    Ok(None)
                 };
             }
             self_id
@@ -138,21 +160,21 @@ impl PipeLine {
                 packet.set_protocol(ProtocolType::PunchReply);
                 packet.set_ttl(packet.first_ttl());
                 packet.exchange_id();
-                return Ok(HandleResult::Reply(packet, route_key));
+                self.send_to_route(packet.buffer(), &route_key).await?;
             }
             ProtocolType::PunchReply => {}
             ProtocolType::EchoRequest => {
                 packet.set_protocol(ProtocolType::EchoReply);
                 packet.set_ttl(packet.first_ttl());
                 packet.exchange_id();
-                return Ok(HandleResult::Reply(packet, route_key));
+                self.send_to_route(packet.buffer(), &route_key).await?;
             }
             ProtocolType::EchoReply => {}
             ProtocolType::TimestampRequest => {
                 packet.set_protocol(ProtocolType::TimestampRequest);
                 packet.set_ttl(packet.first_ttl());
                 packet.exchange_id();
-                return Ok(HandleResult::Reply(packet, route_key));
+                self.send_to_route(packet.buffer(), &route_key).await?;
             }
             ProtocolType::TimestampReply => {
                 // update rtt
@@ -179,13 +201,15 @@ impl PipeLine {
                     .collect();
                 let packet =
                     crate::protocol::id_route::Builder::build_reply(&list, list.len() as _)?;
-                return Ok(HandleResult::ReplyVec(packet, route_key));
+                self.send_to_route(packet.buffer(), &route_key).await?;
             }
             ProtocolType::IDRouteReply => {}
-            ProtocolType::UserData => return Ok(HandleResult::UserData(packet, src_id, route_key)),
+            ProtocolType::UserData => {
+                return Ok(Some(HandleResult::UserData(packet, src_id, route_key)))
+            }
         }
 
-        return Ok(HandleResult::Done);
+        return Ok(None);
     }
 }
 
@@ -207,9 +231,27 @@ impl<'a> RecvResult<'a> {
 }
 
 pub enum HandleResult<'a> {
-    Done,
-    Reply(NetPacket<&'a mut [u8]>, RouteKey),
-    ReplyVec(NetPacket<Vec<u8>>, RouteKey),
     Turn(NetPacket<&'a mut [u8]>, NodeID),
     UserData(NetPacket<&'a mut [u8]>, NodeID, RouteKey),
+}
+#[derive(Debug)]
+pub enum RecvError {
+    Done,
+    Io(std::io::Error),
+}
+#[derive(Debug)]
+pub struct HandleError {
+    route_key: RouteKey,
+    err: Error,
+}
+impl HandleError {
+    pub(crate) fn new(route_key: RouteKey, err: Error) -> Self {
+        Self { route_key, err }
+    }
+    pub fn addr(&self) -> SocketAddr {
+        self.route_key.addr()
+    }
+    pub fn err(&self) -> &Error {
+        &self.err
+    }
 }

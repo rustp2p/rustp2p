@@ -36,29 +36,21 @@ pub async fn main() -> Result<()> {
 }
 async fn recv(mut line: PipeLine) -> Result<()> {
     let mut buf = [0; 65535];
-    while let Some(rs) = line.recv_from(&mut buf).await {
-        let recv_res = rs?;
-        let addr = recv_res.remote_addr();
-        if let Err(e) = recv_data_handle(&mut line, recv_res).await {
-            log::warn!("recv_data_handle {e:?},{addr}")
-        }
-    }
-    Ok(())
-}
-async fn recv_data_handle<'a>(pipe_line: &mut PipeLine, recv_res: RecvResult<'a>) -> Result<()> {
-    match pipe_line.handle(recv_res).await? {
-        HandleResult::Done => {}
-        HandleResult::Reply(buf, route_key) => {
-            pipe_line.send_to_route(buf.buffer(), &route_key).await?;
-        }
-        HandleResult::ReplyVec(buf, route_key) => {
-            pipe_line.send_to_route(buf.buffer(), &route_key).await?;
-        }
-        HandleResult::Turn(buf, dest_id) => {
-            pipe_line.send_to(buf.buffer(), &dest_id).await?;
-        }
-        HandleResult::UserData(buf, src_id, route_key) => {
-            todo!()
+    while let Ok(rs) = line.recv_from(&mut buf).await {
+        let handle_rs = match rs {
+            Ok(handle_rs) => handle_rs,
+            Err(e) => {
+                log::warn!("recv_data_handle {e:?}");
+                continue;
+            }
+        };
+        match handle_rs {
+            HandleResult::Turn(buf, dest_id) => {
+                line.send_to(buf.buffer(), &dest_id).await?;
+            }
+            HandleResult::UserData(buf, src_id, route_key) => {
+                todo!()
+            }
         }
     }
     Ok(())
