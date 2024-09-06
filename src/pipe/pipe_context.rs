@@ -1,5 +1,6 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Instant;
 
 use crossbeam_utils::atomic::AtomicCell;
 use dashmap::DashMap;
@@ -12,7 +13,7 @@ use crate::protocol::node_id::NodeID;
 pub struct PipeContext {
     self_node_id: Arc<AtomicCell<Option<NodeID>>>,
     direct_node_address_list: Arc<RwLock<Vec<(NodeAddress, Option<NodeID>)>>>,
-    reachable_nodes: Arc<DashMap<NodeID, Vec<(NodeID, u8)>>>,
+    reachable_nodes: Arc<DashMap<NodeID, Vec<(NodeID, u8, Instant)>>>,
 }
 
 impl PipeContext {
@@ -33,20 +34,23 @@ impl PipeContext {
         self.direct_node_address_list.read().clone()
     }
     pub fn update_reachable_nodes(&self, src_id: NodeID, reachable_id: NodeID, metric: u8) {
+        // todo 将太久没更新的节点删除
+        let now = Instant::now();
         self.reachable_nodes
             .entry(reachable_id)
             .and_modify(|v| {
-                for (node, m) in &mut *v {
+                for (node, m, time) in &mut *v {
                     if node == &src_id {
                         *m = metric;
-                        v.sort_by_key(|(_, m)| *m);
+                        *time = now;
+                        v.sort_by_key(|(_, m, _)| *m);
                         return;
                     }
                 }
-                v.push((src_id, metric));
-                v.sort_by_key(|(_, m)| *m);
+                v.push((src_id, metric, now));
+                v.sort_by_key(|(_, m, _)| *m);
             })
-            .or_insert_with(|| vec![(src_id, metric)]);
+            .or_insert_with(|| vec![(src_id, metric, now)]);
     }
 }
 

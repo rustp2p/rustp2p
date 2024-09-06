@@ -2,6 +2,7 @@ use crate::pipe::PipeWriter;
 use crate::protocol::node_id::NodeID;
 
 mod heartbeat;
+mod id_route;
 mod idle;
 
 pub(crate) fn start_task(
@@ -10,4 +11,5 @@ pub(crate) fn start_task(
 ) {
     tokio::spawn(heartbeat::heartbeat_loop(pipe_writer.clone()));
     tokio::spawn(idle::idle_check_loop(idle_route_manager));
+    tokio::spawn(id_route::id_route_query_loop(pipe_writer.clone()));
 }

@@ -1,9 +1,12 @@
-use std::fmt::{Display, Formatter};
+use std::fmt::Display;
 use std::net::SocketAddr;
 use std::time::UNIX_EPOCH;
 
 use rust_p2p_core::route::route_table::RouteTable;
 use rust_p2p_core::route::{Route, RouteKey};
+
+pub use pipe_context::NodeAddress;
+pub use send_packet::SendPacket;
 
 use crate::config::PipeConfig;
 use crate::error::{Error, Result};
@@ -11,17 +14,12 @@ use crate::pipe::pipe_context::PipeContext;
 use crate::protocol::id_route::IDRouteReplyPacket;
 use crate::protocol::node_id::NodeID;
 use crate::protocol::protocol_type::ProtocolType;
-use crate::protocol::{Builder, NetPacket};
+use crate::protocol::NetPacket;
 
 mod maintain;
 mod pipe_context;
 
-pub use pipe_context::NodeAddress;
-
-mod pipe_manager;
 mod send_packet;
-
-pub use send_packet::SendPacket;
 
 pub struct Pipe {
     send_buffer_size: usize,
@@ -117,7 +115,9 @@ impl PipeWriter {
     }
     async fn send_to0(&self, buf: &mut [u8], src_id: &NodeID, dest_id: &NodeID) -> Result<usize> {
         let mut packet = NetPacket::unchecked(buf);
-        packet.set_ttl(15);
+        if packet.ttl() == 0 || packet.ttl() != packet.first_ttl() {
+            packet.set_ttl(15);
+        }
         packet.set_protocol(ProtocolType::UserData);
         packet.set_id_length(src_id.len() as _);
         packet.set_src_id(src_id)?;

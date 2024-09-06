@@ -13,6 +13,10 @@ impl SendPacket {
             len: head_reserve,
         }
     }
+    pub fn set_ttl(&mut self, ttl: u8) {
+        let ttl = ttl & 0xF;
+        self.buf[3] = (ttl << 4) | ttl
+    }
     pub fn data(&self) -> &[u8] {
         &self.buf[self.head_reserve..]
     }
