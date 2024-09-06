@@ -102,13 +102,13 @@ impl PipeLine {
                         match handle_result {
                             HandleResult::Turn(_, arg) => {
                                 return Ok(Ok(HandleResult::Turn(
-                                    NetPacket::new(buf).unwrap(),
+                                    NetPacket::new(&mut buf[..len]).unwrap(),
                                     arg,
                                 )));
                             }
                             HandleResult::UserData(_, arg_1, arg_2) => {
                                 return Ok(Ok(HandleResult::UserData(
-                                    NetPacket::new(buf).unwrap(),
+                                    NetPacket::new(&mut buf[..len]).unwrap(),
                                     arg_1,
                                     arg_2,
                                 )));
