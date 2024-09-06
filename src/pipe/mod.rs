@@ -97,7 +97,23 @@ impl PipeLine {
             {
                 Ok(handle_result) => {
                     if let Some(handle_result) = handle_result {
-                        return Ok(Ok(handle_result));
+                        //return Ok(Ok(handle_result));
+                        // workaround borrowing checker
+                        match handle_result {
+                            HandleResult::Turn(_, arg) => {
+                                return Ok(Ok(HandleResult::Turn(
+                                    NetPacket::new(buf).unwrap(),
+                                    arg,
+                                )));
+                            }
+                            HandleResult::UserData(_, arg_1, arg_2) => {
+                                return Ok(Ok(HandleResult::UserData(
+                                    NetPacket::new(buf).unwrap(),
+                                    arg_1,
+                                    arg_2,
+                                )));
+                            }
+                        }
                     }
                 }
                 Err(e) => return Ok(Err(HandleError::new(route_key, e))),
