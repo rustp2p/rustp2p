@@ -113,10 +113,9 @@ async fn recv(mut line: PipeLine, device: Arc<AsyncDevice>) {
     }
 }
 async fn tun_recv(pipe_writer: PipeWriter, device: Arc<AsyncDevice>) -> Result<()> {
-    let head_reserve = pipe_writer.head_reserve().unwrap();
-    let mut buf = [0; 2000];
+    let mut send_packet = pipe_writer.allocate_send_packet()?;
     loop {
-        let payload = &mut buf[head_reserve..];
+        let payload = send_packet.data_mut();
         let payload_len = device.recv(payload).await?;
         if payload[0] >> 4 != 4 {
             continue;
@@ -129,13 +128,9 @@ async fn tun_recv(pipe_writer: PipeWriter, device: Arc<AsyncDevice>) -> Result<(
         {
             continue;
         }
+        send_packet.set_payload_len(payload_len);
         if let Err(e) = pipe_writer
-            .send_to(
-                &mut buf,
-                head_reserve,
-                head_reserve + payload_len,
-                &dest_ip.into(),
-            )
+            .send_to_packet(&mut send_packet, &dest_ip.into())
             .await
         {
             log::warn!("{e:?},{dest_ip:?}")

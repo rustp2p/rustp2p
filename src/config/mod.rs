@@ -15,12 +15,14 @@ pub enum Model {
     #[default]
     Low,
 }
+
 #[derive(Clone, Debug, Default)]
 pub struct LocalInterface {
     pub index: u32,
     #[cfg(unix)]
     pub name: Option<String>,
 }
+
 impl LocalInterface {
     pub fn new(index: u32, #[cfg(unix)] name: Option<String>) -> Self {
         Self {
@@ -30,6 +32,7 @@ impl LocalInterface {
         }
     }
 }
+
 pub(crate) const ROUTE_IDLE_TIME: Duration = Duration::from_secs(10);
 
 pub struct PipeConfig {
@@ -41,6 +44,7 @@ pub struct PipeConfig {
     pub enable_extend: bool,
     pub self_id: Option<NodeID>,
     pub direct_addrs: Option<Vec<NodeAddress>>,
+    pub send_buffer_size: usize,
 }
 
 impl Default for PipeConfig {
@@ -54,6 +58,7 @@ impl Default for PipeConfig {
             route_idle_time: ROUTE_IDLE_TIME,
             self_id: None,
             direct_addrs: None,
+            send_buffer_size: 2048,
         }
     }
 }
@@ -66,6 +71,7 @@ impl PipeConfig {
         self
     }
 }
+
 impl PipeConfig {
     pub fn empty() -> Self {
         Self::default()
@@ -96,6 +102,10 @@ impl PipeConfig {
     }
     pub fn set_direct_addrs(mut self, direct_addrs: Vec<NodeAddress>) -> Self {
         self.direct_addrs.replace(direct_addrs);
+        self
+    }
+    pub fn set_send_buffer_size(mut self, send_buffer_size: usize) -> Self {
+        self.send_buffer_size = send_buffer_size;
         self
     }
 }
@@ -196,6 +206,7 @@ impl UdpPipeConfig {
         self
     }
 }
+
 impl From<Model> for rust_p2p_core::pipe::udp_pipe::Model {
     fn from(value: Model) -> Self {
         match value {
@@ -204,6 +215,7 @@ impl From<Model> for rust_p2p_core::pipe::udp_pipe::Model {
         }
     }
 }
+
 impl From<LocalInterface> for rust_p2p_core::socket::LocalInterface {
     fn from(value: LocalInterface) -> Self {
         #[cfg(unix)]
@@ -212,6 +224,7 @@ impl From<LocalInterface> for rust_p2p_core::socket::LocalInterface {
         rust_p2p_core::socket::LocalInterface::new(value.index)
     }
 }
+
 impl From<PipeConfig> for rust_p2p_core::pipe::config::PipeConfig {
     fn from(value: PipeConfig) -> Self {
         rust_p2p_core::pipe::config::PipeConfig {
@@ -224,6 +237,7 @@ impl From<PipeConfig> for rust_p2p_core::pipe::config::PipeConfig {
         }
     }
 }
+
 impl From<UdpPipeConfig> for rust_p2p_core::pipe::config::UdpPipeConfig {
     fn from(value: UdpPipeConfig) -> Self {
         rust_p2p_core::pipe::config::UdpPipeConfig {
@@ -236,6 +250,7 @@ impl From<UdpPipeConfig> for rust_p2p_core::pipe::config::UdpPipeConfig {
         }
     }
 }
+
 impl From<TcpPipeConfig> for rust_p2p_core::pipe::config::TcpPipeConfig {
     fn from(value: TcpPipeConfig) -> Self {
         rust_p2p_core::pipe::config::TcpPipeConfig {
@@ -251,6 +266,7 @@ impl From<TcpPipeConfig> for rust_p2p_core::pipe::config::TcpPipeConfig {
 
 /// Fixed-length prefix encoder/decoder.
 pub(crate) struct LengthPrefixedCodec;
+
 #[async_trait]
 impl Decoder for LengthPrefixedCodec {
     async fn decode(&mut self, read: &mut OwnedReadHalf, src: &mut [u8]) -> io::Result<usize> {
@@ -274,7 +290,9 @@ impl Encoder for LengthPrefixedCodec {
         Ok(data.len())
     }
 }
+
 pub(crate) struct LengthPrefixedInitCodec;
+
 impl InitCodec for LengthPrefixedInitCodec {
     fn codec(&self, _addr: SocketAddr) -> io::Result<(Box<dyn Decoder>, Box<dyn Encoder>)> {
         Ok((Box::new(LengthPrefixedCodec), Box::new(LengthPrefixedCodec)))

@@ -11,14 +11,20 @@ use crate::pipe::pipe_context::PipeContext;
 use crate::protocol::id_route::IDRouteReplyPacket;
 use crate::protocol::node_id::NodeID;
 use crate::protocol::protocol_type::ProtocolType;
-use crate::protocol::NetPacket;
+use crate::protocol::{Builder, NetPacket};
 
 mod maintain;
 mod pipe_context;
+
 pub use pipe_context::NodeAddress;
+
 mod pipe_manager;
+mod send_packet;
+
+pub use send_packet::SendPacket;
 
 pub struct Pipe {
+    send_buffer_size: usize,
     pipe_context: PipeContext,
     pipe: rust_p2p_core::pipe::Pipe<NodeID>,
     puncher: rust_p2p_core::punch::Puncher<NodeID>,
@@ -27,6 +33,7 @@ pub struct Pipe {
 impl Pipe {
     pub async fn new(mut config: PipeConfig) -> Result<Pipe> {
         let pipe_context = PipeContext::default();
+        let send_buffer_size = config.send_buffer_size;
         if let Some(node_id) = config.self_id.take() {
             pipe_context.store_self_id(node_id)?;
         }
@@ -37,11 +44,13 @@ impl Pipe {
         let (pipe, puncher, idle_route_manager) =
             rust_p2p_core::pipe::pipe::<NodeID>(config.into())?;
         let pipe_writer = PipeWriter {
+            send_buffer_size,
             pipe_context: pipe_context.clone(),
             pipe_writer: pipe.writer_ref().to_owned(),
         };
         maintain::start_task(&pipe_writer, idle_route_manager);
         Ok(Self {
+            send_buffer_size,
             pipe_context,
             pipe,
             puncher,
@@ -49,6 +58,7 @@ impl Pipe {
     }
     pub fn writer(&self) -> PipeWriter {
         PipeWriter {
+            send_buffer_size: self.send_buffer_size,
             pipe_context: self.pipe_context.clone(),
             pipe_writer: self.pipe.writer_ref().to_owned(),
         }
@@ -66,11 +76,14 @@ impl Pipe {
         })
     }
 }
+
 #[derive(Clone)]
 pub struct PipeWriter {
+    send_buffer_size: usize,
     pipe_context: PipeContext,
     pipe_writer: rust_p2p_core::pipe::PipeWriter<NodeID>,
 }
+
 impl PipeWriter {
     pub fn pipe_context(&self) -> &PipeContext {
         &self.pipe_context
@@ -91,23 +104,27 @@ impl PipeWriter {
         buf: &mut [u8],
         start: usize,
         end: usize,
-        peer_id: &NodeID,
+        dest_id: &NodeID,
     ) -> Result<usize> {
-        let id = if let Some(id) = self.pipe_context.load_id() {
-            id
+        let src_id = if let Some(src_id) = self.pipe_context.load_id() {
+            src_id
         } else {
             return Err(Error::NoIDSpecified);
         };
-        let head_reserve = 4 + id.len() * 2;
-        let mut packet = NetPacket::unchecked(&mut buf[start - head_reserve..end]);
+        let head_reserve = 4 + src_id.len() * 2;
+        self.send_to0(&mut buf[start - head_reserve..end], &src_id, dest_id)
+            .await
+    }
+    async fn send_to0(&self, buf: &mut [u8], src_id: &NodeID, dest_id: &NodeID) -> Result<usize> {
+        let mut packet = NetPacket::unchecked(buf);
         packet.set_ttl(15);
         packet.set_protocol(ProtocolType::UserData);
-        packet.set_id_length(id.len() as _);
-        packet.set_src_id(&id)?;
-        packet.set_dest_id(peer_id)?;
+        packet.set_id_length(src_id.len() as _);
+        packet.set_src_id(src_id)?;
+        packet.set_dest_id(dest_id)?;
         let len = self
             .pipe_writer
-            .send_to_id(packet.buffer(), peer_id)
+            .send_to_id(packet.buffer(), dest_id)
             .await?;
         Ok(len)
     }
@@ -118,6 +135,37 @@ impl PipeWriter {
         } else {
             Err(Error::NoIDSpecified)
         }
+    }
+    pub async fn send_to_packet(&self, packet: &mut SendPacket, dest_id: &NodeID) -> Result<usize> {
+        if let Some(src_id) = self.pipe_context.load_id() {
+            self.send_to0(packet.buf_mut(), &src_id, dest_id).await
+        } else {
+            Err(Error::NoIDSpecified)
+        }
+    }
+    pub fn allocate_send_packet(&self) -> Result<SendPacket> {
+        let head_reserve = self.head_reserve()?;
+        let send_packet = SendPacket::new_capacity(head_reserve, self.send_buffer_size);
+        Ok(send_packet)
+    }
+    pub(crate) fn allocate_send_packet_proto(
+        &self,
+        protocol_type: ProtocolType,
+        payload_size: usize,
+    ) -> Result<SendPacket> {
+        let src_id = if let Some(src_id) = self.pipe_context.load_id() {
+            src_id
+        } else {
+            return Err(Error::NoIDSpecified);
+        };
+        let head_reserve = 4 + src_id.len() * 2;
+        let mut send_packet = SendPacket::new_capacity(head_reserve, head_reserve + payload_size);
+        let mut packet = NetPacket::unchecked(send_packet.buf_mut());
+        packet.set_id_length(src_id.len() as _);
+        packet.set_ttl(15);
+        packet.set_src_id(&src_id)?;
+        packet.set_protocol(protocol_type);
+        Ok(send_packet)
     }
 }
 
@@ -325,16 +373,19 @@ pub enum HandleResult<'a> {
     Turn(NetPacket<&'a mut [u8]>, NodeID, RouteKey),
     UserData(NetPacket<&'a mut [u8]>, NodeID, RouteKey),
 }
+
 #[derive(Debug)]
 pub enum RecvError {
     Done,
     Io(std::io::Error),
 }
+
 #[derive(Debug)]
 pub struct HandleError {
     route_key: RouteKey,
     err: Error,
 }
+
 impl HandleError {
     pub(crate) fn new(route_key: RouteKey, err: Error) -> Self {
         Self { route_key, err }

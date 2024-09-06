@@ -5,23 +5,54 @@ use crate::protocol::node_id::NodeID;
 use crate::protocol::protocol_type::ProtocolType;
 use crate::protocol::{Builder, NetPacket};
 use std::collections::HashSet;
-use std::time::Duration;
+use std::time::{Duration, UNIX_EPOCH};
 
 pub async fn heartbeat_loop(pipe_writer: PipeWriter) {
+    let mut count = 0;
     loop {
-        if let Err(e) = heartbeat_request(&pipe_writer).await {
-            log::warn!("heartbeat_request e={e:?}");
+        if count % 3 == 2 {
+            if let Err(e) = timestamp_request(&pipe_writer).await {
+                log::warn!("timestamp_request e={e:?}");
+            }
+        } else {
+            if let Err(e) = heartbeat_request(&pipe_writer).await {
+                log::warn!("heartbeat_request e={e:?}");
+            }
         }
+
         tokio::time::sleep(Duration::from_secs(5)).await;
+        count += 1;
     }
 }
 
 async fn heartbeat_request(pipe_writer: &PipeWriter) -> Result<()> {
-    let mut packet = if let Some(packet) = heartbeat_packet(pipe_writer)? {
-        NetPacket::new(packet)?
+    let mut packet =
+        if let Ok(packet) = pipe_writer.allocate_send_packet_proto(ProtocolType::EchoRequest, 0) {
+            packet
+        } else {
+            return Ok(());
+        };
+    let mut packet = NetPacket::new(packet.buf_mut())?;
+    let direct_nodes = pipe_writer.pipe_context.get_direct_nodes();
+    direct_heartbeat_request(direct_nodes, pipe_writer, packet.buffer()).await;
+    route_table_heartbeat_request(pipe_writer, &mut packet).await;
+    Ok(())
+}
+
+async fn timestamp_request(pipe_writer: &PipeWriter) -> Result<()> {
+    let mut packet = if let Ok(packet) =
+        pipe_writer.allocate_send_packet_proto(ProtocolType::TimestampRequest, 4)
+    {
+        packet
     } else {
         return Ok(());
     };
+    packet.set_payload_len(4);
+    let mut packet = NetPacket::new(packet.buf_mut())?;
+    let now = std::time::SystemTime::now()
+        .duration_since(UNIX_EPOCH)?
+        .as_millis() as u32;
+    packet.payload_mut().copy_from_slice(&now.to_be_bytes());
     let direct_nodes = pipe_writer.pipe_context.get_direct_nodes();
     direct_heartbeat_request(direct_nodes, pipe_writer, packet.buffer()).await;
     route_table_heartbeat_request(pipe_writer, &mut packet).await;
@@ -56,7 +87,10 @@ async fn direct_heartbeat_request(
     }
 }
 
-async fn route_table_heartbeat_request(pipe_writer: &PipeWriter, packet: &mut NetPacket<Vec<u8>>) {
+async fn route_table_heartbeat_request(
+    pipe_writer: &PipeWriter,
+    packet: &mut NetPacket<&mut [u8]>,
+) {
     let table = pipe_writer.pipe_writer.route_table().route_table();
     for (node_id, routes) in table {
         if let Err(e) = packet.set_dest_id(&node_id) {
@@ -72,18 +106,5 @@ async fn route_table_heartbeat_request(pipe_writer: &PipeWriter, packet: &mut Ne
             }
             tokio::time::sleep(Duration::from_millis(3)).await;
         }
-    }
-}
-
-fn heartbeat_packet(pipe_writer: &PipeWriter) -> Result<Option<Vec<u8>>> {
-    if let Some(node_id) = pipe_writer.pipe_context().load_id() {
-        let mut buf = vec![0; 4 + node_id.len() * 2 + 4];
-        Builder::new(&mut buf, node_id.len() as _)?
-            .protocol(ProtocolType::EchoRequest)?
-            .src_id(node_id)?
-            .ttl(15)?;
-        Ok(Some(buf))
-    } else {
-        Ok(None)
     }
 }
