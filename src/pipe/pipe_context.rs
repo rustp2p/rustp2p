@@ -1,6 +1,6 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crossbeam_utils::atomic::AtomicCell;
 use dashmap::DashMap;
@@ -34,7 +34,6 @@ impl PipeContext {
         self.direct_node_address_list.read().clone()
     }
     pub fn update_reachable_nodes(&self, src_id: NodeID, reachable_id: NodeID, metric: u8) {
-        // todo 将太久没更新的节点删除
         let now = Instant::now();
         self.reachable_nodes
             .entry(reachable_id)
@@ -52,9 +51,30 @@ impl PipeContext {
             })
             .or_insert_with(|| vec![(src_id, metric, now)]);
     }
+    pub(crate) fn clear_timeout_reachable_nodes(&self) {
+        let timeout = if let Some(time) = Instant::now().checked_sub(Duration::from_secs(60)) {
+            time
+        } else {
+            return;
+        };
+        for mut val in self.reachable_nodes.iter_mut() {
+            val.value_mut().retain(|(_, _, time)| time > &timeout);
+        }
+        self.reachable_nodes.retain(|_, v| !v.is_empty());
+    }
+    pub fn reachable_node(&self, dest_id: &NodeID) -> Option<NodeID> {
+        if let Some(v) = self.reachable_nodes.get(dest_id) {
+            v.value().get(0).map(|(v, _, _)| *v)
+        } else {
+            None
+        }
+    }
+    pub fn default_route(&self) -> Option<NodeAddress> {
+        self.direct_node_address_list.read().get(0).map(|(v, _)| *v)
+    }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Copy, Clone, Debug)]
 pub enum NodeAddress {
     Tcp(SocketAddr),
     Udp(SocketAddr),

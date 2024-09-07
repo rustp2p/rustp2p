@@ -148,6 +148,9 @@ impl<B: AsRef<[u8]> + AsMut<[u8]>> NetPacket<B> {
         let start = 4 + self.id_length() as usize * 2;
         &mut self.buffer.as_mut()[start..]
     }
+    pub fn buffer_mut(&mut self) -> &mut [u8] {
+        self.buffer.as_mut()
+    }
 }
 
 pub struct Builder<'a, B>(&'a mut B, usize);

@@ -17,6 +17,8 @@ pub enum Error {
     Core(#[from] rust_p2p_core::error::Error),
     #[error(transparent)]
     SystemTimeError(#[from] SystemTimeError),
+    #[error("Node ID not available")]
+    NodeIDNotAvailable,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

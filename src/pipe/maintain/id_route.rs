@@ -2,6 +2,7 @@ use crate::pipe::{NodeAddress, PipeWriter};
 use crate::protocol::node_id::NodeID;
 use crate::protocol::protocol_type::ProtocolType;
 use crate::protocol::Builder;
+use rand::seq::SliceRandom;
 use std::collections::HashSet;
 use std::time::Duration;
 
@@ -10,9 +11,11 @@ pub async fn id_route_query_loop(pipe_writer: PipeWriter) {
         if let Err(e) = id_route_query(&pipe_writer).await {
             log::warn!("poll_peer_node, e={e:?}");
         }
-        tokio::time::sleep(Duration::from_secs(30)).await;
+        tokio::time::sleep(Duration::from_secs(20)).await;
+        pipe_writer.pipe_context().clear_timeout_reachable_nodes();
     }
 }
+
 async fn id_route_query(pipe_writer: &PipeWriter) -> crate::error::Result<()> {
     let mut packet =
         if let Ok(packet) = pipe_writer.allocate_send_packet_proto(ProtocolType::IDRouteQuery, 4) {
@@ -33,6 +36,7 @@ async fn id_route_query(pipe_writer: &PipeWriter) -> crate::error::Result<()> {
     poll_route_table_peer_node(pipe_writer, packet.buf_mut(), direct_node_set).await;
     Ok(())
 }
+
 async fn poll_direct_peer_node(
     direct_nodes: Vec<(NodeAddress, Option<NodeID>)>,
     pipe_writer: &PipeWriter,
@@ -60,13 +64,21 @@ async fn poll_direct_peer_node(
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
 }
+
 async fn poll_route_table_peer_node(
     pipe_writer: &PipeWriter,
     buf: &[u8],
     direct_nodes: HashSet<NodeID>,
 ) {
-    let route_table = pipe_writer.pipe_writer.route_table().route_table_one();
-    // todo 随机取几个节点拉取，而不是全部节点都遍历
+    let mut route_table = pipe_writer.pipe_writer.route_table().route_table_one();
+    if route_table.is_empty() {
+        return;
+    }
+    if route_table.len() > 5 {
+        let mut rng = rand::thread_rng();
+        route_table.shuffle(&mut rng);
+        route_table.truncate(5);
+    }
     for (peer_id, route) in route_table {
         if !direct_nodes.contains(&peer_id) {
             if let Err(e) = pipe_writer.send_to_route(buf, &route.route_key()).await {

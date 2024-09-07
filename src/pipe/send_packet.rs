@@ -25,7 +25,7 @@ impl SendPacket {
     }
     pub fn set_payload_len(&mut self, payload_len: usize) {
         let len = self.head_reserve + payload_len;
-        assert!(self.buf.len() <= len);
+        assert!(self.buf.len() >= len);
         self.len = len;
     }
     pub(crate) fn buf_mut(&mut self) -> &mut [u8] {

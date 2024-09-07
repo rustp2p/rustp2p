@@ -1,6 +1,7 @@
 #[derive(Eq, PartialEq, Copy, Clone, Debug)]
 #[repr(u8)]
 pub enum ProtocolType {
+    UserData,
     PunchConsult,
     PunchRequest,
     PunchReply,
@@ -13,13 +14,12 @@ pub enum ProtocolType {
     /// ID route query
     IDRouteQuery,
     IDRouteReply,
-    UserData,
 }
 impl TryFrom<u8> for ProtocolType {
     type Error = crate::error::Error;
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
-        const MAX: u8 = ProtocolType::UserData as u8;
+        const MAX: u8 = ProtocolType::IDRouteReply as u8;
         match value {
             0..=MAX => unsafe { Ok(std::mem::transmute(value)) },
             val => Err(crate::error::Error::InvalidArgument(format!(

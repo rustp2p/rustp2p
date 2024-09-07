@@ -3,7 +3,7 @@ use std::net::SocketAddr;
 use std::time::UNIX_EPOCH;
 
 use rust_p2p_core::route::route_table::RouteTable;
-use rust_p2p_core::route::{Route, RouteKey};
+use rust_p2p_core::route::{ConnectProtocol, Route, RouteKey};
 
 pub use pipe_context::NodeAddress;
 pub use send_packet::SendPacket;
@@ -118,14 +118,37 @@ impl PipeWriter {
         if packet.ttl() == 0 || packet.ttl() != packet.first_ttl() {
             packet.set_ttl(15);
         }
-        packet.set_protocol(ProtocolType::UserData);
         packet.set_id_length(src_id.len() as _);
         packet.set_src_id(src_id)?;
         packet.set_dest_id(dest_id)?;
-        let len = self
-            .pipe_writer
-            .send_to_id(packet.buffer(), dest_id)
-            .await?;
+        let len = if let Ok(route) = self.pipe_writer.route_table().get_route_by_id(dest_id) {
+            self.pipe_writer
+                .send_to(packet.buffer(), &route.route_key())
+                .await?
+        } else {
+            if let Some(turn_id) = self.pipe_context().reachable_node(dest_id) {
+                self.pipe_writer
+                    .send_to_id(packet.buffer(), &turn_id)
+                    .await?
+            } else if let Some(addr) = self.pipe_context().default_route() {
+                // default route
+                match addr {
+                    NodeAddress::Tcp(addr) => {
+                        self.pipe_writer
+                            .send_to_addr(ConnectProtocol::TCP, packet.buffer(), addr)
+                            .await?
+                    }
+                    NodeAddress::Udp(addr) => {
+                        self.pipe_writer
+                            .send_to_addr(ConnectProtocol::TCP, packet.buffer(), addr)
+                            .await?
+                    }
+                }
+            } else {
+                Err(Error::NodeIDNotAvailable)?
+            }
+        };
+
         Ok(len)
     }
     /// use [`PipeWriter::send_to()`] head reserve
@@ -293,7 +316,7 @@ impl PipeLine {
             }
             ProtocolType::EchoReply => {}
             ProtocolType::TimestampRequest => {
-                packet.set_protocol(ProtocolType::TimestampRequest);
+                packet.set_protocol(ProtocolType::TimestampReply);
                 packet.set_ttl(packet.first_ttl());
                 packet.exchange_id();
                 packet.set_src_id(&self_id)?;
