@@ -23,6 +23,8 @@ pub enum Error {
     ShutDown,
     #[error("Pipe has already shutdown")]
     AlreadyShutdown,
+    #[error("Timeout")]
+    Timeout,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

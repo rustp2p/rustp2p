@@ -31,7 +31,7 @@ struct Args {
 #[tokio::main]
 pub async fn main() -> Result<()> {
     let Args { peer, local } = Args::parse();
-    env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
+    env_logger::Builder::from_env(Env::default().default_filter_or("debug")).init();
     let mut split = local.split("/");
     let self_id = Ipv4Addr::from_str(split.next().expect("--local error")).expect("--local error");
     let mask = u8::from_str(split.next().expect("--local error")).expect("--local error");

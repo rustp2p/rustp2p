@@ -49,7 +49,8 @@ pub struct PipeConfig {
     pub query_id_interval: Duration,
     pub query_id_max_num: usize,
     pub heartbeat_interval: Duration,
-    pub stun_servers: Option<Vec<String>>,
+    pub tcp_stun_servers: Option<Vec<String>>,
+    pub udp_stun_servers: Option<Vec<String>>,
     pub mapping_addrs: Option<Vec<NodeAddress>>,
 }
 
@@ -68,13 +69,19 @@ impl Default for PipeConfig {
             query_id_interval: Duration::from_secs(12),
             query_id_max_num: 5,
             heartbeat_interval: Duration::from_secs(5),
-            stun_servers: Some(vec![
+            tcp_stun_servers: Some(vec![
+                "stun.flashdance.cx".to_string(),
+                "stun.sipnet.net".to_string(),
+                "stun.nextcloud.com:443".to_string(),
+            ]),
+            udp_stun_servers: Some(vec![
                 "stun.miwifi.com".to_string(),
                 "stun.chat.bilibili.com".to_string(),
                 "stun.hitv.com".to_string(),
                 "stun.cdnbye.com".to_string(),
                 "stun.l.google.com:19302".to_string(),
             ]),
+
             mapping_addrs: None,
         }
     }
@@ -137,8 +144,12 @@ impl PipeConfig {
         self.heartbeat_interval = heartbeat_interval;
         self
     }
-    pub fn set_stun_servers(mut self, stun_servers: Vec<String>) -> Self {
-        self.stun_servers.replace(stun_servers);
+    pub fn set_tcp_stun_servers(mut self, tcp_stun_servers: Vec<String>) -> Self {
+        self.tcp_stun_servers.replace(tcp_stun_servers);
+        self
+    }
+    pub fn set_udp_stun_servers(mut self, udp_stun_servers: Vec<String>) -> Self {
+        self.udp_stun_servers.replace(udp_stun_servers);
         self
     }
     pub fn set_mapping_addrs(mut self, mapping_addrs: Vec<NodeAddress>) -> Self {

@@ -2,7 +2,7 @@
    0                                            15                                              31
    0  1  2  3  4  5  6  7  8  9  0  1  2  3  4  5  6  7  8  9  0  1  2  3  4  5  6  7  8  9  0  1
   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-  |    unused(8)        | ID length(8)          |   protocol (8)       |max ttl(4) |curr ttl(4) |
+  |1|   unused(7)       | ID length(8)          |   protocol (8)       |max ttl(4) |curr ttl(4) |
   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
   |                                           src ID                                            |
   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
@@ -12,7 +12,7 @@
   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 */
 
-use std::fmt::{Debug, Write};
+use std::fmt::Debug;
 
 use node_id::NodeID;
 
@@ -86,6 +86,9 @@ impl<B: AsRef<[u8]>> NetPacket<B> {
     }
 }
 impl<B: AsRef<[u8]> + AsMut<[u8]>> NetPacket<B> {
+    pub fn set_high_flag(&mut self) {
+        self.buffer.as_mut()[0] |= 0x80
+    }
     pub fn incr_ttl(&mut self) -> bool {
         let ttl = self.ttl();
         if ttl <= 1 {
@@ -159,6 +162,7 @@ pub struct Builder<'a, B>(&'a mut B, usize);
 impl<'a, B: AsMut<[u8]>> Builder<'a, B> {
     pub fn new(buf: &'a mut B, id_len: u8) -> Result<Self> {
         let slice = buf.as_mut();
+        slice[0] |= 0x80;
         let head_len = 4 + 2 * id_len as usize;
         if slice.len() < head_len {
             return Err(Error::Overflow {

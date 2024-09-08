@@ -107,6 +107,9 @@ impl PipeContext {
     pub fn update_public_addr(&self, index: Index, addr: SocketAddr) {
         self.punch_info.write().update_public_addr(index, addr);
     }
+    pub fn update_tcp_public_addr(&self, addr: SocketAddr) {
+        self.punch_info.write().update_tcp_public_port(addr);
+    }
 }
 
 #[derive(Copy, Clone, Debug)]

@@ -17,7 +17,8 @@ pub(crate) fn start_task(
     query_id_interval: Duration,
     query_id_max_num: usize,
     heartbeat_interval: Duration,
-    stun_servers: Vec<String>,
+    tcp_stun_servers: Vec<String>,
+    udp_stun_servers: Vec<String>,
     default_interface: Option<LocalInterface>,
 ) -> JoinSet<()> {
     let mut join_set = JoinSet::new();
@@ -33,12 +34,13 @@ pub(crate) fn start_task(
     ));
     join_set.spawn(nat_query::nat_test_loop(
         pipe_writer.clone(),
-        stun_servers.clone(),
+        udp_stun_servers.clone(),
         default_interface.map(|v| v.into()),
     ));
     join_set.spawn(query_public_addr::query_public_addr_loop(
         pipe_writer.clone(),
-        stun_servers,
+        tcp_stun_servers,
+        udp_stun_servers,
     ));
     join_set
 }

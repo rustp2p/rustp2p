@@ -46,8 +46,14 @@ impl Pipe {
         } else {
             None
         };
-        let mut stun_servers = config.stun_servers.take().unwrap_or_default();
-        for x in stun_servers.iter_mut() {
+        let mut tcp_stun_servers = config.tcp_stun_servers.take().unwrap_or_default();
+        for x in tcp_stun_servers.iter_mut() {
+            if !x.contains(":") {
+                x.push_str(":3478");
+            }
+        }
+        let mut udp_stun_servers = config.udp_stun_servers.take().unwrap_or_default();
+        for x in udp_stun_servers.iter_mut() {
             if !x.contains(":") {
                 x.push_str(":3478");
             }
@@ -90,7 +96,8 @@ impl Pipe {
             query_id_interval,
             query_id_max_num,
             heartbeat_interval,
-            stun_servers,
+            tcp_stun_servers,
+            udp_stun_servers,
             default_interface,
         );
         let fut = shutdown_manager
@@ -177,6 +184,7 @@ impl PipeWriter {
     }
     async fn send_to0(&self, buf: &mut [u8], src_id: &NodeID, dest_id: &NodeID) -> Result<usize> {
         let mut packet = NetPacket::unchecked(buf);
+        packet.set_high_flag();
         if packet.ttl() == 0 || packet.ttl() != packet.first_ttl() {
             packet.set_ttl(15);
         }
@@ -287,9 +295,7 @@ impl PipeWriter {
         }
     }
     pub fn allocate_send_packet(&self) -> Result<SendPacket> {
-        let head_reserve = self.head_reserve()?;
-        let send_packet = SendPacket::new_capacity(head_reserve, self.send_buffer_size);
-        Ok(send_packet)
+        self.allocate_send_packet_proto(ProtocolType::UserData, self.send_buffer_size)
     }
     pub(crate) fn allocate_send_packet_proto(
         &self,
@@ -304,6 +310,7 @@ impl PipeWriter {
         let head_reserve = 4 + src_id.len() * 2;
         let mut send_packet = SendPacket::new_capacity(head_reserve, head_reserve + payload_size);
         let mut packet = NetPacket::unchecked(send_packet.buf_mut());
+        packet.set_high_flag();
         packet.set_id_length(src_id.len() as _);
         packet.set_ttl(15);
         packet.set_src_id(&src_id)?;

@@ -391,6 +391,19 @@ impl SocketLayer {
         }
         self.connect0(self.local_addr.port(), addr, 0, None).await
     }
+    pub async fn connect_reuse_port_raw(
+        &self,
+        addr: SocketAddr,
+    ) -> crate::error::Result<TcpStream> {
+        let stream = connect_tcp(
+            addr,
+            self.local_addr.port(),
+            self.default_interface.as_ref(),
+            None,
+        )
+        .await?;
+        Ok(stream)
+    }
     async fn connect0(
         &self,
         bind_port: u16,

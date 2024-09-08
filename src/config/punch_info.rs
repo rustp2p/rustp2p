@@ -4,6 +4,7 @@ use rust_p2p_core::punch::PunchModelBox;
 use rust_p2p_core::route::Index;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 
+#[derive(Debug)]
 pub struct PunchInfo {
     pub punch_model_box: PunchModelBox,
     pub local_udp_ports: Vec<u16>,
@@ -40,34 +41,59 @@ impl PunchInfo {
     pub fn exists_nat_info(&self) -> bool {
         !self.public_ips.is_empty()
     }
-    pub fn update_public_addr(&mut self, index: Index, addr: SocketAddr) {
+    pub fn update_tcp_public_port(&mut self, addr: SocketAddr) {
+        let (ip, port) = if let Some(r) = Self::mapped_ip_port(addr) {
+            r
+        } else {
+            return;
+        };
+        if rust_p2p_core::extend::addr::is_ipv4_global(&ip) {
+            if !self.public_ips.contains(&ip) {
+                self.public_ips.push(ip);
+            }
+        }
+        self.public_tcp_port = port;
+    }
+    fn mapped_ip_port(addr: SocketAddr) -> Option<(Ipv4Addr, u16)> {
         match addr {
-            SocketAddr::V4(addr) => {
-                if rust_p2p_core::extend::addr::is_ipv4_global(addr.ip()) {
-                    if !self.public_ips.contains(addr.ip()) {
-                        self.public_ips.push(*addr.ip());
-                    }
-                    match index {
-                        Index::Udp(index) => {
-                            let index = match index {
-                                UDPIndex::MainV4(index) => index,
-                                UDPIndex::MainV6(index) => index,
-                                UDPIndex::SubV4(_) => return,
-                            };
-                            if let Some(port) = self.public_udp_ports.get_mut(index) {
-                                *port = addr.port();
-                            }
-                        }
-                        Index::Tcp(_) => {
-                            self.public_tcp_port = addr.port();
-                        }
-                        _ => {}
-                    }
+            SocketAddr::V4(addr) => Some((*addr.ip(), addr.port())),
+            SocketAddr::V6(addr) => {
+                if let Some(ip) = addr.ip().to_ipv4_mapped() {
+                    Some((ip, addr.port()))
                 } else {
-                    log::debug!("not public addr: {addr:?}")
+                    None
                 }
             }
-            SocketAddr::V6(_) => {}
+        }
+    }
+    pub fn update_public_addr(&mut self, index: Index, addr: SocketAddr) {
+        let (ip, port) = if let Some(r) = Self::mapped_ip_port(addr) {
+            r
+        } else {
+            return;
+        };
+        if rust_p2p_core::extend::addr::is_ipv4_global(&ip) {
+            if !self.public_ips.contains(&ip) {
+                self.public_ips.push(ip);
+            }
+            match index {
+                Index::Udp(index) => {
+                    let index = match index {
+                        UDPIndex::MainV4(index) => index,
+                        UDPIndex::MainV6(index) => index,
+                        UDPIndex::SubV4(_) => return,
+                    };
+                    if let Some(p) = self.public_udp_ports.get_mut(index) {
+                        *p = port;
+                    }
+                }
+                Index::Tcp(_) => {
+                    self.public_tcp_port = port;
+                }
+                _ => {}
+            }
+        } else {
+            log::debug!("not public addr: {addr:?}")
         }
     }
     pub fn set_public_ip(&mut self, mut ips: Vec<Ipv4Addr>) {
