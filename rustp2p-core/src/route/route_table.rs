@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::hash::Hash;
 use std::io;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -216,6 +217,28 @@ impl<PeerID: Hash + Eq + Clone> RouteTable<PeerID> {
             }
         }
         list
+    }
+    /// Return to route_key -> Vec<PeerID>,
+    /// where vec[0] is the owner of the route
+    pub fn route_key_table(&self) -> HashMap<RouteKey, Vec<PeerID>> {
+        let mut map: HashMap<RouteKey, Vec<PeerID>> = HashMap::new();
+        let table = self.route_table.iter();
+        for entry in table {
+            let (id, (_, routes)) = (entry.key(), entry.value());
+            for (route, _) in routes {
+                let is_p2p = route.is_p2p();
+                map.entry(route.route_key())
+                    .and_modify(|list| {
+                        list.push(id.clone());
+                        if is_p2p {
+                            let last_index = list.len() - 1;
+                            list.swap(0, last_index);
+                        }
+                    })
+                    .or_insert_with(|| vec![id.clone()]);
+            }
+        }
+        map
     }
     pub fn route_table_ids(&self) -> Vec<PeerID> {
         self.route_table.iter().map(|v| v.key().clone()).collect()
