@@ -13,6 +13,7 @@ pub(crate) type RouteTableInner<PeerID> =
     Arc<DashMap<PeerID, (AtomicUsize, Vec<(Route, AtomicCell<Instant>)>)>>;
 pub struct RouteTable<PeerID> {
     pub(crate) route_table: RouteTableInner<PeerID>,
+    route_key_table: Arc<DashMap<RouteKey, PeerID>>,
     first_latency: bool,
     channel_num: usize,
 }
@@ -20,6 +21,7 @@ impl<PeerID> Clone for RouteTable<PeerID> {
     fn clone(&self) -> Self {
         Self {
             route_table: self.route_table.clone(),
+            route_key_table: self.route_key_table.clone(),
             first_latency: self.first_latency,
             channel_num: self.channel_num,
         }
@@ -29,6 +31,7 @@ impl<PeerID: Hash + Eq> RouteTable<PeerID> {
     pub fn new(first_latency: bool, channel_num: usize) -> RouteTable<PeerID> {
         Self {
             route_table: Arc::new(DashMap::with_capacity(64)),
+            route_key_table: Arc::new(DashMap::with_capacity(64)),
             first_latency,
             channel_num,
         }
@@ -88,13 +91,26 @@ impl<PeerID: Hash + Eq + Clone> RouteTable<PeerID> {
     pub fn remove_route(&self, id: &PeerID, route_key: &RouteKey) {
         self.route_table.remove_if_mut(id, |_, (_, routes)| {
             routes.retain(|(x, _)| &x.route_key() != route_key);
+            self.route_key_table.remove_if(route_key, |_, v| v == id);
             routes.is_empty()
         });
     }
     pub fn remove_all(&self, id: &PeerID) {
-        self.route_table.remove(id);
+        self.route_table.remove_if(id, |_, (_, routes)| {
+            for (route, _) in routes {
+                if route.is_p2p() {
+                    self.route_key_table
+                        .remove_if(&route.route_key(), |_, v| v == id);
+                }
+            }
+            true
+        });
     }
-
+    pub fn get_id_by_route_key(&self, route_key: &RouteKey) -> Option<PeerID> {
+        self.route_key_table
+            .get(route_key)
+            .map(|v| v.value().clone())
+    }
     pub fn route(&self, id: &PeerID) -> Option<Vec<Route>> {
         if let Some(entry) = self.route_table.get(id) {
             let (_, routes) = entry.value();
@@ -268,7 +284,7 @@ impl<PeerID: Hash + Eq + Clone> RouteTable<PeerID> {
             .route_table
             .entry(id)
             .or_insert_with(|| (AtomicUsize::new(0), Vec::with_capacity(4)));
-        let (_, list) = route_table.value_mut();
+        let (peer_id, (_, list)) = route_table.pair_mut();
         let mut exist = false;
         for (x, time) in list.iter_mut() {
             if x.metric < route.metric && !self.first_latency {
@@ -294,6 +310,10 @@ impl<PeerID: Hash + Eq + Clone> RouteTable<PeerID> {
                 list.retain(|(k, _)| k.is_p2p());
             };
             list.sort_by_key(|(k, _)| k.rtt);
+            if route.is_p2p() {
+                self.route_key_table
+                    .insert(route.route_key(), peer_id.clone());
+            }
             list.push((route, AtomicCell::new(Instant::now())));
         }
         true
