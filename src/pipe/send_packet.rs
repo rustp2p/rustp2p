@@ -1,3 +1,5 @@
+use std::ops::{Deref, DerefMut};
+
 pub struct SendPacket {
     buf: Vec<u8>,
     head_reserve: usize,
@@ -30,5 +32,18 @@ impl SendPacket {
     }
     pub(crate) fn buf_mut(&mut self) -> &mut [u8] {
         &mut self.buf[..self.len]
+    }
+}
+
+impl Deref for SendPacket {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        self.data()
+    }
+}
+impl DerefMut for SendPacket {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.data_mut()
     }
 }
