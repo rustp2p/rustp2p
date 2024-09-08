@@ -6,7 +6,7 @@ license = "Apache-2.0"
 repository = "https://github.com/rustp2p/rustp2p"
 
 [dependencies]
-rust-p2p-core = { git = "https://github.com/rustp2p/rustp2p-core" }
+rust-p2p-core = { path = "rustp2p-core", version = "0.1" }
 anyhow = "1.0.86"
 async-trait = "0.1.82"
 tokio = { version = "1.39.2", features = ["full"] }
@@ -27,7 +27,7 @@ protoc-bin-vendored = "3.0.0"
 clap = { version = "4.5.13", features = ["derive"] }
 log = "0.4.22"
 env_logger = "0.11.5"
-tun-rs = {version = "1.0.3",features = ["async"]}
+tun-rs = { version = "1.0.3", features = ["async"] }
 
 [[example]]
 name = "node"
