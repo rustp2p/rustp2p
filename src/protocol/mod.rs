@@ -325,7 +325,7 @@ mod test {
         assert_eq!(
             buf,
             [
-                0u8,
+                128u8,
                 4u8,
                 ProtocolType::TimestampRequest as u8,
                 0b10101010u8,
