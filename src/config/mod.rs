@@ -78,7 +78,6 @@ impl Default for PipeConfig {
                 "stun.miwifi.com".to_string(),
                 "stun.chat.bilibili.com".to_string(),
                 "stun.hitv.com".to_string(),
-                "stun.cdnbye.com".to_string(),
                 "stun.l.google.com:19302".to_string(),
             ]),
 

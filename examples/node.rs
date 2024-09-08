@@ -26,11 +26,12 @@ struct Args {
     /// example: --local 10.26.0.2/24
     #[arg(short, long)]
     local: String,
+    port: Option<u16>,
 }
 
 #[tokio::main]
 pub async fn main() -> Result<()> {
-    let Args { peer, local } = Args::parse();
+    let Args { peer, local, port } = Args::parse();
     env_logger::Builder::from_env(Env::default().default_filter_or("debug")).init();
     let mut split = local.split("/");
     let self_id = Ipv4Addr::from_str(split.next().expect("--local error")).expect("--local error");
@@ -64,8 +65,9 @@ pub async fn main() -> Result<()> {
         device.set_ignore_packet_info(true);
     }
     let device = Arc::new(device);
-    let udp_config = UdpPipeConfig::default().set_udp_ports(vec![23333, 23334]);
-    let tcp_config = TcpPipeConfig::default().set_tcp_port(23333);
+    let port = port.unwrap_or(23333);
+    let udp_config = UdpPipeConfig::default().set_udp_ports(vec![port]);
+    let tcp_config = TcpPipeConfig::default().set_tcp_port(port);
     let config = PipeConfig::empty()
         .set_udp_pipe_config(udp_config)
         .set_tcp_pipe_config(tcp_config)

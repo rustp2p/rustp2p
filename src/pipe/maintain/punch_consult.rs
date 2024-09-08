@@ -8,6 +8,7 @@ use tokio::sync::mpsc::Receiver;
 
 pub async fn punch_consult_loop(pipe_writer: PipeWriter, puncher: Puncher<NodeID>) {
     let mut seq = 0;
+    tokio::time::sleep(Duration::from_secs(1)).await;
     let route_table = pipe_writer.pipe_writer.route_table();
     loop {
         tokio::time::sleep(Duration::from_secs(5)).await;
