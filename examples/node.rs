@@ -109,7 +109,7 @@ async fn recv(mut line: PipeLine, device: Arc<AsyncDevice>) {
         };
         match handle_rs {
             HandleResult::Turn(buf, src_id, dest_id, route_key) => {
-                if let Err(e) = line.send_to(buf.buffer(), &dest_id).await {
+                if let Err(e) = line.send_to(&buf, &dest_id).await {
                     log::warn!("Turn {e:?},{src_id:?},{dest_id:?},{route_key:?}")
                 }
             }

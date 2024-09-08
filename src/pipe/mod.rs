@@ -389,8 +389,8 @@ impl PipeLine {
             };
         }
     }
-    pub async fn send_to(&self, buf: &[u8], id: &NodeID) -> Result<()> {
-        self.pipe_writer.send_to_id(buf, id).await?;
+    pub async fn send_to<B: AsRef<[u8]>>(&self, buf: &NetPacket<B>, id: &NodeID) -> Result<()> {
+        self.pipe_writer.send_to_id(buf.buffer(), id).await?;
         Ok(())
     }
     pub(crate) async fn send_to_route(&self, buf: &[u8], route_key: &RouteKey) -> Result<()> {
@@ -529,7 +529,7 @@ impl PipeLine {
 
                 let broadcast_packet =
                     RangeBroadcastPacket::new(packet.payload_mut(), id_length as _)?;
-                let _in_packet = NetPacket::new(broadcast_packet.payload())?;
+                let in_packet = NetPacket::new(broadcast_packet.payload())?;
                 let start = head_len + broadcast_packet.head_len();
                 let mut broadcast_to_self = false;
 
@@ -538,7 +538,7 @@ impl PipeLine {
                     if node_id == self_id {
                         broadcast_to_self = true
                     } else {
-                        if let Err(e) = self.send_to(broadcast_packet.payload(), &node_id).await {
+                        if let Err(e) = self.send_to(&in_packet, &node_id).await {
                             log::debug!("RangeBroadcast {e:?}")
                         }
                     }
