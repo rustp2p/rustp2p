@@ -2,21 +2,32 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::config::punch_info::PunchInfo;
+use crate::error::Error;
+use crate::protocol::node_id::NodeID;
 use crossbeam_utils::atomic::AtomicCell;
 use dashmap::DashMap;
 use parking_lot::RwLock;
+use rust_p2p_core::route::Index;
 
-use crate::error::Error;
-use crate::protocol::node_id::NodeID;
-
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct PipeContext {
     self_node_id: Arc<AtomicCell<Option<NodeID>>>,
     direct_node_address_list: Arc<RwLock<Vec<(NodeAddress, Option<NodeID>)>>>,
     reachable_nodes: Arc<DashMap<NodeID, Vec<(NodeID, u8, Instant)>>>,
+    punch_info: Arc<RwLock<PunchInfo>>,
 }
 
 impl PipeContext {
+    pub(crate) fn new(local_udp_ports: Vec<u16>, local_tcp_port: u16) -> Self {
+        let punch_info = PunchInfo::new(local_udp_ports, local_tcp_port);
+        Self {
+            self_node_id: Arc::new(Default::default()),
+            direct_node_address_list: Arc::new(Default::default()),
+            reachable_nodes: Arc::new(Default::default()),
+            punch_info: Arc::new(RwLock::new(punch_info)),
+        }
+    }
     pub fn store_self_id(&self, node_id: NodeID) -> crate::error::Result<()> {
         if node_id.is_unspecified() || node_id.is_broadcast() {
             return Err(Error::InvalidArgument("invalid node id".into()));
@@ -72,10 +83,48 @@ impl PipeContext {
     pub fn default_route(&self) -> Option<NodeAddress> {
         self.direct_node_address_list.read().get(0).map(|(v, _)| *v)
     }
+    pub(crate) fn exists_nat_info(&self) -> bool {
+        self.punch_info.read().exists_nat_info()
+    }
+    pub fn punch_info(&self) -> &Arc<RwLock<PunchInfo>> {
+        &self.punch_info
+    }
+    pub fn set_mapping_addrs(&self, mapping_addrs: Vec<NodeAddress>) {
+        let tcp_addr: Vec<SocketAddr> = mapping_addrs
+            .iter()
+            .filter(|v| v.is_tcp())
+            .map(|v| *v.addr())
+            .collect();
+        let udp_addr: Vec<SocketAddr> = mapping_addrs
+            .iter()
+            .filter(|v| !v.is_tcp())
+            .map(|v| *v.addr())
+            .collect();
+        let mut guard = self.punch_info.write();
+        guard.mapping_tcp_addr = tcp_addr;
+        guard.mapping_udp_addr = udp_addr;
+    }
+    pub fn update_public_addr(&self, index: Index, addr: SocketAddr) {
+        self.punch_info.write().update_public_addr(index, addr);
+    }
 }
 
 #[derive(Copy, Clone, Debug)]
 pub enum NodeAddress {
     Tcp(SocketAddr),
     Udp(SocketAddr),
+}
+impl NodeAddress {
+    pub fn is_tcp(&self) -> bool {
+        match self {
+            NodeAddress::Tcp(_) => true,
+            NodeAddress::Udp(_) => false,
+        }
+    }
+    pub fn addr(&self) -> &SocketAddr {
+        match self {
+            NodeAddress::Tcp(addr) => addr,
+            NodeAddress::Udp(addr) => addr,
+        }
+    }
 }

@@ -40,7 +40,11 @@ impl ops::BitOr<PunchModel> for PunchModel {
 pub struct PunchModelBox {
     models: HashSet<PunchModel>,
 }
-
+impl Default for PunchModelBox {
+    fn default() -> Self {
+        PunchModelBox::all()
+    }
+}
 impl ops::BitOr<PunchModel> for PunchModelBox {
     type Output = PunchModelBox;
 

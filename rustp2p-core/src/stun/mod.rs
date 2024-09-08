@@ -191,8 +191,7 @@ fn stun_addr(addr: stun_format::SocketAddr) -> SocketAddr {
 
 const TAG: u128 = 1827549368 << 64;
 
-#[allow(dead_code)]
-pub(crate) fn send_stun_request() -> Vec<u8> {
+pub fn send_stun_request() -> Vec<u8> {
     let mut buf = [0u8; 28];
     let mut msg = stun_format::MsgBuilder::from(buf.as_mut_slice());
     msg.typ(stun_format::MsgType::BindingRequest);
@@ -204,9 +203,10 @@ pub(crate) fn send_stun_request() -> Vec<u8> {
     });
     msg.as_bytes().to_vec()
 }
-
-#[allow(dead_code)]
-pub(crate) fn recv_stun_response(buf: &[u8]) -> Option<SocketAddr> {
+pub fn is_stun_response(buf: &[u8]) -> bool {
+    return buf[0] == 0x01 && buf[1] == 0x01;
+}
+pub fn recv_stun_response(buf: &[u8]) -> Option<SocketAddr> {
     let msg = stun_format::Msg::from(buf);
     if let Some(tid) = msg.tid() {
         if tid & TAG != TAG {

@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::time::UNIX_EPOCH;
 
@@ -31,20 +31,48 @@ pub struct Pipe {
 
 impl Pipe {
     pub async fn new(mut config: PipeConfig) -> Result<Pipe> {
-        let pipe_context = PipeContext::default();
         let send_buffer_size = config.send_buffer_size;
         let query_id_interval = config.query_id_interval;
         let query_id_max_num = config.query_id_max_num;
         let heartbeat_interval = config.heartbeat_interval;
-        if let Some(node_id) = config.self_id.take() {
-            pipe_context.store_self_id(node_id)?;
-        }
-        if let Some(addrs) = config.direct_addrs.take() {
-            let x = addrs.into_iter().map(|v| (v, None)).collect();
-            pipe_context.set_direct_nodes(x);
+        let self_id = config.self_id.take();
+        let direct_addrs = config.direct_addrs.take();
+        let mapping_addrs = config.mapping_addrs.take();
+        let default_interface = if let Some(v) = &config.udp_pipe_config {
+            v.default_interface.clone()
+        } else {
+            None
+        };
+        let mut stun_servers = config.stun_servers.take().unwrap_or_default();
+        for x in stun_servers.iter_mut() {
+            if !x.contains(":") {
+                x.push_str(":3478");
+            }
         }
         let (pipe, puncher, idle_route_manager) =
             rust_p2p_core::pipe::pipe::<NodeID>(config.into())?;
+        let writer_ref = pipe.writer_ref();
+        let local_tcp_port = if let Some(v) = writer_ref.tcp_pipe_writer_ref() {
+            v.local_addr().port()
+        } else {
+            0
+        };
+        let local_udp_ports = if let Some(v) = writer_ref.udp_pipe_writer_ref() {
+            v.local_ports()?
+        } else {
+            vec![]
+        };
+        let pipe_context = PipeContext::new(local_udp_ports, local_tcp_port);
+        if let Some(node_id) = self_id {
+            pipe_context.store_self_id(node_id)?;
+        }
+        if let Some(addrs) = direct_addrs {
+            let x = addrs.into_iter().map(|v| (v, None)).collect();
+            pipe_context.set_direct_nodes(x);
+        }
+        if let Some(addrs) = mapping_addrs {
+            pipe_context.set_mapping_addrs(addrs);
+        }
         let pipe_writer = PipeWriter {
             send_buffer_size,
             pipe_context: pipe_context.clone(),
@@ -56,6 +84,8 @@ impl Pipe {
             query_id_interval,
             query_id_max_num,
             heartbeat_interval,
+            stun_servers,
+            default_interface,
         );
         Ok(Self {
             send_buffer_size,
@@ -283,6 +313,15 @@ impl PipeLine {
                     Err(e) => return Err(RecvError::Io(e)),
                 },
             };
+            if rust_p2p_core::stun::is_stun_response(&buf[..len]) {
+                if let Some(pub_addr) = rust_p2p_core::stun::recv_stun_response(&buf[..len]) {
+                    self.pipe_context
+                        .update_public_addr(route_key.index(), pub_addr);
+                } else {
+                    log::debug!("stun error {route_key:?}")
+                }
+                continue;
+            }
             return match self
                 .handle(RecvResult::new(&mut buf[..len], route_key))
                 .await
@@ -453,7 +492,7 @@ impl PipeLine {
                 let head_len = packet.head_len();
                 let end = packet.buffer().len();
 
-                let mut broadcast_packet =
+                let broadcast_packet =
                     RangeBroadcastPacket::new(packet.payload_mut(), id_length as _)?;
                 let _in_packet = NetPacket::new(broadcast_packet.payload())?;
                 let start = head_len + broadcast_packet.head_len();

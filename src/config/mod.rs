@@ -9,6 +9,7 @@ use rust_p2p_core::pipe::tcp_pipe::{Decoder, Encoder, InitCodec};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 
+pub(crate) mod punch_info;
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Default)]
 pub enum Model {
     High,
@@ -48,6 +49,8 @@ pub struct PipeConfig {
     pub query_id_interval: Duration,
     pub query_id_max_num: usize,
     pub heartbeat_interval: Duration,
+    pub stun_servers: Option<Vec<String>>,
+    pub mapping_addrs: Option<Vec<NodeAddress>>,
 }
 
 impl Default for PipeConfig {
@@ -65,6 +68,14 @@ impl Default for PipeConfig {
             query_id_interval: Duration::from_secs(12),
             query_id_max_num: 5,
             heartbeat_interval: Duration::from_secs(5),
+            stun_servers: Some(vec![
+                "stun.miwifi.com".to_string(),
+                "stun.chat.bilibili.com".to_string(),
+                "stun.hitv.com".to_string(),
+                "stun.cdnbye.com".to_string(),
+                "stun.l.google.com:19302".to_string(),
+            ]),
+            mapping_addrs: None,
         }
     }
 }
@@ -124,6 +135,14 @@ impl PipeConfig {
     }
     pub fn set_heartbeat_interval(mut self, heartbeat_interval: Duration) -> Self {
         self.heartbeat_interval = heartbeat_interval;
+        self
+    }
+    pub fn set_stun_servers(mut self, stun_servers: Vec<String>) -> Self {
+        self.stun_servers.replace(stun_servers);
+        self
+    }
+    pub fn set_mapping_addrs(mut self, mapping_addrs: Vec<NodeAddress>) -> Self {
+        self.mapping_addrs.replace(mapping_addrs);
         self
     }
 }
