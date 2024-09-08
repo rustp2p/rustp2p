@@ -17,7 +17,11 @@ impl AsRef<[u8]> for NodeID {
         }
     }
 }
+
 impl NodeID {
+    pub fn complies_with_length(id_len: u8) -> bool {
+        id_len == 4 || id_len == 8 || id_len == 16
+    }
     pub fn new(buf: &[u8]) -> std::io::Result<Self> {
         match buf.len() {
             4 => Ok(NodeID::Bit32(buf.try_into().unwrap())),
@@ -26,13 +30,20 @@ impl NodeID {
             _ => Err(std::io::Error::from(std::io::ErrorKind::InvalidData)),
         }
     }
+    pub fn broadcast(&self) -> NodeID {
+        match self {
+            NodeID::Bit32(_) => NodeID::Bit32([1u8; 4]),
+            NodeID::Bit64(_) => NodeID::Bit64([1u8; 8]),
+            NodeID::Bit128(_) => NodeID::Bit128([1u8; 16]),
+        }
+    }
     pub fn is_unspecified(&self) -> bool {
         let buf = self.as_ref();
         buf.iter().all(|v| *v == 0)
     }
     pub fn is_broadcast(&self) -> bool {
         let buf = self.as_ref();
-        buf.iter().all(|v| *v == 1)
+        buf.iter().all(|v| *v == 255)
     }
     pub fn len(&self) -> usize {
         self.as_ref().len()

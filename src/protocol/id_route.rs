@@ -53,6 +53,9 @@ impl<B: AsRef<[u8]>> IDRouteReplyPacket<B> {
         Self { id_len, buffer }
     }
     pub fn new(buffer: B, id_len: u8) -> Result<IDRouteReplyPacket<B>> {
+        if !NodeID::complies_with_length(id_len) {
+            return Err(Error::InvalidArgument("id_len".to_string()))?;
+        }
         let len = buffer.as_ref().len();
         if len < 4 {
             return Err(Error::Overflow {

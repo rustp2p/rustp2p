@@ -100,14 +100,14 @@ async fn recv(mut line: PipeLine, device: Arc<AsyncDevice>) {
             }
         };
         match handle_rs {
-            HandleResult::Turn(buf, dest_id, route_key) => {
+            HandleResult::Turn(buf, src_id, dest_id, route_key) => {
                 if let Err(e) = line.send_to(buf.buffer(), &dest_id).await {
-                    log::warn!("Turn {e:?},{dest_id:?},{route_key:?}")
+                    log::warn!("Turn {e:?},{src_id:?},{dest_id:?},{route_key:?}")
                 }
             }
-            HandleResult::UserData(buf, src_id, route_key) => {
+            HandleResult::UserData(buf, src_id, dest_id, route_key) => {
                 if let Err(e) = device.send(buf.payload()).await {
-                    log::warn!("UserData {e:?},{src_id:?},{route_key:?}")
+                    log::warn!("UserData {e:?},{src_id:?},{dest_id:?},{route_key:?}")
                 }
             }
         }
@@ -121,13 +121,12 @@ async fn tun_recv(pipe_writer: PipeWriter, device: Arc<AsyncDevice>) -> Result<(
         if payload[0] >> 4 != 4 {
             continue;
         }
-        let dest_ip = Ipv4Addr::new(payload[16], payload[17], payload[18], payload[19]);
-        if dest_ip.is_broadcast()
-            || dest_ip.is_multicast()
-            || dest_ip.is_unspecified()
-            || payload[19] == 255
-        {
+        let mut dest_ip = Ipv4Addr::new(payload[16], payload[17], payload[18], payload[19]);
+        if dest_ip.is_unspecified() {
             continue;
+        }
+        if dest_ip.is_broadcast() || dest_ip.is_multicast() || payload[19] == 255 {
+            dest_ip = Ipv4Addr::BROADCAST;
         }
         send_packet.set_payload_len(payload_len);
         if let Err(e) = pipe_writer

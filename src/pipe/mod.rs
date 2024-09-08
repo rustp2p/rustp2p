@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::time::UNIX_EPOCH;
 
@@ -10,10 +11,11 @@ pub use send_packet::SendPacket;
 use crate::config::PipeConfig;
 use crate::error::{Error, Result};
 use crate::pipe::pipe_context::PipeContext;
+use crate::protocol::broadcast::RangeBroadcastPacket;
 use crate::protocol::id_route::IDRouteReplyPacket;
 use crate::protocol::node_id::NodeID;
 use crate::protocol::protocol_type::ProtocolType;
-use crate::protocol::NetPacket;
+use crate::protocol::{broadcast, NetPacket};
 
 mod maintain;
 mod pipe_context;
@@ -129,6 +131,12 @@ impl PipeWriter {
         packet.set_id_length(src_id.len() as _);
         packet.set_src_id(src_id)?;
         packet.set_dest_id(dest_id)?;
+        if dest_id.is_broadcast() {
+            let len = packet.buffer().len();
+            self.send_broadcast0(packet.buffer(), src_id).await?;
+            return Ok(len);
+        }
+
         let len = if let Ok(route) = self.pipe_writer.route_table().get_route_by_id(dest_id) {
             self.pipe_writer
                 .send_to(packet.buffer(), &route.route_key())
@@ -159,10 +167,62 @@ impl PipeWriter {
 
         Ok(len)
     }
+    async fn send_broadcast0(&self, buf: &[u8], src_id: &NodeID) -> Result<()> {
+        let broadcast_id = src_id.broadcast();
+        let route_table = self.pipe_writer.route_table();
+        let table = route_table.route_table_one();
+        let mut map: HashMap<NodeID, (Vec<NodeID>, RouteKey)> = HashMap::new();
+        for (id, route) in &table {
+            if route.is_p2p() {
+                if !map.contains_key(id) {
+                    map.insert(*id, (vec![*id], route.route_key()));
+                }
+            } else {
+                if let Some(owner_id) = route_table.get_id_by_route_key(&route.route_key()) {
+                    if let Some((list, _)) = map.get_mut(&owner_id) {
+                        list.push(*id);
+                    } else {
+                        map.insert(owner_id, (vec![owner_id, *id], route.route_key()));
+                    }
+                }
+            }
+        }
+        for (owner_id, (list, route_key)) in map {
+            if list.is_empty() {
+                if let Err(e) = self.pipe_writer.send_to(buf, &route_key).await {
+                    log::debug!("send_broadcast0 {e:?} {owner_id:?}");
+                }
+            } else {
+                match broadcast::Builder::build_range_broadcast(&list, buf) {
+                    Ok(mut packet) => {
+                        packet.set_src_id(src_id)?;
+                        packet.set_dest_id(&broadcast_id)?;
+                        if let Err(e) = self.pipe_writer.send_to(packet.buffer(), &route_key).await
+                        {
+                            log::debug!("send_range_broadcast {e:?} {owner_id:?}");
+                        }
+                    }
+                    Err(e) => {
+                        log::debug!("build_range_broadcast {e:?} {owner_id:?}");
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
     /// use [`PipeWriter::send_to()`] head reserve
     pub fn head_reserve(&self) -> Result<usize> {
         if let Some(id) = self.pipe_context.load_id() {
             Ok(4 + id.len() * 2)
+        } else {
+            Err(Error::NoIDSpecified)
+        }
+    }
+    pub async fn broadcast_packet(&self, packet: &mut SendPacket) -> Result<()> {
+        if let Some(src_id) = self.pipe_context.load_id() {
+            self.send_to0(packet.buf_mut(), &src_id, &src_id.broadcast())
+                .await?;
+            Ok(())
         } else {
             Err(Error::NoIDSpecified)
         }
@@ -223,31 +283,35 @@ impl PipeLine {
                     Err(e) => return Err(RecvError::Io(e)),
                 },
             };
-            match self
+            return match self
                 .handle(RecvResult::new(&mut buf[..len], route_key))
                 .await
             {
                 Ok(handle_result) => {
-                    if let Some(handle_result) = handle_result {
-                        //return Ok(Ok(handle_result));
-                        // workaround borrowing checker
-                        return match handle_result {
-                            HandleResult::Turn(_, arg_1, arg_2) => Ok(Ok(HandleResult::Turn(
-                                NetPacket::new(&mut buf[..len]).unwrap(),
-                                arg_1,
-                                arg_2,
-                            ))),
-                            HandleResult::UserData(_, arg_1, arg_2) => {
-                                Ok(Ok(HandleResult::UserData(
-                                    NetPacket::new(&mut buf[..len]).unwrap(),
-                                    arg_1,
-                                    arg_2,
-                                )))
-                            }
-                        };
-                    }
+                    //return Ok(Ok(handle_result));
+                    // workaround borrowing checker
+                    let rs = match handle_result {
+                        HandleResultIn::Continue => continue,
+                        HandleResultIn::Turn(start, end, src, dest, route_key) => {
+                            HandleResult::Turn(
+                                NetPacket::new(&mut buf[start..end]).unwrap(),
+                                src,
+                                dest,
+                                route_key,
+                            )
+                        }
+                        HandleResultIn::UserData(start, end, src, dest, route_key) => {
+                            HandleResult::UserData(
+                                NetPacket::new(&mut buf[start..end]).unwrap(),
+                                src,
+                                dest,
+                                route_key,
+                            )
+                        }
+                    };
+                    Ok(Ok(rs))
                 }
-                Err(e) => return Ok(Err(HandleError::new(route_key, e))),
+                Err(e) => Ok(Err(HandleError::new(route_key, e))),
             };
         }
     }
@@ -259,10 +323,7 @@ impl PipeLine {
         self.pipe_writer.send_to(buf, route_key).await?;
         Ok(())
     }
-    pub async fn handle<'a>(
-        &mut self,
-        recv_result: RecvResult<'a>,
-    ) -> Result<Option<HandleResult<'a>>> {
+    async fn handle<'a>(&mut self, recv_result: RecvResult<'a>) -> Result<HandleResultIn> {
         let mut packet = NetPacket::new(recv_result.buf)?;
         let src_id = NodeID::new(packet.src_id())?;
 
@@ -276,7 +337,7 @@ impl PipeLine {
         }
 
         if packet.ttl() == 0 {
-            return Ok(None);
+            return Ok(HandleResultIn::Continue);
         }
         let route_key = recv_result.route_key;
 
@@ -287,11 +348,17 @@ impl PipeLine {
             if self_id == src_id {
                 return Err(Error::InvalidArgument("id loop error".into()));
             }
-            if self_id != dest_id && !dest_id.is_unspecified() {
+            if self_id != dest_id && !dest_id.is_unspecified() && !dest_id.is_broadcast() {
                 return if packet.incr_ttl() {
-                    Ok(Some(HandleResult::Turn(packet, dest_id, route_key)))
+                    Ok(HandleResultIn::Turn(
+                        0,
+                        packet.buffer().len(),
+                        src_id,
+                        dest_id,
+                        route_key,
+                    ))
                 } else {
-                    Ok(None)
+                    return Ok(HandleResultIn::Continue);
                 };
             }
             self_id
@@ -374,11 +441,43 @@ impl PipeLine {
                 }
             }
             ProtocolType::UserData => {
-                return Ok(Some(HandleResult::UserData(packet, src_id, route_key)))
+                return Ok(HandleResultIn::UserData(
+                    0,
+                    packet.buffer().len(),
+                    src_id,
+                    dest_id,
+                    route_key,
+                ))
+            }
+            ProtocolType::RangeBroadcast => {
+                let head_len = packet.head_len();
+                let end = packet.buffer().len();
+
+                let mut broadcast_packet =
+                    RangeBroadcastPacket::new(packet.payload_mut(), id_length as _)?;
+                let _in_packet = NetPacket::new(broadcast_packet.payload())?;
+                let start = head_len + broadcast_packet.head_len();
+                let mut broadcast_to_self = false;
+
+                let range_id: Vec<NodeID> = broadcast_packet.iter().collect();
+                for node_id in range_id {
+                    if node_id == self_id {
+                        broadcast_to_self = true
+                    } else {
+                        if let Err(e) = self.send_to(broadcast_packet.payload(), &node_id).await {
+                            log::debug!("RangeBroadcast {e:?}")
+                        }
+                    }
+                }
+                if broadcast_to_self {
+                    return Ok(HandleResultIn::UserData(
+                        start, end, src_id, dest_id, route_key,
+                    ));
+                }
             }
         }
 
-        return Ok(None);
+        return Ok(HandleResultIn::Continue);
     }
 }
 
@@ -400,8 +499,14 @@ impl<'a> RecvResult<'a> {
 }
 
 pub enum HandleResult<'a> {
-    Turn(NetPacket<&'a mut [u8]>, NodeID, RouteKey),
-    UserData(NetPacket<&'a mut [u8]>, NodeID, RouteKey),
+    Turn(NetPacket<&'a mut [u8]>, NodeID, NodeID, RouteKey),
+    UserData(NetPacket<&'a mut [u8]>, NodeID, NodeID, RouteKey),
+}
+
+enum HandleResultIn {
+    Continue,
+    Turn(usize, usize, NodeID, NodeID, RouteKey),
+    UserData(usize, usize, NodeID, NodeID, RouteKey),
 }
 
 #[derive(thiserror::Error, Debug)]

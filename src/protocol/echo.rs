@@ -11,5 +11,4 @@
   |                                          dest ID                                            |
   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
   protocol = ProtocolType::EchoRequest or ProtocolType::EchoReply
-  ttl = 1
 */
