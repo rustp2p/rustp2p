@@ -143,9 +143,10 @@ impl Builder {
         let len = Self::calculate_len(list)?;
         let id_len = list[0].0.len();
         let mut packet = NetPacket::unchecked(vec![0; len]);
+
         packet.set_protocol(ProtocolType::IDRouteReply);
         packet.set_id_length(id_len as _);
-
+        packet.set_ttl(15);
         let payload = packet.payload_mut();
         let id_num = list.len();
         let metric_len = id_num / 2 + if id_num & 0b1 == 0b1 { 1 } else { 0 };

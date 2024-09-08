@@ -1,22 +1,28 @@
 use crate::pipe::{NodeAddress, PipeWriter};
 use crate::protocol::node_id::NodeID;
 use crate::protocol::protocol_type::ProtocolType;
-use crate::protocol::Builder;
 use rand::seq::SliceRandom;
 use std::collections::HashSet;
 use std::time::Duration;
 
-pub async fn id_route_query_loop(pipe_writer: PipeWriter) {
+pub async fn id_route_query_loop(
+    pipe_writer: PipeWriter,
+    query_id_interval: Duration,
+    query_id_max_num: usize,
+) {
     loop {
-        if let Err(e) = id_route_query(&pipe_writer).await {
+        if let Err(e) = id_route_query(&pipe_writer, query_id_max_num).await {
             log::warn!("poll_peer_node, e={e:?}");
         }
-        tokio::time::sleep(Duration::from_secs(20)).await;
+        tokio::time::sleep(query_id_interval).await;
         pipe_writer.pipe_context().clear_timeout_reachable_nodes();
     }
 }
 
-async fn id_route_query(pipe_writer: &PipeWriter) -> crate::error::Result<()> {
+async fn id_route_query(
+    pipe_writer: &PipeWriter,
+    query_id_max_num: usize,
+) -> crate::error::Result<()> {
     let mut packet =
         if let Ok(packet) = pipe_writer.allocate_send_packet_proto(ProtocolType::IDRouteQuery, 4) {
             packet
@@ -33,7 +39,13 @@ async fn id_route_query(pipe_writer: &PipeWriter) -> crate::error::Result<()> {
         }
     }
     poll_direct_peer_node(direct_nodes, pipe_writer, packet.buf_mut()).await;
-    poll_route_table_peer_node(pipe_writer, packet.buf_mut(), direct_node_set).await;
+    poll_route_table_peer_node(
+        pipe_writer,
+        packet.buf_mut(),
+        direct_node_set,
+        query_id_max_num,
+    )
+    .await;
     Ok(())
 }
 
@@ -69,15 +81,16 @@ async fn poll_route_table_peer_node(
     pipe_writer: &PipeWriter,
     buf: &[u8],
     direct_nodes: HashSet<NodeID>,
+    query_id_max_num: usize,
 ) {
     let mut route_table = pipe_writer.pipe_writer.route_table().route_table_one();
     if route_table.is_empty() {
         return;
     }
-    if route_table.len() > 5 {
+    if route_table.len() > query_id_max_num {
         let mut rng = rand::thread_rng();
         route_table.shuffle(&mut rng);
-        route_table.truncate(5);
+        route_table.truncate(query_id_max_num);
     }
     for (peer_id, route) in route_table {
         if !direct_nodes.contains(&peer_id) {

@@ -41,7 +41,7 @@ mod test {
 
     #[test]
     fn test_new_protocol() {
-        assert_eq!(ProtocolType::try_from(2).unwrap(), ProtocolType::PunchReply);
+        assert_eq!(ProtocolType::try_from(3).unwrap(), ProtocolType::PunchReply);
         assert!(ProtocolType::try_from(128).is_err());
     }
 }

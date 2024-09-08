@@ -1,4 +1,3 @@
-use std::fmt::Display;
 use std::net::SocketAddr;
 use std::time::UNIX_EPOCH;
 
@@ -32,6 +31,9 @@ impl Pipe {
     pub async fn new(mut config: PipeConfig) -> Result<Pipe> {
         let pipe_context = PipeContext::default();
         let send_buffer_size = config.send_buffer_size;
+        let query_id_interval = config.query_id_interval;
+        let query_id_max_num = config.query_id_max_num;
+        let heartbeat_interval = config.heartbeat_interval;
         if let Some(node_id) = config.self_id.take() {
             pipe_context.store_self_id(node_id)?;
         }
@@ -46,7 +48,13 @@ impl Pipe {
             pipe_context: pipe_context.clone(),
             pipe_writer: pipe.writer_ref().to_owned(),
         };
-        maintain::start_task(&pipe_writer, idle_route_manager);
+        maintain::start_task(
+            &pipe_writer,
+            idle_route_manager,
+            query_id_interval,
+            query_id_max_num,
+            heartbeat_interval,
+        );
         Ok(Self {
             send_buffer_size,
             pipe_context,
@@ -262,9 +270,6 @@ impl PipeLine {
             return Err(Error::InvalidArgument("src id is unspecified".into()));
         }
         let dest_id = NodeID::new(packet.dest_id())?;
-        if src_id.is_unspecified() {
-            return Err(Error::InvalidArgument("src id is unspecified".into()));
-        }
 
         if packet.first_ttl() < packet.ttl() {
             return Err(Error::InvalidArgument("ttl error".into()));
@@ -348,10 +353,12 @@ impl PipeLine {
                         .map(|(node_id, route)| (node_id, route.metric()))
                         .collect();
                     if !list.is_empty() {
-                        let packet = crate::protocol::id_route::Builder::build_reply(
+                        let mut packet = crate::protocol::id_route::Builder::build_reply(
                             &list,
                             list.len() as _,
                         )?;
+                        packet.set_dest_id(&src_id)?;
+                        packet.set_src_id(&self_id)?;
                         self.send_to_route(packet.buffer(), &route_key).await?;
                     }
                 }
@@ -397,13 +404,16 @@ pub enum HandleResult<'a> {
     UserData(NetPacket<&'a mut [u8]>, NodeID, RouteKey),
 }
 
-#[derive(Debug)]
+#[derive(thiserror::Error, Debug)]
 pub enum RecvError {
+    #[error("done")]
     Done,
-    Io(std::io::Error),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
 }
 
-#[derive(Debug)]
+#[derive(thiserror::Error, Debug)]
+#[error("handle error {route_key:?},err={err:?}")]
 pub struct HandleError {
     route_key: RouteKey,
     err: Error,

@@ -54,6 +54,7 @@ pub async fn main() -> Result<()> {
                 #[cfg(windows)]
                 v.ring_capacity(2 * 1024 * 1024);
             })
+            .mtu(1400)
             .up(),
     )
     .unwrap();

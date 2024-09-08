@@ -12,7 +12,7 @@
   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 */
 
-use std::fmt::Debug;
+use std::fmt::{Debug, Write};
 
 use node_id::NodeID;
 
@@ -94,7 +94,7 @@ impl<B: AsRef<[u8]> + AsMut<[u8]>> NetPacket<B> {
         true
     }
     pub fn set_ttl(&mut self, ttl: u8) {
-        self.buffer.as_mut()[3] = (ttl << 4) | ttl
+        self.buffer.as_mut()[3] = (ttl << 4) | (ttl & 0xF)
     }
     pub fn exchange_id(&mut self) {
         let src_start = 4;
@@ -234,11 +234,24 @@ impl<'a, B: AsMut<[u8]>> Builder<'a, B> {
 impl<'a, B: AsRef<[u8]>> Debug for Builder<'a, B> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let buf = self.0.as_ref();
+        let packet = match NetPacket::new(buf) {
+            Ok(packet) => packet,
+            Err(_) => {
+                return f.write_str("Invalid Protocol Buffer");
+            }
+        };
+        f.write_str(&format!("{:?}", packet))
+    }
+}
+
+impl<B: AsRef<[u8]>> Debug for NetPacket<B> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let buf = self.buffer();
         if buf.len() < 4 {
             return f.write_str("Invalid Protocol Buffer");
         }
         let ttl = buf[3];
-        let id_len = self.1;
+        let id_len = self.id_length() as usize;
         let src_id = if buf.len() < (4 + id_len) {
             "".to_string()
         } else {

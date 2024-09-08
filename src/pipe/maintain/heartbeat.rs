@@ -3,11 +3,10 @@ use crate::pipe::pipe_context::NodeAddress;
 use crate::pipe::PipeWriter;
 use crate::protocol::node_id::NodeID;
 use crate::protocol::protocol_type::ProtocolType;
-use crate::protocol::{Builder, NetPacket};
-use std::collections::HashSet;
+use crate::protocol::NetPacket;
 use std::time::{Duration, UNIX_EPOCH};
 
-pub async fn heartbeat_loop(pipe_writer: PipeWriter) {
+pub async fn heartbeat_loop(pipe_writer: PipeWriter, heartbeat_interval: Duration) {
     let mut count = 0;
     loop {
         if count % 3 == 2 {
@@ -20,7 +19,7 @@ pub async fn heartbeat_loop(pipe_writer: PipeWriter) {
             }
         }
 
-        tokio::time::sleep(Duration::from_secs(5)).await;
+        tokio::time::sleep(heartbeat_interval).await;
         count += 1;
     }
 }
