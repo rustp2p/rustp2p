@@ -5,6 +5,7 @@ use std::time::UNIX_EPOCH;
 use async_shutdown::ShutdownManager;
 use rust_p2p_core::route::route_table::RouteTable;
 use rust_p2p_core::route::{ConnectProtocol, Route, RouteKey};
+use tokio::sync::mpsc::Sender;
 
 pub use pipe_context::NodeAddress;
 pub use pipe_context::PeerNodeAddress;
@@ -30,6 +31,8 @@ pub struct Pipe {
     pipe_context: PipeContext,
     pipe: rust_p2p_core::pipe::Pipe<NodeID>,
     shutdown_manager: ShutdownManager<()>,
+    active_punch_sender: Sender<(NodeID, PunchConsultInfo)>,
+    passive_punch_sender: Sender<(NodeID, PunchConsultInfo)>,
 }
 
 impl Pipe {
@@ -95,7 +98,8 @@ impl Pipe {
             pipe_writer: pipe.writer_ref().to_owned(),
             shutdown_manager: shutdown_manager.clone(),
         };
-
+        let (active_punch_sender, active_punch_receiver) = tokio::sync::mpsc::channel(3);
+        let (passive_punch_sender, passive_punch_receiver) = tokio::sync::mpsc::channel(3);
         let mut join_set = maintain::start_task(
             &pipe_writer,
             idle_route_manager,
@@ -106,6 +110,8 @@ impl Pipe {
             tcp_stun_servers,
             udp_stun_servers,
             default_interface,
+            active_punch_receiver,
+            passive_punch_receiver,
         );
         let fut = shutdown_manager
             .wrap_cancel(async move { while let Some(_) = join_set.join_next().await {} });
@@ -122,6 +128,8 @@ impl Pipe {
             pipe_context,
             pipe,
             shutdown_manager,
+            active_punch_sender,
+            passive_punch_sender,
         })
     }
     pub fn writer(&self) -> PipeWriter {
@@ -145,6 +153,8 @@ impl Pipe {
             pipe_line,
             pipe_writer: self.writer(),
             route_table: self.pipe.route_table().clone(),
+            active_punch_sender: self.active_punch_sender.clone(),
+            passive_punch_sender: self.passive_punch_sender.clone(),
         })
     }
 }
@@ -336,6 +346,8 @@ pub struct PipeLine {
     pipe_line: rust_p2p_core::pipe::PipeLine,
     pipe_writer: PipeWriter,
     route_table: RouteTable<NodeID>,
+    active_punch_sender: Sender<(NodeID, PunchConsultInfo)>,
+    passive_punch_sender: Sender<(NodeID, PunchConsultInfo)>,
 }
 
 impl PipeLine {
@@ -429,6 +441,7 @@ impl PipeLine {
                 return Err(Error::InvalidArgument("id len error".into()));
             }
             if self_id == src_id {
+                log::debug!("{packet:?}");
                 return Err(Error::InvalidArgument("id loop error".into()));
             }
             if self_id != dest_id && !dest_id.is_unspecified() && !dest_id.is_broadcast() {
@@ -459,8 +472,11 @@ impl PipeLine {
                 packet.exchange_id();
                 packet.set_src_id(&self_id)?;
                 self.send_to_route(packet.buffer(), &route_key).await?;
+                log::debug!("===========PunchRequest {route_key:?} {src_id:?}")
             }
-            ProtocolType::PunchReply => {}
+            ProtocolType::PunchReply => {
+                log::debug!("===========PunchReply {route_key:?} {src_id:?}")
+            }
             ProtocolType::EchoRequest => {
                 packet.set_protocol(ProtocolType::EchoReply);
                 packet.set_ttl(packet.first_ttl());
@@ -566,6 +582,7 @@ impl PipeLine {
             }
             ProtocolType::PunchConsultRequest => {
                 let punch_info = rmp_serde::from_slice::<PunchConsultInfo>(packet.payload())?;
+                log::info!("PunchConsultRequest {:?}", punch_info);
                 let consult_info = self
                     .pipe_context
                     .gen_punch_info(punch_info.peer_nat_info.seq);
@@ -575,14 +592,20 @@ impl PipeLine {
                     .allocate_send_packet_proto(ProtocolType::PunchConsultReply, data.len())?;
                 send_packet.data_mut()[..data.len()].copy_from_slice(&data);
                 send_packet.set_payload_len(data.len());
-                self.pipe_writer
-                    .send_to_packet(&mut send_packet, &src_id)
-                    .await?;
-                log::info!("PunchConsultRequest {:?}", punch_info);
+                if let Ok(sender) = self.passive_punch_sender.try_reserve() {
+                    self.pipe_writer
+                        .send_to_packet(&mut send_packet, &src_id)
+                        .await?;
+                    sender.send((src_id, consult_info))
+                }
             }
             ProtocolType::PunchConsultReply => {
                 let punch_info = rmp_serde::from_slice::<PunchConsultInfo>(packet.payload())?;
                 log::info!("PunchConsultReply {:?}", punch_info);
+
+                if let Err(_) = self.active_punch_sender.try_send((src_id, punch_info)) {
+                    log::debug!("active_punch_sender err src_id={self_id:?}");
+                }
             }
         }
 

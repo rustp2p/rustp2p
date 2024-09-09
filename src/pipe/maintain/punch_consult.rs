@@ -2,7 +2,7 @@ use crate::pipe::PipeWriter;
 use crate::protocol::node_id::NodeID;
 use crate::protocol::protocol_type::ProtocolType;
 use rand::seq::SliceRandom;
-use rust_p2p_core::punch::{PunchConsultInfo, Puncher};
+use rust_p2p_core::punch::{PunchConsultInfo, PunchInfo, Puncher};
 use std::time::Duration;
 use tokio::sync::mpsc::Receiver;
 
@@ -62,4 +62,22 @@ pub async fn punch_consult_loop(pipe_writer: PipeWriter, puncher: Puncher<NodeID
         }
     }
 }
-pub async fn punch_loop(receiver: Receiver<PunchConsultInfo>, puncher: Puncher<NodeID>) {}
+pub async fn punch_loop(
+    active: bool,
+    mut receiver: Receiver<(NodeID, PunchConsultInfo)>,
+    pipe_writer: PipeWriter,
+    puncher: Puncher<NodeID>,
+) {
+    while let Some((node_id, info)) = receiver.recv().await {
+        let punch_info = PunchInfo::new(
+            active,
+            info.peer_punch_model & pipe_writer.pipe_context().punch_model_box(),
+            info.peer_nat_info,
+        );
+        if let Ok(packet) = pipe_writer.allocate_send_packet_proto(ProtocolType::PunchRequest, 0) {
+            if let Err(e) = puncher.punch(node_id, packet.buf(), punch_info).await {
+                log::warn!("punch {e:?} {node_id:?}");
+            }
+        }
+    }
+}

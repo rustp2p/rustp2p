@@ -3,8 +3,9 @@ use tokio::task::JoinSet;
 use crate::config::LocalInterface;
 use crate::pipe::PipeWriter;
 use crate::protocol::node_id::NodeID;
-use rust_p2p_core::punch::Puncher;
+use rust_p2p_core::punch::{PunchConsultInfo, Puncher};
 use std::time::Duration;
+use tokio::sync::mpsc::Receiver;
 
 mod heartbeat;
 mod id_route;
@@ -23,6 +24,8 @@ pub(crate) fn start_task(
     tcp_stun_servers: Vec<String>,
     udp_stun_servers: Vec<String>,
     default_interface: Option<LocalInterface>,
+    active_receiver: Receiver<(NodeID, PunchConsultInfo)>,
+    passive_receiver: Receiver<(NodeID, PunchConsultInfo)>,
 ) -> JoinSet<()> {
     let mut join_set = JoinSet::new();
     join_set.spawn(heartbeat::heartbeat_loop(
@@ -46,6 +49,18 @@ pub(crate) fn start_task(
         udp_stun_servers,
     ));
     join_set.spawn(punch_consult::punch_consult_loop(
+        pipe_writer.clone(),
+        puncher.clone(),
+    ));
+    join_set.spawn(punch_consult::punch_loop(
+        true,
+        active_receiver,
+        pipe_writer.clone(),
+        puncher.clone(),
+    ));
+    join_set.spawn(punch_consult::punch_loop(
+        false,
+        passive_receiver,
         pipe_writer.clone(),
         puncher,
     ));
