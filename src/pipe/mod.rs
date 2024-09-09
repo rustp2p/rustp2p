@@ -492,6 +492,11 @@ impl PipeLine {
                     .add_route(src_id, Route::from(route_key, metric, rtt));
             }
             ProtocolType::IDRouteQuery => {
+                let time = packet.payload();
+                if time.len() != 4 {
+                    return Err(Error::InvalidArgument("IDRouteQuery error".into()));
+                }
+                let query_id = u16::from_be_bytes(time[2..].try_into().unwrap());
                 // reply reachable node id
                 let mut list = self.route_table.route_table_min_metric();
                 if !list.is_empty() {
@@ -505,6 +510,7 @@ impl PipeLine {
                     if !list.is_empty() {
                         let mut packet = crate::protocol::id_route::Builder::build_reply(
                             &list,
+                            query_id,
                             list.len() as _,
                         )?;
                         packet.set_dest_id(&src_id)?;

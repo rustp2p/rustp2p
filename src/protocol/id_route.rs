@@ -10,7 +10,7 @@
   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
   |                                          dest ID                                            |
   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-  |                  offset(16)                 |                 unused(16)                    |
+  |                  offset(16)                 |               query id(16)                    |
   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
   protocol = ProtocolType::IDRouteQuery
   dest ID = 0
@@ -27,7 +27,7 @@
   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
   |                                          dest ID                                            |
   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-  |   current id num(8) |        unused(8)      |            all id num(16)                     |
+  |   current id num(8) |                            query id(16)      |            all id num(16)                     |
   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
   |                                          ID metric                                          |
   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
@@ -57,15 +57,15 @@ impl<B: AsRef<[u8]>> IDRouteReplyPacket<B> {
             return Err(Error::InvalidArgument("id_len".to_string()))?;
         }
         let len = buffer.as_ref().len();
-        if len < 4 {
+        if len < 5 {
             return Err(Error::Overflow {
                 cap: len,
-                required: 4,
+                required: 5,
             });
         }
         let packet = Self { id_len, buffer };
         let calculate_size =
-            packet.metric_len() as usize + packet.current_id_num() as usize * id_len as usize + 4;
+            packet.metric_len() as usize + packet.current_id_num() as usize * id_len as usize + 5;
         if calculate_size != len {
             return Err(Error::Overflow {
                 cap: len,
@@ -80,8 +80,11 @@ impl<B: AsRef<[u8]>> IDRouteReplyPacket<B> {
     pub fn current_id_num(&self) -> u8 {
         self.buffer.as_ref()[0]
     }
+    pub fn query_id(&self) -> u16 {
+        u16::from_be_bytes(self.buffer.as_ref()[1..3].try_into().unwrap())
+    }
     pub fn all_id_num(&self) -> u16 {
-        u16::from_be_bytes(self.buffer.as_ref()[2..4].try_into().unwrap())
+        u16::from_be_bytes(self.buffer.as_ref()[3..5].try_into().unwrap())
     }
     pub fn metric_len(&self) -> u8 {
         let id_num = self.current_id_num();
@@ -110,11 +113,11 @@ impl<B: AsRef<[u8]>> Iterator for IDRouteReplyIter<'_, B> {
         if id_num == self.index {
             return None;
         }
-        let metric_index = 4 + self.index / 2;
+        let metric_index = 5 + self.index / 2;
         let metric_offset = if self.index & 0b1 == 0b0 { 4 } else { 0 };
         let metric = (self.packet.buffer()[metric_index] >> metric_offset) & 0xF;
         let node_index_start =
-            4 + self.packet.metric_len() as usize + self.index * self.packet.id_len() as usize;
+            5 + self.packet.metric_len() as usize + self.index * self.packet.id_len() as usize;
         let node_index_end = node_index_start + self.packet.id_len() as usize;
         let node_id = NodeID::new(&self.packet.buffer()[node_index_start..node_index_end]).unwrap();
         self.index += 1;
@@ -139,10 +142,14 @@ impl Builder {
         let out_packet_head = 4 + id_len * 2;
         let metric_len = id_num / 2 + if id_num & 0b1 == 0b1 { 1 } else { 0 };
 
-        let len = out_packet_head + 4 + metric_len + id_len * id_num;
+        let len = out_packet_head + 5 + metric_len + id_len * id_num;
         Ok(len)
     }
-    pub fn build_reply(list: &[(NodeID, u8)], all_id_num: u16) -> Result<NetPacket<Vec<u8>>> {
+    pub fn build_reply(
+        list: &[(NodeID, u8)],
+        query_id: u16,
+        all_id_num: u16,
+    ) -> Result<NetPacket<Vec<u8>>> {
         let len = Self::calculate_len(list)?;
         let id_len = list[0].0.len();
         let mut packet = NetPacket::unchecked(vec![0; len]);
@@ -154,12 +161,13 @@ impl Builder {
         let id_num = list.len();
         let metric_len = id_num / 2 + if id_num & 0b1 == 0b1 { 1 } else { 0 };
         payload[0] = id_num as _;
-        payload[2..4].copy_from_slice(&all_id_num.to_be_bytes());
+        payload[1..3].copy_from_slice(&query_id.to_be_bytes());
+        payload[3..5].copy_from_slice(&all_id_num.to_be_bytes());
         for (index, (node_id, metric)) in list.iter().enumerate() {
-            let metric_index = 4 + index / 2;
+            let metric_index = 5 + index / 2;
             let metric_offset = if index & 0b1 == 0b0 { 4 } else { 0 };
             payload[metric_index] |= (*metric) << metric_offset;
-            let node_index_start = 4 + metric_len + index * id_len;
+            let node_index_start = 5 + metric_len + index * id_len;
             let node_index_end = node_index_start + id_len;
             payload[node_index_start..node_index_end].copy_from_slice(node_id.as_ref());
         }
@@ -190,9 +198,11 @@ mod test {
         test_build0(list);
     }
     fn test_build0(list: Vec<(NodeID, u8)>) {
-        let packet = Builder::build_reply(&list, 20).unwrap();
+        let packet = Builder::build_reply(&list, 16, 20).unwrap();
         let packet = IDRouteReplyPacket::new(packet.payload(), packet.id_length()).unwrap();
         assert_eq!(packet.iter().count(), list.len());
+        assert_eq!(packet.query_id(), 16);
+        assert_eq!(packet.all_id_num(), 20);
         for (index, (node_id, metric)) in packet.iter().enumerate() {
             assert_eq!(node_id, list[index].0);
             assert_eq!(metric, list[index].1);
