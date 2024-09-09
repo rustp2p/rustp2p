@@ -16,7 +16,9 @@ pub async fn id_route_query_loop(
             log::warn!("poll_peer_node, e={e:?}");
         }
         tokio::time::sleep(query_id_interval).await;
-        pipe_writer.pipe_context().clear_timeout_reachable_nodes();
+        pipe_writer
+            .pipe_context()
+            .clear_timeout_reachable_nodes(query_id_interval);
     }
 }
 
@@ -34,18 +36,25 @@ async fn id_route_query(
     packet.set_ttl(1);
     let direct_nodes = pipe_writer.pipe_context.get_direct_nodes_and_id();
 
-    poll_direct_peer_node(direct_nodes, pipe_writer, packet.buf_mut()).await;
-    poll_route_table_peer_node(pipe_writer, packet.buf_mut(), query_id_max_num).await;
+    let sent_ids =
+        poll_route_table_peer_node(pipe_writer, packet.buf_mut(), query_id_max_num).await;
+    poll_direct_peer_node(direct_nodes, sent_ids, pipe_writer, packet.buf_mut()).await;
     Ok(())
 }
 
 async fn poll_direct_peer_node(
-    direct_nodes: Vec<(NodeAddress, u16)>,
+    direct_nodes: Vec<(NodeAddress, u16, Option<NodeID>)>,
+    sent_ids: HashSet<NodeID>,
     pipe_writer: &PipeWriter,
     buf: &mut [u8],
 ) {
     let mut packet = NetPacket::unchecked(buf);
-    for (addr, id) in direct_nodes {
+    for (addr, id, node_id) in direct_nodes {
+        if let Some(node_id) = node_id {
+            if sent_ids.contains(&node_id) {
+                continue;
+            }
+        }
         packet.payload_mut()[2..4].copy_from_slice(&id.to_be_bytes());
         match addr {
             NodeAddress::Tcp(addr) => match pipe_writer.pipe_writer.tcp_pipe_writer() {
@@ -69,11 +78,17 @@ async fn poll_direct_peer_node(
     }
 }
 
-async fn poll_route_table_peer_node(pipe_writer: &PipeWriter, buf: &[u8], query_id_max_num: usize) {
+async fn poll_route_table_peer_node(
+    pipe_writer: &PipeWriter,
+    buf: &[u8],
+    query_id_max_num: usize,
+) -> HashSet<NodeID> {
     let mut route_table = pipe_writer.pipe_writer.route_table().route_table_p2p();
     if route_table.is_empty() {
-        return;
+        return HashSet::new();
     }
+    let mut sent_ids = HashSet::with_capacity(route_table.len());
+
     if route_table.len() > query_id_max_num {
         let mut rng = rand::thread_rng();
         route_table.shuffle(&mut rng);
@@ -82,7 +97,10 @@ async fn poll_route_table_peer_node(pipe_writer: &PipeWriter, buf: &[u8], query_
     for (peer_id, route) in route_table {
         if let Err(e) = pipe_writer.send_to_route(buf, &route.route_key()).await {
             log::warn!("poll_route_table_peer_node, e={e:?},peer_id={peer_id:?},route={route:?}");
+        } else {
+            sent_ids.insert(peer_id);
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
+    sent_ids
 }

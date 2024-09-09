@@ -4,6 +4,7 @@ use crate::pipe::PipeWriter;
 use crate::protocol::node_id::NodeID;
 use crate::protocol::protocol_type::ProtocolType;
 use crate::protocol::NetPacket;
+use std::collections::HashSet;
 use std::time::{Duration, UNIX_EPOCH};
 
 pub async fn heartbeat_loop(pipe_writer: PipeWriter, heartbeat_interval: Duration) {
@@ -33,8 +34,8 @@ async fn heartbeat_request(pipe_writer: &PipeWriter) -> Result<()> {
         };
     let mut packet = NetPacket::new(packet.buf_mut())?;
     let direct_nodes = pipe_writer.pipe_context.get_direct_nodes();
-    direct_heartbeat_request(direct_nodes, pipe_writer, packet.buffer()).await;
-    route_table_heartbeat_request(pipe_writer, &mut packet).await;
+    let sent_ids = route_table_heartbeat_request(pipe_writer, &mut packet).await;
+    direct_heartbeat_request(direct_nodes, sent_ids, pipe_writer, packet.buffer()).await;
     Ok(())
 }
 
@@ -53,17 +54,23 @@ async fn timestamp_request(pipe_writer: &PipeWriter) -> Result<()> {
         .as_millis() as u32;
     packet.payload_mut().copy_from_slice(&now.to_be_bytes());
     let direct_nodes = pipe_writer.pipe_context.get_direct_nodes();
-    direct_heartbeat_request(direct_nodes, pipe_writer, packet.buffer()).await;
-    route_table_heartbeat_request(pipe_writer, &mut packet).await;
+    let sent_ids = route_table_heartbeat_request(pipe_writer, &mut packet).await;
+    direct_heartbeat_request(direct_nodes, sent_ids, pipe_writer, packet.buffer()).await;
     Ok(())
 }
 
 async fn direct_heartbeat_request(
-    direct_nodes: Vec<NodeAddress>,
+    direct_nodes: Vec<(NodeAddress, Option<NodeID>)>,
+    sent_ids: HashSet<NodeID>,
     pipe_writer: &PipeWriter,
     buf: &[u8],
 ) {
-    for addr in direct_nodes {
+    for (addr, node_id) in direct_nodes {
+        if let Some(node_id) = node_id {
+            if sent_ids.contains(&node_id) {
+                continue;
+            }
+        }
         match addr {
             NodeAddress::Tcp(addr) => match pipe_writer.pipe_writer.tcp_pipe_writer() {
                 None => {}
@@ -89,8 +96,9 @@ async fn direct_heartbeat_request(
 async fn route_table_heartbeat_request(
     pipe_writer: &PipeWriter,
     packet: &mut NetPacket<&mut [u8]>,
-) {
+) -> HashSet<NodeID> {
     let table = pipe_writer.pipe_writer.route_table().route_table();
+    let mut sent_ids = HashSet::with_capacity(table.len());
     for (node_id, routes) in table {
         if let Err(e) = packet.set_dest_id(&node_id) {
             log::warn!("route_table_heartbeat_request e={e:?},node_id={node_id:?}");
@@ -102,8 +110,13 @@ async fn route_table_heartbeat_request(
                 .await
             {
                 log::warn!("route_table_heartbeat_request e={e:?},node_id={node_id:?}");
+            } else {
+                if route.is_p2p() {
+                    sent_ids.insert(node_id);
+                }
             }
             tokio::time::sleep(Duration::from_millis(3)).await;
         }
     }
+    sent_ids
 }

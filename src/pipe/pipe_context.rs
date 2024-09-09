@@ -21,7 +21,7 @@ use crate::protocol::node_id::NodeID;
 pub struct PipeContext {
     self_node_id: Arc<AtomicCell<Option<NodeID>>>,
     direct_node_address_list: Arc<RwLock<Vec<(PeerNodeAddress, u16, Vec<NodeAddress>)>>>,
-    direct_node_id_map: Arc<DashMap<u16, NodeID>>,
+    direct_node_id_map: Arc<DashMap<u16, (NodeID, Instant)>>,
     reachable_nodes: Arc<DashMap<NodeID, Vec<(NodeID, u8, Instant)>>>,
     punch_info: Arc<RwLock<NodePunchInfo>>,
     default_interface: Option<LocalInterface>,
@@ -74,25 +74,30 @@ impl PipeContext {
     ) {
         *self.direct_node_address_list.write() = direct_node;
     }
-    pub fn get_direct_nodes(&self) -> Vec<NodeAddress> {
+    pub fn get_direct_nodes(&self) -> Vec<(NodeAddress, Option<NodeID>)> {
         let guard = self.direct_node_address_list.read();
         let mut addrs = Vec::new();
-        for (_, _, v) in guard.iter() {
+        for (_, id, v) in guard.iter() {
+            let node_id = self.get_direct_node_id(id);
             for x in v {
-                addrs.push(x.clone())
+                addrs.push((x.clone(), node_id))
             }
         }
         addrs
     }
-    pub fn get_direct_nodes_and_id(&self) -> Vec<(NodeAddress, u16)> {
+    pub fn get_direct_nodes_and_id(&self) -> Vec<(NodeAddress, u16, Option<NodeID>)> {
         let guard = self.direct_node_address_list.read();
         let mut addrs = Vec::new();
         for (_, id, v) in guard.iter() {
+            let node_id = self.get_direct_node_id(id);
             for x in v {
-                addrs.push((x.clone(), *id))
+                addrs.push((x.clone(), *id, node_id))
             }
         }
         addrs
+    }
+    pub fn get_direct_node_id(&self, id: &u16) -> Option<NodeID> {
+        self.direct_node_id_map.get(id).map(|v| v.value().0)
     }
     pub async fn update_direct_nodes(&self) -> crate::error::Result<()> {
         let mut addrs = self.direct_node_address_list.read().clone();
@@ -105,7 +110,8 @@ impl PipeContext {
         Ok(())
     }
     pub fn update_direct_node_id(&self, id: u16, node_id: NodeID) {
-        self.direct_node_id_map.insert(id, node_id);
+        self.direct_node_id_map
+            .insert(id, (node_id, Instant::now()));
     }
     pub fn update_reachable_nodes(&self, src_id: NodeID, reachable_id: NodeID, metric: u8) {
         let now = Instant::now();
@@ -125,16 +131,16 @@ impl PipeContext {
             })
             .or_insert_with(|| vec![(src_id, metric, now)]);
     }
-    pub(crate) fn clear_timeout_reachable_nodes(&self) {
-        let timeout = if let Some(time) = Instant::now().checked_sub(Duration::from_secs(60)) {
-            time
-        } else {
-            return;
-        };
-        for mut val in self.reachable_nodes.iter_mut() {
-            val.value_mut().retain(|(_, _, time)| time > &timeout);
+    pub(crate) fn clear_timeout_reachable_nodes(&self, query_id_interval: Duration) {
+        let now = Instant::now();
+        if let Some(timeout) = now.checked_sub(query_id_interval * 3) {
+            self.direct_node_id_map
+                .retain(|_, (_, time)| &*time > &timeout);
+            for mut val in self.reachable_nodes.iter_mut() {
+                val.value_mut().retain(|(_, _, time)| time > &timeout);
+            }
+            self.reachable_nodes.retain(|_, v| !v.is_empty());
         }
-        self.reachable_nodes.retain(|_, v| !v.is_empty());
     }
     pub fn reachable_node(&self, dest_id: &NodeID) -> Option<NodeID> {
         if let Some(v) = self.reachable_nodes.get(dest_id) {
@@ -183,7 +189,7 @@ impl PipeContext {
     }
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum NodeAddress {
     Tcp(SocketAddr),
     Udp(SocketAddr),
@@ -204,7 +210,7 @@ impl NodeAddress {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PeerNodeAddress {
     Tcp(SocketAddr),
     Udp(SocketAddr),
