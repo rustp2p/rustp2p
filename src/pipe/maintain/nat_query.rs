@@ -72,5 +72,4 @@ async fn nat_test(
             log::debug!("stun_test_nat {e:?} {udp_stun_servers:?}")
         }
     }
-
 }

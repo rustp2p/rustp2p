@@ -1,15 +1,18 @@
-use std::net::SocketAddr;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
-
 use crate::config::punch_info::NodePunchInfo;
 use crate::error::Error;
+use crate::extend::dns_query::{dns_query_all, dns_query_txt};
 use crate::protocol::node_id::NodeID;
+use anyhow::Context;
 use crossbeam_utils::atomic::AtomicCell;
 use dashmap::DashMap;
 use parking_lot::RwLock;
 use rust_p2p_core::punch::PunchConsultInfo;
 use rust_p2p_core::route::Index;
+use rust_p2p_core::socket::LocalInterface;
+use std::net::SocketAddr;
+use std::str::FromStr;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 #[derive(Clone)]
 pub struct PipeContext {
@@ -134,5 +137,58 @@ impl NodeAddress {
             NodeAddress::Tcp(addr) => addr,
             NodeAddress::Udp(addr) => addr,
         }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum PeerNodeAddress {
+    Tcp(SocketAddr),
+    Udp(SocketAddr),
+    TcpDomain(String),
+    UdpDomain(String),
+    TxtDomain(String),
+}
+impl PeerNodeAddress {
+    pub async fn to_addr(
+        &self,
+        name_servers: Vec<String>,
+        default_interface: &Option<LocalInterface>,
+    ) -> crate::error::Result<Vec<NodeAddress>> {
+        let addrs = match self {
+            PeerNodeAddress::Tcp(addr) => vec![NodeAddress::Tcp(*addr)],
+            PeerNodeAddress::Udp(addr) => vec![NodeAddress::Udp(*addr)],
+            PeerNodeAddress::TcpDomain(domain) => {
+                let addrs = dns_query_all(domain, name_servers, default_interface).await?;
+                addrs.into_iter().map(|v| NodeAddress::Tcp(v)).collect()
+            }
+            PeerNodeAddress::UdpDomain(domain) => {
+                let addrs = dns_query_all(domain, name_servers, default_interface).await?;
+                addrs.into_iter().map(|v| NodeAddress::Udp(v)).collect()
+            }
+            PeerNodeAddress::TxtDomain(domain) => {
+                let txt = dns_query_txt(domain, name_servers, default_interface).await?;
+                let mut addrs = Vec::with_capacity(txt.len());
+                for x in txt {
+                    let x = x.to_lowercase();
+                    let addr = if let Some(v) = x.strip_prefix("udp://") {
+                        NodeAddress::Udp(
+                            SocketAddr::from_str(v).context("record type txt is not SocketAddr")?,
+                        )
+                    } else if let Some(v) = x.strip_prefix("tcp://") {
+                        NodeAddress::Tcp(
+                            SocketAddr::from_str(v).context("record type txt is not SocketAddr")?,
+                        )
+                    } else {
+                        NodeAddress::Tcp(
+                            SocketAddr::from_str(&x)
+                                .context("record type txt is not SocketAddr")?,
+                        )
+                    };
+                    addrs.push(addr);
+                }
+                addrs
+            }
+        };
+        Ok(addrs)
     }
 }
