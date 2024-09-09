@@ -43,7 +43,7 @@ pub async fn dns_query_txt(
 }
 pub async fn dns_query_all(
     domain: &str,
-    name_servers: Vec<String>,
+    name_servers: &Vec<String>,
     default_interface: &Option<LocalInterface>,
 ) -> anyhow::Result<Vec<SocketAddr>> {
     match SocketAddr::from_str(domain) {

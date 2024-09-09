@@ -9,7 +9,7 @@ use tun_rs::AsyncDevice;
 use rustp2p::config::{PipeConfig, TcpPipeConfig, UdpPipeConfig};
 use rustp2p::error::*;
 use rustp2p::pipe::{
-    HandleError, HandleResult, NodeAddress, Pipe, PipeLine, PipeWriter, RecvError,
+    HandleError, HandleResult, NodeAddress, PeerNodeAddress, Pipe, PipeLine, PipeWriter, RecvError,
 };
 use rustp2p::protocol::node_id::NodeID;
 use rustp2p::protocol::protocol_type::ProtocolType;
@@ -39,13 +39,7 @@ pub async fn main() -> Result<()> {
     let mut addrs = Vec::new();
     if let Some(peers) = peer {
         for addr in peers {
-            if let Some(tcp_addr) = addr.strip_prefix("tcp://") {
-                addrs.push(NodeAddress::Tcp(tcp_addr.parse().expect("--peer error")));
-            } else if let Some(tcp_addr) = addr.strip_prefix("udp://") {
-                addrs.push(NodeAddress::Udp(tcp_addr.parse().expect("--peer error")));
-            } else {
-                panic!("--peer error")
-            }
+            addrs.push(addr.parse::<PeerNodeAddress>().expect("--peer"))
         }
     }
     let device = tun_rs::create_as_async(

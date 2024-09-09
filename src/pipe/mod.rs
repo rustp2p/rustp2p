@@ -7,6 +7,7 @@ use rust_p2p_core::route::route_table::RouteTable;
 use rust_p2p_core::route::{ConnectProtocol, Route, RouteKey};
 
 pub use pipe_context::NodeAddress;
+pub use pipe_context::PeerNodeAddress;
 use rust_p2p_core::punch::PunchConsultInfo;
 pub use send_packet::SendPacket;
 
@@ -40,6 +41,7 @@ impl Pipe {
         let self_id = config.self_id.take();
         let direct_addrs = config.direct_addrs.take();
         let mapping_addrs = config.mapping_addrs.take();
+        let dns = config.dns.take();
         let default_interface = if let Some(v) = &config.udp_pipe_config {
             v.default_interface.clone()
         } else {
@@ -70,14 +72,20 @@ impl Pipe {
         } else {
             vec![]
         };
-        let pipe_context = PipeContext::new(local_udp_ports, local_tcp_port);
+        let pipe_context = PipeContext::new(
+            local_udp_ports,
+            local_tcp_port,
+            default_interface.clone(),
+            dns,
+        );
         if let Some(node_id) = self_id {
             pipe_context.store_self_id(node_id)?;
         }
         if let Some(addrs) = direct_addrs {
-            let x = addrs.into_iter().map(|v| (v, None)).collect();
+            let x = addrs.into_iter().map(|v| (v, vec![])).collect();
             pipe_context.set_direct_nodes(x);
         }
+        pipe_context.update_direct_nodes().await?;
         if let Some(addrs) = mapping_addrs {
             pipe_context.set_mapping_addrs(addrs);
         }

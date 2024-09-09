@@ -59,11 +59,11 @@ async fn timestamp_request(pipe_writer: &PipeWriter) -> Result<()> {
 }
 
 async fn direct_heartbeat_request(
-    direct_nodes: Vec<(NodeAddress, Option<NodeID>)>,
+    direct_nodes: Vec<NodeAddress>,
     pipe_writer: &PipeWriter,
     buf: &[u8],
 ) {
-    for (addr, _) in direct_nodes {
+    for addr in direct_nodes {
         match addr {
             NodeAddress::Tcp(addr) => match pipe_writer.pipe_writer.tcp_pipe_writer() {
                 None => {}

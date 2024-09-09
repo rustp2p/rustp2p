@@ -2,7 +2,7 @@ use std::io;
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use crate::pipe::NodeAddress;
+use crate::pipe::{NodeAddress, PeerNodeAddress};
 use crate::protocol::node_id::NodeID;
 use async_trait::async_trait;
 use rust_p2p_core::pipe::tcp_pipe::{Decoder, Encoder, InitCodec};
@@ -44,7 +44,7 @@ pub struct PipeConfig {
     pub tcp_pipe_config: Option<TcpPipeConfig>,
     pub enable_extend: bool,
     pub self_id: Option<NodeID>,
-    pub direct_addrs: Option<Vec<NodeAddress>>,
+    pub direct_addrs: Option<Vec<PeerNodeAddress>>,
     pub send_buffer_size: usize,
     pub query_id_interval: Duration,
     pub query_id_max_num: usize,
@@ -52,6 +52,7 @@ pub struct PipeConfig {
     pub tcp_stun_servers: Option<Vec<String>>,
     pub udp_stun_servers: Option<Vec<String>>,
     pub mapping_addrs: Option<Vec<NodeAddress>>,
+    pub dns: Option<Vec<String>>,
 }
 
 impl Default for PipeConfig {
@@ -80,8 +81,8 @@ impl Default for PipeConfig {
                 "stun.hitv.com".to_string(),
                 "stun.l.google.com:19302".to_string(),
             ]),
-
             mapping_addrs: None,
+            dns: None,
         }
     }
 }
@@ -123,7 +124,7 @@ impl PipeConfig {
         self.self_id.replace(self_id);
         self
     }
-    pub fn set_direct_addrs(mut self, direct_addrs: Vec<NodeAddress>) -> Self {
+    pub fn set_direct_addrs(mut self, direct_addrs: Vec<PeerNodeAddress>) -> Self {
         self.direct_addrs.replace(direct_addrs);
         self
     }
@@ -153,6 +154,10 @@ impl PipeConfig {
     }
     pub fn set_mapping_addrs(mut self, mapping_addrs: Vec<NodeAddress>) -> Self {
         self.mapping_addrs.replace(mapping_addrs);
+        self
+    }
+    pub fn set_dns(mut self, dns: Vec<String>) -> Self {
+        self.dns.replace(dns);
         self
     }
 }
