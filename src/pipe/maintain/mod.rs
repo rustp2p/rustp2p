@@ -1,3 +1,5 @@
+use tokio::task::JoinSet;
+
 use crate::config::LocalInterface;
 use crate::pipe::PipeWriter;
 use crate::protocol::node_id::NodeID;
@@ -17,24 +19,26 @@ pub(crate) fn start_task(
     heartbeat_interval: Duration,
     stun_servers: Vec<String>,
     default_interface: Option<LocalInterface>,
-) {
-    tokio::spawn(heartbeat::heartbeat_loop(
+) -> JoinSet<()> {
+    let mut join_set = JoinSet::new();
+    join_set.spawn(heartbeat::heartbeat_loop(
         pipe_writer.clone(),
         heartbeat_interval,
     ));
-    tokio::spawn(idle::idle_check_loop(idle_route_manager));
-    tokio::spawn(id_route::id_route_query_loop(
+    join_set.spawn(idle::idle_check_loop(idle_route_manager));
+    join_set.spawn(id_route::id_route_query_loop(
         pipe_writer.clone(),
         query_id_interval,
         query_id_max_num,
     ));
-    tokio::spawn(nat_query::nat_test_loop(
+    join_set.spawn(nat_query::nat_test_loop(
         pipe_writer.clone(),
         stun_servers.clone(),
         default_interface.map(|v| v.into()),
     ));
-    tokio::spawn(query_public_addr::query_public_addr_loop(
+    join_set.spawn(query_public_addr::query_public_addr_loop(
         pipe_writer.clone(),
         stun_servers,
     ));
+    join_set
 }

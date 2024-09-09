@@ -74,11 +74,16 @@ pub async fn main() -> Result<()> {
 
     let mut pipe = Pipe::new(config).await?;
     let writer = pipe.writer();
+    //let shutdown_writer = writer.clone();
     let device_r = device.clone();
     tokio::spawn(async move {
         tun_recv(writer, device_r).await.unwrap();
     });
     log::info!("listen 23333");
+    // tokio::spawn(async move{
+    // 	tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+    // 	_ = shutdown_writer.shutdown();
+    // });
     loop {
         let line = pipe.accept().await?;
         let device = device.clone();

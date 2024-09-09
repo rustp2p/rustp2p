@@ -19,6 +19,10 @@ pub enum Error {
     SystemTimeError(#[from] SystemTimeError),
     #[error("Node ID not available")]
     NodeIDNotAvailable,
+    #[error("Pipe is shutdown")]
+    ShutDown,
+    #[error("Pipe has already shutdown")]
+    AlreadyShutdown,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

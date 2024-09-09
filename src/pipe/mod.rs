@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::time::UNIX_EPOCH;
 
+use async_shutdown::ShutdownManager;
+use log::info;
 use rust_p2p_core::route::route_table::RouteTable;
 use rust_p2p_core::route::{ConnectProtocol, Route, RouteKey};
 
@@ -27,6 +29,7 @@ pub struct Pipe {
     pipe_context: PipeContext,
     pipe: rust_p2p_core::pipe::Pipe<NodeID>,
     puncher: rust_p2p_core::punch::Puncher<NodeID>,
+    shutdown_manager: ShutdownManager<()>,
 }
 
 impl Pipe {
@@ -73,12 +76,15 @@ impl Pipe {
         if let Some(addrs) = mapping_addrs {
             pipe_context.set_mapping_addrs(addrs);
         }
+        let shutdown_manager = ShutdownManager::<()>::new();
         let pipe_writer = PipeWriter {
             send_buffer_size,
             pipe_context: pipe_context.clone(),
             pipe_writer: pipe.writer_ref().to_owned(),
+            shutdown_manager: shutdown_manager.clone(),
         };
-        maintain::start_task(
+
+        let mut join_set = maintain::start_task(
             &pipe_writer,
             idle_route_manager,
             query_id_interval,
@@ -87,11 +93,22 @@ impl Pipe {
             stun_servers,
             default_interface,
         );
+        let fut = shutdown_manager
+            .wrap_cancel(async move { while let Some(_) = join_set.join_next().await {} });
+        tokio::spawn(async move {
+            match fut.await {
+                Err(_) => {
+                    info!("maintain tasks are shutdown");
+                }
+                _ => {}
+            }
+        });
         Ok(Self {
             send_buffer_size,
             pipe_context,
             pipe,
             puncher,
+            shutdown_manager,
         })
     }
     pub fn writer(&self) -> PipeWriter {
@@ -99,13 +116,17 @@ impl Pipe {
             send_buffer_size: self.send_buffer_size,
             pipe_context: self.pipe_context.clone(),
             pipe_writer: self.pipe.writer_ref().to_owned(),
+            shutdown_manager: self.shutdown_manager.clone(),
         }
     }
 }
 
 impl Pipe {
-    pub async fn accept(&mut self) -> anyhow::Result<PipeLine> {
-        let pipe_line = self.pipe.accept().await?;
+    pub async fn accept(&mut self) -> Result<PipeLine> {
+        let Ok(pipe_line) = self.shutdown_manager.wrap_cancel(self.pipe.accept()).await else {
+            return Err(Error::ShutDown);
+        };
+        let pipe_line = pipe_line?;
         Ok(PipeLine {
             pipe_context: self.pipe_context.clone(),
             pipe_line,
@@ -120,6 +141,7 @@ pub struct PipeWriter {
     send_buffer_size: usize,
     pipe_context: PipeContext,
     pipe_writer: rust_p2p_core::pipe::PipeWriter<NodeID>,
+    shutdown_manager: ShutdownManager<()>,
 }
 
 impl PipeWriter {
@@ -287,6 +309,12 @@ impl PipeWriter {
         packet.set_src_id(&src_id)?;
         packet.set_protocol(protocol_type);
         Ok(send_packet)
+    }
+    pub fn shutdown(&self) -> Result<()> {
+        self.shutdown_manager
+            .trigger_shutdown(())
+            .map_err(|_| Error::AlreadyShutdown)?;
+        Ok(())
     }
 }
 

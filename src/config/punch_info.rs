@@ -75,9 +75,9 @@ impl PunchInfo {
         self.public_ips = ips;
     }
 }
-impl PunchInfo{
-    pub fn nat_info(&self)->NatInfo{
-        NatInfo{
+impl PunchInfo {
+    pub fn nat_info(&self) -> NatInfo {
+        NatInfo {
             nat_type: self.nat_type,
             public_ips: self.public_ips.clone(),
             public_ports: self.public_udp_ports.clone(),
