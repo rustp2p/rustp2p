@@ -1,6 +1,7 @@
 use crate::pipe::{NodeAddress, PipeWriter};
 use crate::protocol::node_id::NodeID;
 use crate::protocol::protocol_type::ProtocolType;
+use crate::protocol::NetPacket;
 use rand::seq::SliceRandom;
 use std::collections::HashSet;
 use std::time::Duration;
@@ -31,7 +32,7 @@ async fn id_route_query(
         };
     packet.set_payload_len(4);
     packet.set_ttl(1);
-    let direct_nodes = pipe_writer.pipe_context.get_direct_nodes();
+    let direct_nodes = pipe_writer.pipe_context.get_direct_nodes_and_id();
 
     poll_direct_peer_node(direct_nodes, pipe_writer, packet.buf_mut()).await;
     poll_route_table_peer_node(pipe_writer, packet.buf_mut(), query_id_max_num).await;
@@ -39,16 +40,18 @@ async fn id_route_query(
 }
 
 async fn poll_direct_peer_node(
-    direct_nodes: Vec<NodeAddress>,
+    direct_nodes: Vec<(NodeAddress, u16)>,
     pipe_writer: &PipeWriter,
-    buf: &[u8],
+    buf: &mut [u8],
 ) {
-    for addr in direct_nodes {
+    let mut packet = NetPacket::unchecked(buf);
+    for (addr, id) in direct_nodes {
+        packet.payload_mut()[2..4].copy_from_slice(&id.to_be_bytes());
         match addr {
             NodeAddress::Tcp(addr) => match pipe_writer.pipe_writer.tcp_pipe_writer() {
                 None => {}
                 Some(tcp) => {
-                    if let Err(e) = tcp.send_to_addr(buf, addr).await {
+                    if let Err(e) = tcp.send_to_addr(packet.buffer(), addr).await {
                         log::warn!("poll_direct_peer_node tcp, e={e:?},addr={addr:?}");
                     }
                 }
@@ -56,7 +59,7 @@ async fn poll_direct_peer_node(
             NodeAddress::Udp(addr) => match pipe_writer.pipe_writer.udp_pipe_writer() {
                 None => {}
                 Some(udp) => {
-                    if let Err(e) = udp.send_to_addr(buf, addr).await {
+                    if let Err(e) = udp.send_to_addr(packet.buffer(), addr).await {
                         log::warn!("poll_direct_peer_node udp, e={e:?},addr={addr:?}");
                     }
                 }

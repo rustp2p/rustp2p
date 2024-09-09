@@ -7,7 +7,7 @@ use anyhow::Context;
 use crossbeam_utils::atomic::AtomicCell;
 use dashmap::DashMap;
 use parking_lot::RwLock;
-
+use rand::seq::SliceRandom;
 use rust_p2p_core::punch::PunchConsultInfo;
 use rust_p2p_core::route::Index;
 use rust_p2p_core::socket::LocalInterface;
@@ -20,7 +20,7 @@ use crate::protocol::node_id::NodeID;
 #[derive(Clone)]
 pub struct PipeContext {
     self_node_id: Arc<AtomicCell<Option<NodeID>>>,
-    direct_node_address_list: Arc<RwLock<Vec<(PeerNodeAddress, Vec<NodeAddress>)>>>,
+    direct_node_address_list: Arc<RwLock<Vec<(PeerNodeAddress, u16, Vec<NodeAddress>)>>>,
     reachable_nodes: Arc<DashMap<NodeID, Vec<(NodeID, u8, Instant)>>>,
     punch_info: Arc<RwLock<NodePunchInfo>>,
     default_interface: Option<LocalInterface>,
@@ -54,27 +54,49 @@ impl PipeContext {
     pub fn load_id(&self) -> Option<NodeID> {
         self.self_node_id.load()
     }
-    pub fn set_direct_nodes(&self, direct_node: Vec<(PeerNodeAddress, Vec<NodeAddress>)>) {
+    pub fn set_direct_nodes(&self, direct_node: Vec<PeerNodeAddress>) {
+        let mut addrs = Vec::new();
+        let mut ids: Vec<u16> = (1..u16::MAX).collect();
+        ids.shuffle(&mut rand::thread_rng());
+        for (index, addr) in direct_node.into_iter().enumerate() {
+            addrs.push((addr, ids[index], vec![]))
+        }
+        *self.direct_node_address_list.write() = addrs;
+    }
+    pub fn set_direct_nodes_and_id(
+        &self,
+        direct_node: Vec<(PeerNodeAddress, u16, Vec<NodeAddress>)>,
+    ) {
         *self.direct_node_address_list.write() = direct_node;
     }
     pub fn get_direct_nodes(&self) -> Vec<NodeAddress> {
         let guard = self.direct_node_address_list.read();
         let mut addrs = Vec::new();
-        for (_, v) in guard.iter() {
+        for (_, _, v) in guard.iter() {
             for x in v {
                 addrs.push(x.clone())
             }
         }
         addrs
     }
+    pub fn get_direct_nodes_and_id(&self) -> Vec<(NodeAddress, u16)> {
+        let guard = self.direct_node_address_list.read();
+        let mut addrs = Vec::new();
+        for (_, id, v) in guard.iter() {
+            for x in v {
+                addrs.push((x.clone(), *id))
+            }
+        }
+        addrs
+    }
     pub async fn update_direct_nodes(&self) -> crate::error::Result<()> {
         let mut addrs = self.direct_node_address_list.read().clone();
-        for (peer_addr, addr) in &mut addrs {
+        for (peer_addr, id, addr) in &mut addrs {
             *addr = peer_addr
                 .to_addr(&self.dns, &self.default_interface)
                 .await?;
         }
-        self.set_direct_nodes(addrs);
+        self.set_direct_nodes_and_id(addrs);
         Ok(())
     }
     pub fn update_reachable_nodes(&self, src_id: NodeID, reachable_id: NodeID, metric: u8) {
@@ -115,7 +137,7 @@ impl PipeContext {
     }
     pub fn default_route(&self) -> Option<NodeAddress> {
         let guard = self.direct_node_address_list.read();
-        if let Some((_, v)) = guard.get(0) {
+        if let Some((_, _, v)) = guard.get(0) {
             v.get(0).cloned()
         } else {
             None

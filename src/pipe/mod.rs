@@ -82,8 +82,7 @@ impl Pipe {
             pipe_context.store_self_id(node_id)?;
         }
         if let Some(addrs) = direct_addrs {
-            let x = addrs.into_iter().map(|v| (v, vec![])).collect();
-            pipe_context.set_direct_nodes(x);
+            pipe_context.set_direct_nodes(addrs);
         }
         pipe_context.update_direct_nodes().await?;
         if let Some(addrs) = mapping_addrs {
