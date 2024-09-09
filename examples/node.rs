@@ -59,7 +59,10 @@ pub async fn main() -> Result<()> {
     )
     .unwrap();
     #[cfg(target_os = "macos")]
-    device.set_ignore_packet_info(true);
+    {
+        use tun_rs::AbstractDevice;
+        device.set_ignore_packet_info(true);
+    }
     let device = Arc::new(device);
     let udp_config = UdpPipeConfig::default().set_udp_ports(vec![23333, 23334]);
     let tcp_config = TcpPipeConfig::default().set_tcp_port(23333);

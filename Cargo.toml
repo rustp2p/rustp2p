@@ -1,7 +1,42 @@
+[package]
+name = "rustp2p"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/rustp2p/rustp2p"
+
+[dependencies]
+rust-p2p-core = { path = "rustp2p-core", version = "0.1" }
+anyhow = {workspace = true}
+async-trait = {workspace = true}
+tokio = { workspace = true }
+log = { workspace = true }
+thiserror =  {workspace = true}
+bytes = { workspace = true }
+parking_lot = { workspace = true }
+dashmap = { workspace = true }
+rand = { workspace = true }
+protobuf = { version = "3.5.1", features = ["bytes"] }
+crossbeam-utils = "0.8"
+
+[build-dependencies]
+protobuf-codegen = "3.5.1"
+protoc-bin-vendored = "3.0.0"
+
+[dev-dependencies]
+clap = { version = "4.5.13", features = ["derive"] }
+log = "0.4.22"
+env_logger = "0.11.5"
+tun-rs = { version = "1.0.3", features = ["async"] }
+
+[[example]]
+name = "node"
+path = "examples/node.rs"
+
 [workspace]
 resolver = "2"
 members = [
-	"crates/*"
+	"rustp2p-core"
 ]
 
 [workspace.dependencies]
