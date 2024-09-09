@@ -21,6 +21,7 @@ use crate::protocol::node_id::NodeID;
 pub struct PipeContext {
     self_node_id: Arc<AtomicCell<Option<NodeID>>>,
     direct_node_address_list: Arc<RwLock<Vec<(PeerNodeAddress, u16, Vec<NodeAddress>)>>>,
+    direct_node_id_map: Arc<DashMap<u16, NodeID>>,
     reachable_nodes: Arc<DashMap<NodeID, Vec<(NodeID, u8, Instant)>>>,
     punch_info: Arc<RwLock<NodePunchInfo>>,
     default_interface: Option<LocalInterface>,
@@ -38,6 +39,7 @@ impl PipeContext {
         Self {
             self_node_id: Arc::new(Default::default()),
             direct_node_address_list: Arc::new(Default::default()),
+            direct_node_id_map: Arc::new(Default::default()),
             reachable_nodes: Arc::new(Default::default()),
             punch_info: Arc::new(RwLock::new(punch_info)),
             default_interface: default_interface.map(|v| v.into()),
@@ -56,12 +58,15 @@ impl PipeContext {
     }
     pub fn set_direct_nodes(&self, direct_node: Vec<PeerNodeAddress>) {
         let mut addrs = Vec::new();
-        let mut ids: Vec<u16> = (1..u16::MAX).collect();
+        let mut ids: Vec<u16> = (10..u16::MAX).collect();
         ids.shuffle(&mut rand::thread_rng());
+        let mut guard = self.direct_node_address_list.write();
+        self.direct_node_id_map.clear();
         for (index, addr) in direct_node.into_iter().enumerate() {
-            addrs.push((addr, ids[index], vec![]))
+            let id = ids[index];
+            addrs.push((addr, id, vec![]))
         }
-        *self.direct_node_address_list.write() = addrs;
+        *guard = addrs;
     }
     pub fn set_direct_nodes_and_id(
         &self,
@@ -91,13 +96,16 @@ impl PipeContext {
     }
     pub async fn update_direct_nodes(&self) -> crate::error::Result<()> {
         let mut addrs = self.direct_node_address_list.read().clone();
-        for (peer_addr, id, addr) in &mut addrs {
+        for (peer_addr, _id, addr) in &mut addrs {
             *addr = peer_addr
                 .to_addr(&self.dns, &self.default_interface)
                 .await?;
         }
         self.set_direct_nodes_and_id(addrs);
         Ok(())
+    }
+    pub fn update_direct_node_id(&self, id: u16, node_id: NodeID) {
+        self.direct_node_id_map.insert(id, node_id);
     }
     pub fn update_reachable_nodes(&self, src_id: NodeID, reachable_id: NodeID, metric: u8) {
         let now = Instant::now();

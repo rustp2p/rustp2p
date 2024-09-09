@@ -127,14 +127,10 @@ impl<B: AsRef<[u8]>> Iterator for IDRouteReplyIter<'_, B> {
 
 pub struct Builder;
 impl Builder {
-    pub fn calculate_len(list: &[(NodeID, u8)]) -> Result<usize> {
-        if list.is_empty() {
-            return Err(Error::InvalidArgument("".into()));
-        }
+    pub fn calculate_len(id_len: usize, list: &[(NodeID, u8)]) -> Result<usize> {
         if list.len() > 255 {
             return Err(Error::InvalidArgument("".into()));
         }
-        let id_len = list[0].0.len();
         if list.iter().any(|(node_id, _)| node_id.len() != id_len) {
             return Err(Error::InvalidArgument("".into()));
         }
@@ -146,12 +142,12 @@ impl Builder {
         Ok(len)
     }
     pub fn build_reply(
+        id_len: usize,
         list: &[(NodeID, u8)],
         query_id: u16,
         all_id_num: u16,
     ) -> Result<NetPacket<Vec<u8>>> {
-        let len = Self::calculate_len(list)?;
-        let id_len = list[0].0.len();
+        let len = Self::calculate_len(id_len, list)?;
         let mut packet = NetPacket::unchecked(vec![0; len]);
 
         packet.set_protocol(ProtocolType::IDRouteReply);
@@ -198,7 +194,7 @@ mod test {
         test_build0(list);
     }
     fn test_build0(list: Vec<(NodeID, u8)>) {
-        let packet = Builder::build_reply(&list, 16, 20).unwrap();
+        let packet = Builder::build_reply(4, &list, 16, 20).unwrap();
         let packet = IDRouteReplyPacket::new(packet.payload(), packet.id_length()).unwrap();
         assert_eq!(packet.iter().count(), list.len());
         assert_eq!(packet.query_id(), 16);

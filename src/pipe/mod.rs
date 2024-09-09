@@ -491,35 +491,36 @@ impl PipeLine {
                     .add_route(src_id, Route::from(route_key, metric, rtt));
             }
             ProtocolType::IDRouteQuery => {
-                let time = packet.payload();
-                if time.len() != 4 {
+                let payload = packet.payload();
+                if payload.len() != 4 {
                     return Err(Error::InvalidArgument("IDRouteQuery error".into()));
                 }
-                let query_id = u16::from_be_bytes(time[2..].try_into().unwrap());
+                let query_id = u16::from_be_bytes(payload[2..].try_into().unwrap());
                 // reply reachable node id
                 let mut list = self.route_table.route_table_min_metric();
-                if !list.is_empty() {
-                    // Not supporting too many nodes
-                    list.truncate(255);
-                    let list: Vec<_> = list
-                        .into_iter()
-                        .filter(|(node_id, _)| node_id != &src_id)
-                        .map(|(node_id, route)| (node_id, route.metric()))
-                        .collect();
-                    if !list.is_empty() {
-                        let mut packet = crate::protocol::id_route::Builder::build_reply(
-                            &list,
-                            query_id,
-                            list.len() as _,
-                        )?;
-                        packet.set_dest_id(&src_id)?;
-                        packet.set_src_id(&self_id)?;
-                        self.send_to_route(packet.buffer(), &route_key).await?;
-                    }
-                }
+                // Not supporting too many nodes
+                list.truncate(255);
+                let list: Vec<_> = list
+                    .into_iter()
+                    .filter(|(node_id, _)| node_id != &src_id)
+                    .map(|(node_id, route)| (node_id, route.metric()))
+                    .collect();
+                let mut packet = crate::protocol::id_route::Builder::build_reply(
+                    self_id.len(),
+                    &list,
+                    query_id,
+                    list.len() as _,
+                )?;
+                packet.set_dest_id(&src_id)?;
+                packet.set_src_id(&self_id)?;
+                self.send_to_route(packet.buffer(), &route_key).await?;
             }
             ProtocolType::IDRouteReply => {
                 let reply_packet = IDRouteReplyPacket::new(packet.payload(), id_length as _)?;
+                let id = reply_packet.query_id();
+                if id != 0 {
+                    self.pipe_context.update_direct_node_id(id, src_id);
+                }
                 for (reachable_id, metric) in reply_packet.iter() {
                     if reachable_id == self_id {
                         continue;
