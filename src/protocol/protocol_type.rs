@@ -1,22 +1,24 @@
 #[derive(Eq, PartialEq, Copy, Clone, Debug)]
 #[repr(u8)]
 pub enum ProtocolType {
-    UserData,
-    PunchConsult,
-    PunchRequest,
-    PunchReply,
+    UserData = 0,
+    PunchConsultRequest = 1,
+    PunchConsultReply = 2,
+    PunchRequest = 3,
+    PunchReply = 4,
     /// Maintain mapping
-    EchoRequest,
-    EchoReply,
+    EchoRequest = 5,
+    EchoReply = 6,
     /// Detecting RTT
-    TimestampRequest,
-    TimestampReply,
+    TimestampRequest = 7,
+    TimestampReply = 8,
     /// ID route query
-    IDRouteQuery,
-    IDRouteReply,
+    IDRouteQuery = 9,
+    IDRouteReply = 10,
     /// Broadcast to the designated range
-    RangeBroadcast,
+    RangeBroadcast = 11,
 }
+
 impl TryFrom<u8> for ProtocolType {
     type Error = crate::error::Error;
 
@@ -43,7 +45,7 @@ mod test {
 
     #[test]
     fn test_new_protocol() {
-        assert_eq!(ProtocolType::try_from(3).unwrap(), ProtocolType::PunchReply);
+        assert_eq!(ProtocolType::try_from(4).unwrap(), ProtocolType::PunchReply);
         assert!(ProtocolType::try_from(128).is_err());
     }
 }

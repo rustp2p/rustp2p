@@ -10,6 +10,7 @@ use std::time::Duration;
 use parking_lot::Mutex;
 use rand::seq::SliceRandom;
 use rand::Rng;
+use serde::{Deserialize, Serialize};
 
 use crate::nat::{NatInfo, NatType};
 use crate::pipe::tcp_pipe::TcpPipeWriter;
@@ -17,7 +18,7 @@ use crate::pipe::udp_pipe::UdpPipeWriter;
 use crate::pipe::Pipe;
 use crate::route::route_table::RouteTable;
 
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
 pub enum PunchModel {
     IPv4Tcp,
     IPv4Udp,
@@ -36,15 +37,17 @@ impl ops::BitOr<PunchModel> for PunchModel {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PunchModelBox {
     models: HashSet<PunchModel>,
 }
+
 impl Default for PunchModelBox {
     fn default() -> Self {
         PunchModelBox::all()
     }
 }
+
 impl ops::BitOr<PunchModel> for PunchModelBox {
     type Output = PunchModelBox;
 
@@ -81,6 +84,7 @@ impl PunchModelBox {
 pub struct PunchModelBoxes {
     boxes: Vec<PunchModelBox>,
 }
+
 impl ops::BitAnd<PunchModelBox> for PunchModelBox {
     type Output = PunchModelBoxes;
 
@@ -90,6 +94,7 @@ impl ops::BitAnd<PunchModelBox> for PunchModelBox {
         boxes
     }
 }
+
 impl PunchModelBoxes {
     pub fn all() -> Self {
         Self {
@@ -112,6 +117,21 @@ impl PunchModelBoxes {
             }
         }
         true
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PunchConsultInfo {
+    pub peer_punch_model: PunchModelBox,
+    pub peer_nat_info: NatInfo,
+}
+
+impl PunchConsultInfo {
+    pub fn new(peer_punch_model: PunchModelBox, peer_nat_info: NatInfo) -> Self {
+        Self {
+            peer_punch_model,
+            peer_nat_info,
+        }
     }
 }
 
@@ -181,6 +201,7 @@ pub struct Puncher<PeerID> {
     udp_pipe_writer: Option<UdpPipeWriter>,
     tcp_pipe_writer: Option<TcpPipeWriter>,
 }
+
 impl<PeerID> From<&Pipe<PeerID>> for Puncher<PeerID> {
     fn from(value: &Pipe<PeerID>) -> Self {
         let writer_ref = value.writer_ref();
@@ -193,6 +214,7 @@ impl<PeerID> From<&Pipe<PeerID>> for Puncher<PeerID> {
         )
     }
 }
+
 impl<PeerID> Puncher<PeerID> {
     pub fn new(
         route_table: RouteTable<PeerID>,
@@ -212,6 +234,7 @@ impl<PeerID> Puncher<PeerID> {
         }
     }
 }
+
 impl<PeerID: Hash + Eq + Clone> Puncher<PeerID> {
     pub fn reset_record(&self, peer_id: &PeerID) {
         self.sym_record.lock().remove(peer_id);

@@ -25,6 +25,10 @@ pub enum Error {
     AlreadyShutdown,
     #[error("Timeout")]
     Timeout,
+    #[error(transparent)]
+    RmpDecodeError(#[from] rmp_serde::decode::Error),
+    #[error(transparent)]
+    RmpEncodeError(#[from] rmp_serde::encode::Error),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

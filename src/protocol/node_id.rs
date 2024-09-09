@@ -1,7 +1,7 @@
 use std::net::Ipv4Addr;
 
 #[non_exhaustive]
-#[derive(Hash, Eq, PartialEq, Copy, Clone, Debug)]
+#[derive(Hash, Eq, PartialEq, Ord, PartialOrd, Copy, Clone, Debug)]
 pub enum NodeID {
     Bit32([u8; 4]),
     Bit64([u8; 8]),

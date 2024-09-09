@@ -3,11 +3,11 @@ use std::net::SocketAddr;
 use std::time::UNIX_EPOCH;
 
 use async_shutdown::ShutdownManager;
-use log::info;
 use rust_p2p_core::route::route_table::RouteTable;
 use rust_p2p_core::route::{ConnectProtocol, Route, RouteKey};
 
 pub use pipe_context::NodeAddress;
+use rust_p2p_core::punch::PunchConsultInfo;
 pub use send_packet::SendPacket;
 
 use crate::config::PipeConfig;
@@ -28,7 +28,6 @@ pub struct Pipe {
     send_buffer_size: usize,
     pipe_context: PipeContext,
     pipe: rust_p2p_core::pipe::Pipe<NodeID>,
-    puncher: rust_p2p_core::punch::Puncher<NodeID>,
     shutdown_manager: ShutdownManager<()>,
 }
 
@@ -93,6 +92,7 @@ impl Pipe {
         let mut join_set = maintain::start_task(
             &pipe_writer,
             idle_route_manager,
+            puncher,
             query_id_interval,
             query_id_max_num,
             heartbeat_interval,
@@ -105,7 +105,7 @@ impl Pipe {
         tokio::spawn(async move {
             match fut.await {
                 Err(_) => {
-                    info!("maintain tasks are shutdown");
+                    log::info!("maintain tasks are shutdown");
                 }
                 _ => {}
             }
@@ -114,7 +114,6 @@ impl Pipe {
             send_buffer_size,
             pipe_context,
             pipe,
-            puncher,
             shutdown_manager,
         })
     }
@@ -137,7 +136,7 @@ impl Pipe {
         Ok(PipeLine {
             pipe_context: self.pipe_context.clone(),
             pipe_line,
-            pipe_writer: self.pipe.writer_ref().to_owned(),
+            pipe_writer: self.writer(),
             route_table: self.pipe.route_table().clone(),
         })
     }
@@ -328,7 +327,7 @@ impl PipeWriter {
 pub struct PipeLine {
     pipe_context: PipeContext,
     pipe_line: rust_p2p_core::pipe::PipeLine,
-    pipe_writer: rust_p2p_core::pipe::PipeWriter<NodeID>,
+    pipe_writer: PipeWriter,
     route_table: RouteTable<NodeID>,
 }
 
@@ -390,11 +389,14 @@ impl PipeLine {
         }
     }
     pub async fn send_to<B: AsRef<[u8]>>(&self, buf: &NetPacket<B>, id: &NodeID) -> Result<()> {
-        self.pipe_writer.send_to_id(buf.buffer(), id).await?;
+        self.pipe_writer
+            .pipe_writer
+            .send_to_id(buf.buffer(), id)
+            .await?;
         Ok(())
     }
     pub(crate) async fn send_to_route(&self, buf: &[u8], route_key: &RouteKey) -> Result<()> {
-        self.pipe_writer.send_to(buf, route_key).await?;
+        self.pipe_writer.pipe_writer.send_to(buf, route_key).await?;
         Ok(())
     }
     async fn handle<'a>(&mut self, recv_result: RecvResult<'a>) -> Result<HandleResultIn> {
@@ -444,7 +446,6 @@ impl PipeLine {
         self.route_table
             .add_route_if_absent(src_id, Route::from_default_rt(route_key, metric));
         match packet.protocol()? {
-            ProtocolType::PunchConsult => {}
             ProtocolType::PunchRequest => {
                 packet.set_protocol(ProtocolType::PunchReply);
                 packet.set_ttl(packet.first_ttl());
@@ -548,6 +549,26 @@ impl PipeLine {
                         start, end, src_id, dest_id, route_key,
                     ));
                 }
+            }
+            ProtocolType::PunchConsultRequest => {
+                let punch_info = rmp_serde::from_slice::<PunchConsultInfo>(packet.payload())?;
+                let consult_info = self
+                    .pipe_context
+                    .gen_punch_info(punch_info.peer_nat_info.seq);
+                let data = rmp_serde::to_vec(&consult_info)?;
+                let mut send_packet = self
+                    .pipe_writer
+                    .allocate_send_packet_proto(ProtocolType::PunchConsultReply, data.len())?;
+                send_packet.data_mut()[..data.len()].copy_from_slice(&data);
+                send_packet.set_payload_len(data.len());
+                self.pipe_writer
+                    .send_to_packet(&mut send_packet, &dest_id)
+                    .await?;
+                log::info!("PunchConsultRequest {:?}", punch_info);
+            }
+            ProtocolType::PunchConsultReply => {
+                let punch_info = rmp_serde::from_slice::<PunchConsultInfo>(packet.payload())?;
+                log::info!("PunchConsultReply {:?}", punch_info);
             }
         }
 

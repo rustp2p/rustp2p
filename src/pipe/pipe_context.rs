@@ -2,12 +2,13 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::config::punch_info::PunchInfo;
+use crate::config::punch_info::NodePunchInfo;
 use crate::error::Error;
 use crate::protocol::node_id::NodeID;
 use crossbeam_utils::atomic::AtomicCell;
 use dashmap::DashMap;
 use parking_lot::RwLock;
+use rust_p2p_core::punch::PunchConsultInfo;
 use rust_p2p_core::route::Index;
 
 #[derive(Clone)]
@@ -15,12 +16,12 @@ pub struct PipeContext {
     self_node_id: Arc<AtomicCell<Option<NodeID>>>,
     direct_node_address_list: Arc<RwLock<Vec<(NodeAddress, Option<NodeID>)>>>,
     reachable_nodes: Arc<DashMap<NodeID, Vec<(NodeID, u8, Instant)>>>,
-    punch_info: Arc<RwLock<PunchInfo>>,
+    punch_info: Arc<RwLock<NodePunchInfo>>,
 }
 
 impl PipeContext {
     pub(crate) fn new(local_udp_ports: Vec<u16>, local_tcp_port: u16) -> Self {
-        let punch_info = PunchInfo::new(local_udp_ports, local_tcp_port);
+        let punch_info = NodePunchInfo::new(local_udp_ports, local_tcp_port);
         Self {
             self_node_id: Arc::new(Default::default()),
             direct_node_address_list: Arc::new(Default::default()),
@@ -86,8 +87,11 @@ impl PipeContext {
     pub(crate) fn exists_nat_info(&self) -> bool {
         self.punch_info.read().exists_nat_info()
     }
-    pub fn punch_info(&self) -> &Arc<RwLock<PunchInfo>> {
+    pub fn punch_info(&self) -> &Arc<RwLock<NodePunchInfo>> {
         &self.punch_info
+    }
+    pub(crate) fn gen_punch_info(&self, seq: u32) -> PunchConsultInfo {
+        self.punch_info.read().punch_consult_info(seq)
     }
     pub fn set_mapping_addrs(&self, mapping_addrs: Vec<NodeAddress>) {
         let tcp_addr: Vec<SocketAddr> = mapping_addrs
@@ -117,6 +121,7 @@ pub enum NodeAddress {
     Tcp(SocketAddr),
     Udp(SocketAddr),
 }
+
 impl NodeAddress {
     pub fn is_tcp(&self) -> bool {
         match self {

@@ -3,17 +3,20 @@ use tokio::task::JoinSet;
 use crate::config::LocalInterface;
 use crate::pipe::PipeWriter;
 use crate::protocol::node_id::NodeID;
+use rust_p2p_core::punch::Puncher;
 use std::time::Duration;
 
 mod heartbeat;
 mod id_route;
 mod idle;
 mod nat_query;
+mod punch_consult;
 mod query_public_addr;
 
 pub(crate) fn start_task(
     pipe_writer: &PipeWriter,
     idle_route_manager: rust_p2p_core::idle::IdleRouteManager<NodeID>,
+    puncher: Puncher<NodeID>,
     query_id_interval: Duration,
     query_id_max_num: usize,
     heartbeat_interval: Duration,
@@ -41,6 +44,10 @@ pub(crate) fn start_task(
         pipe_writer.clone(),
         tcp_stun_servers,
         udp_stun_servers,
+    ));
+    join_set.spawn(punch_consult::punch_consult_loop(
+        pipe_writer.clone(),
+        puncher,
     ));
     join_set
 }
