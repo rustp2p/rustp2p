@@ -149,7 +149,7 @@ pub(crate) fn bind_udp_ops(
     socket.bind(&addr.into())?;
     Ok(socket)
 }
-pub(crate) fn bind_udp(
+pub fn bind_udp(
     addr: SocketAddr,
     default_interface: Option<&LocalInterface>,
 ) -> anyhow::Result<socket2::Socket> {
