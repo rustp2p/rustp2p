@@ -8,12 +8,7 @@ use tun_rs::AsyncDevice;
 
 use rustp2p::config::{PipeConfig, TcpPipeConfig, UdpPipeConfig};
 use rustp2p::error::*;
-use rustp2p::pipe::{
-    HandleError, HandleResult, NodeAddress, PeerNodeAddress, Pipe, PipeLine, PipeWriter, RecvError,
-};
-use rustp2p::protocol::node_id::NodeID;
-use rustp2p::protocol::protocol_type::ProtocolType;
-use rustp2p::protocol::{Builder, NetPacket};
+use rustp2p::pipe::{HandleResult, PeerNodeAddress, Pipe, PipeLine, PipeWriter};
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -47,7 +42,7 @@ pub async fn main() -> Result<()> {
             .address_with_prefix(self_id, mask)
             .platform_config(|v| {
                 #[cfg(windows)]
-                v.ring_capacity(2 * 1024 * 1024);
+                v.ring_capacity(4 * 1024 * 1024);
             })
             .mtu(1400)
             .up(),
