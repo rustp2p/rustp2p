@@ -2,6 +2,7 @@ use crate::pipe::config::TcpPipeConfig;
 use crate::route::{Index, RouteKey};
 use crate::socket::{connect_tcp, create_tcp_listener, LocalInterface};
 use anyhow::{anyhow, Context};
+use async_lock::Mutex;
 use async_trait::async_trait;
 use dashmap::DashMap;
 use std::io;
@@ -10,11 +11,11 @@ use std::net::SocketAddr;
 use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Duration;
+use rand::Rng;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc::{Receiver, Sender};
-use tokio::sync::Mutex;
 
 pub struct TcpPipe {
     route_idle_time: Duration,
@@ -78,6 +79,7 @@ impl TcpPipe {
             }
             rs=self.tcp_listener.accept()=>{
                 let (tcp_stream,addr) = rs?;
+                tcp_stream.set_nodelay(true)?;
                 let route_key = tcp_stream.route_key()?;
                 let (read_half,write_half) = tcp_stream.into_split();
                 let (decoder,encoder) = self.init_codec.codec(addr)?;
@@ -445,7 +447,8 @@ impl TcpPipeWriter {
         addr: A,
         ttl: Option<u32>,
     ) -> crate::error::Result<usize> {
-        let route_key = self.multi_connect0(addr.into(), 0, ttl).await?;
+        let index_offset = rand::thread_rng().gen_range(0..self.tcp_multiplexing_limit);
+        let route_key = self.multi_connect0(addr.into(), index_offset, ttl).await?;
         self.send_to(buf, &route_key).await
     }
     /// Reuse the bound port to initiate a connection, which can be used to penetrate NAT1 network type.
