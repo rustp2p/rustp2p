@@ -5,6 +5,7 @@ use std::time::Duration;
 use crate::pipe::{NodeAddress, PeerNodeAddress};
 use crate::protocol::node_id::NodeID;
 use async_trait::async_trait;
+use bytes::{BufMut, BytesMut};
 use rust_p2p_core::pipe::tcp_pipe::{Decoder, Encoder, InitCodec};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
@@ -319,10 +320,25 @@ impl From<TcpPipeConfig> for rust_p2p_core::pipe::config::TcpPipeConfig {
 }
 
 /// Fixed-length prefix encoder/decoder.
-pub(crate) struct LengthPrefixedCodec;
+pub(crate) struct LengthPrefixedEncoder {
+    buf: BytesMut,
+}
+pub(crate) struct LengthPrefixedDecoder {}
+impl LengthPrefixedEncoder {
+    pub(crate) fn new() -> Self {
+        Self {
+            buf: BytesMut::with_capacity(2000),
+        }
+    }
+}
+impl LengthPrefixedDecoder {
+    pub(crate) fn new() -> Self {
+        Self {}
+    }
+}
 
 #[async_trait]
-impl Decoder for LengthPrefixedCodec {
+impl Decoder for LengthPrefixedDecoder {
     async fn decode(&mut self, read: &mut OwnedReadHalf, src: &mut [u8]) -> io::Result<usize> {
         let mut head = [0; 2];
         read.read_exact(&mut head).await?;
@@ -333,14 +349,16 @@ impl Decoder for LengthPrefixedCodec {
 }
 
 #[async_trait]
-impl Encoder for LengthPrefixedCodec {
+impl Encoder for LengthPrefixedEncoder {
     async fn encode(&mut self, write: &mut OwnedWriteHalf, data: &[u8]) -> io::Result<usize> {
         if data.len() > u16::MAX as usize {
             return Err(io::Error::from(io::ErrorKind::OutOfMemory));
         }
-        let head: [u8; 2] = (data.len() as u16).to_be_bytes();
-        write.write_all(&head).await?;
-        write.write_all(data).await?;
+        self.buf.clear();
+        self.buf.reserve(data.len());
+        self.buf.put_u16(data.len() as u16);
+        self.buf.extend_from_slice(data);
+        write.write_all(&self.buf).await?;
         Ok(data.len())
     }
 }
@@ -349,6 +367,9 @@ pub(crate) struct LengthPrefixedInitCodec;
 
 impl InitCodec for LengthPrefixedInitCodec {
     fn codec(&self, _addr: SocketAddr) -> io::Result<(Box<dyn Decoder>, Box<dyn Encoder>)> {
-        Ok((Box::new(LengthPrefixedCodec), Box::new(LengthPrefixedCodec)))
+        Ok((
+            Box::new(LengthPrefixedDecoder::new()),
+            Box::new(LengthPrefixedEncoder::new()),
+        ))
     }
 }
