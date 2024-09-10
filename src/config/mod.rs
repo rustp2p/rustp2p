@@ -80,6 +80,8 @@ impl Default for PipeConfig {
                 "stun.chat.bilibili.com".to_string(),
                 "stun.hitv.com".to_string(),
                 "stun.l.google.com:19302".to_string(),
+                "stun1.l.google.com:19302".to_string(),
+                "stun2.l.google.com:19302".to_string(),
             ]),
             mapping_addrs: None,
             dns: None,

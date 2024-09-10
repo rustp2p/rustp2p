@@ -582,7 +582,7 @@ impl PipeLine {
             }
             ProtocolType::PunchConsultRequest => {
                 let punch_info = rmp_serde::from_slice::<PunchConsultInfo>(packet.payload())?;
-                log::info!("PunchConsultRequest {:?}", punch_info);
+                log::debug!("PunchConsultRequest {:?}", punch_info);
                 let consult_info = self
                     .pipe_context
                     .gen_punch_info(punch_info.peer_nat_info.seq);
@@ -596,12 +596,12 @@ impl PipeLine {
                     self.pipe_writer
                         .send_to_packet(&mut send_packet, &src_id)
                         .await?;
-                    sender.send((src_id, consult_info))
+                    sender.send((src_id, punch_info))
                 }
             }
             ProtocolType::PunchConsultReply => {
                 let punch_info = rmp_serde::from_slice::<PunchConsultInfo>(packet.payload())?;
-                log::info!("PunchConsultReply {:?}", punch_info);
+                log::debug!("PunchConsultReply {:?}", punch_info);
 
                 if let Err(_) = self.active_punch_sender.try_send((src_id, punch_info)) {
                     log::debug!("active_punch_sender err src_id={self_id:?}");

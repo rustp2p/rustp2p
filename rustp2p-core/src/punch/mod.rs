@@ -287,7 +287,7 @@ impl<PeerID: Hash + Eq + Clone> Puncher<PeerID> {
             .cloned()
             .unwrap_or_default();
         let ttl = if punch_info.use_ttl() && count < 255 {
-            Some(count.max(3) as u32)
+            Some(count.max(2) as u32)
         } else {
             None
         };
