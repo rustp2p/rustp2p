@@ -155,7 +155,7 @@ impl<PeerID: Hash + Eq + Clone> RouteTable<PeerID> {
         if let Some(entry) = self.route_table.get(id) {
             let (_, routes) = entry.value();
             //p2p的通道数符合要求
-            return routes.iter().filter(|(k, _)| k.is_p2p()).count() < self.channel_num;
+            return !routes.iter().any(|(k, _)| k.is_p2p());
         }
         true
     }
