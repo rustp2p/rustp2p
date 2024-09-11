@@ -330,7 +330,7 @@ pub(crate) struct LengthPrefixedDecoder {
 impl LengthPrefixedEncoder {
     pub(crate) fn new() -> Self {
         Self {
-            buf: BytesMut::with_capacity(2000),
+            buf: Default::default(),
         }
     }
 }
