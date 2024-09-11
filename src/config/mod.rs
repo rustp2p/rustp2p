@@ -5,7 +5,7 @@ use std::time::Duration;
 use crate::pipe::{NodeAddress, PeerNodeAddress};
 use crate::protocol::node_id::NodeID;
 use async_trait::async_trait;
-use bytes::{BufMut, BytesMut};
+use bytes::{Buf, BufMut, BytesMut};
 use rust_p2p_core::pipe::tcp_pipe::{Decoder, Encoder, InitCodec};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
@@ -323,7 +323,10 @@ impl From<TcpPipeConfig> for rust_p2p_core::pipe::config::TcpPipeConfig {
 pub(crate) struct LengthPrefixedEncoder {
     buf: BytesMut,
 }
-pub(crate) struct LengthPrefixedDecoder {}
+pub(crate) struct LengthPrefixedDecoder {
+    offset: usize,
+    buf: BytesMut,
+}
 impl LengthPrefixedEncoder {
     pub(crate) fn new() -> Self {
         Self {
@@ -333,18 +336,47 @@ impl LengthPrefixedEncoder {
 }
 impl LengthPrefixedDecoder {
     pub(crate) fn new() -> Self {
-        Self {}
+        Self {
+            offset: 0,
+            buf: Default::default(),
+        }
     }
 }
 
 #[async_trait]
 impl Decoder for LengthPrefixedDecoder {
     async fn decode(&mut self, read: &mut OwnedReadHalf, src: &mut [u8]) -> io::Result<usize> {
-        let mut head = [0; 2];
-        read.read_exact(&mut head).await?;
-        let len = u16::from_be_bytes(head) as usize;
-        read.read_exact(&mut src[..len]).await?;
-        Ok(len)
+        let len = src.len() + 2;
+        if self.buf.len() < len {
+            self.buf.reserve(len - self.buf.len());
+            unsafe {
+                self.buf.set_len(len);
+            }
+        }
+        while self.offset < 2 {
+            let len = read.read(&mut self.buf[self.offset..]).await?;
+            self.offset += len;
+        }
+        let data_len = ((self.buf[0] as usize) << 8) | self.buf[1] as usize;
+        if data_len > src.len() {
+            return Err(io::Error::from(io::ErrorKind::OutOfMemory));
+        }
+        let len = data_len + 2;
+        loop {
+            if len == self.offset {
+                src[..data_len].copy_from_slice(&self.buf[2..len]);
+                self.offset = 0;
+                return Ok(data_len);
+            }
+            if len < self.offset {
+                src[..data_len].copy_from_slice(&self.buf[2..len]);
+                self.buf.advance(len);
+                self.offset -= len;
+                return Ok(data_len);
+            }
+            let len = read.read(&mut self.buf[self.offset..]).await?;
+            self.offset += len;
+        }
     }
 }
 

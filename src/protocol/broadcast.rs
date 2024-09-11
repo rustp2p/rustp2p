@@ -106,14 +106,14 @@ pub struct Builder;
 impl Builder {
     pub fn calculate_len(list: &[NodeID], payload_len: usize) -> Result<(usize, usize, usize)> {
         if list.is_empty() {
-            return Err(Error::InvalidArgument("".into()));
+            return Err(Error::InvalidArgument("list.is_empty".into()));
         }
         if list.len() > 255 {
-            return Err(Error::InvalidArgument("".into()));
+            return Err(Error::InvalidArgument(format!("{} >255", list.len())));
         }
         let id_len = list[0].len();
         if list.iter().any(|node_id| node_id.len() != id_len) {
-            return Err(Error::InvalidArgument("".into()));
+            return Err(Error::InvalidArgument("node_id.len != id_len".to_string()));
         }
         let id_num = list.len();
         let out_packet_head = 4 + id_len * 2;
@@ -128,6 +128,7 @@ impl Builder {
         let (id_len, broadcast_packet_head, len) =
             Self::calculate_len(list, broadcast_payload.len())?;
         let mut packet = NetPacket::unchecked(vec![0; len]);
+        packet.set_high_flag();
         packet.set_protocol(ProtocolType::RangeBroadcast);
         packet.set_id_length(id_len as _);
         packet.set_ttl(1);
@@ -157,6 +158,7 @@ mod test {
         let packet = Builder::build_range_broadcast(&list, payload).unwrap();
         let packet = RangeBroadcastPacket::new(packet.payload(), packet.id_length()).unwrap();
         assert_eq!(packet.iter().count(), list.len());
+        assert_eq!(packet.payload(), payload);
         for (index, node_id) in packet.iter().enumerate() {
             assert_eq!(node_id, list[index]);
         }

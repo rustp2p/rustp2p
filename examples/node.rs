@@ -5,13 +5,11 @@ use std::sync::Arc;
 use clap::Parser;
 use env_logger::Env;
 use mimalloc_rust::GlobalMiMalloc;
-use tokio::sync::mpsc::{channel, Sender};
 use tun_rs::AsyncDevice;
 
 use rustp2p::config::{PipeConfig, TcpPipeConfig, UdpPipeConfig};
 use rustp2p::error::*;
-use rustp2p::pipe::{HandleResult, PeerNodeAddress, Pipe, PipeLine, PipeWriter, SendPacket};
-use rustp2p::protocol::node_id::NodeID;
+use rustp2p::pipe::{HandleResult, PeerNodeAddress, Pipe, PipeLine, PipeWriter};
 
 #[global_allocator]
 static GLOBAL_MI_MALLOC: GlobalMiMalloc = GlobalMiMalloc;
@@ -73,25 +71,8 @@ pub async fn main() -> Result<()> {
     let writer = pipe.writer();
     //let shutdown_writer = writer.clone();
     let device_r = device.clone();
-    let (sender1, mut receiver1) = channel::<(Vec<u8>, usize, usize)>(128);
-    let (sender2, mut receiver2) = channel(128);
     tokio::spawn(async move {
-        tun_recv(sender2, writer, device_r).await.unwrap();
-    });
-    let writer = pipe.writer();
-    tokio::spawn(async move {
-        while let Some((mut packet, dest)) = receiver2.recv().await {
-            if let Err(e) = writer.send_to_packet(&mut packet, &dest).await {
-                log::warn!("device.send {e:?}")
-            }
-        }
-    });
-    tokio::spawn(async move {
-        while let Some((buf, start, end)) = receiver1.recv().await {
-            if let Err(e) = device.send(&buf[start..end]).await {
-                log::warn!("device.send {e:?}")
-            }
-        }
+        tun_recv(writer, device_r).await.unwrap();
     });
     log::info!("listen 23333");
     // tokio::spawn(async move{
@@ -100,15 +81,12 @@ pub async fn main() -> Result<()> {
     // });
     loop {
         let line = pipe.accept().await?;
-        tokio::spawn(recv(line, sender1.clone()));
+        tokio::spawn(recv(line, device.clone()));
     }
 }
-async fn recv(mut line: PipeLine, sender: Sender<(Vec<u8>, usize, usize)>) {
+async fn recv(mut line: PipeLine, device: Arc<AsyncDevice>) {
+    let mut buf = [0; 2048];
     loop {
-        let mut buf = Vec::with_capacity(2048);
-        unsafe {
-            buf.set_len(2048);
-        }
         let rs = match line.recv_from(&mut buf).await {
             Ok(rs) => rs,
             Err(e) => {
@@ -130,20 +108,14 @@ async fn recv(mut line: PipeLine, sender: Sender<(Vec<u8>, usize, usize)>) {
                 }
             }
             HandleResult::UserData(packet, src_id, dest_id, route_key) => {
-                let start = packet.head_len();
-                let end = packet.buffer().len();
-                if let Err(e) = sender.send((buf, start, end)).await {
+                if let Err(e) = device.send(packet.payload()).await {
                     log::warn!("UserData {e:?},{src_id:?},{dest_id:?},{route_key:?}")
                 }
             }
         }
     }
 }
-async fn tun_recv(
-    sender: Sender<(SendPacket, NodeID)>,
-    pipe_writer: PipeWriter,
-    device: Arc<AsyncDevice>,
-) -> Result<()> {
+async fn tun_recv(pipe_writer: PipeWriter, device: Arc<AsyncDevice>) -> Result<()> {
     loop {
         let mut send_packet = pipe_writer.allocate_send_packet()?;
         let payload = send_packet.data_mut();
@@ -159,7 +131,10 @@ async fn tun_recv(
             dest_ip = Ipv4Addr::BROADCAST;
         }
         send_packet.set_payload_len(payload_len);
-        if let Err(e) = sender.send((send_packet, dest_ip.into())).await {
+        if let Err(e) = pipe_writer
+            .send_to_packet(&mut send_packet, &dest_ip.into())
+            .await
+        {
             log::warn!("{e:?},{dest_ip:?}")
         }
     }

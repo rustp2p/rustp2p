@@ -32,9 +32,16 @@ impl NodeID {
     }
     pub fn broadcast(&self) -> NodeID {
         match self {
-            NodeID::Bit32(_) => NodeID::Bit32([1u8; 4]),
-            NodeID::Bit64(_) => NodeID::Bit64([1u8; 8]),
-            NodeID::Bit128(_) => NodeID::Bit128([1u8; 16]),
+            NodeID::Bit32(_) => NodeID::Bit32([255u8; 4]),
+            NodeID::Bit64(_) => NodeID::Bit64([255u8; 8]),
+            NodeID::Bit128(_) => NodeID::Bit128([255u8; 16]),
+        }
+    }
+    pub fn unspecified(&self) -> NodeID {
+        match self {
+            NodeID::Bit32(_) => NodeID::Bit32([0u8; 4]),
+            NodeID::Bit64(_) => NodeID::Bit64([0u8; 8]),
+            NodeID::Bit128(_) => NodeID::Bit128([0u8; 16]),
         }
     }
     pub fn is_unspecified(&self) -> bool {

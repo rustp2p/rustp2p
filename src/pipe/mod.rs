@@ -330,6 +330,7 @@ impl PipeWriter {
         packet.set_id_length(src_id.len() as _);
         packet.set_ttl(15);
         packet.set_src_id(&src_id)?;
+        packet.set_dest_id(&src_id.unspecified())?;
         packet.set_protocol(protocol_type);
         Ok(send_packet)
     }

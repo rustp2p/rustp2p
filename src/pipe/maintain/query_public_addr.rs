@@ -20,8 +20,9 @@ pub(crate) async fn query_public_addr_loop(
     let mut tcp_stream_owner: Option<TcpStream> = None;
     loop {
         if udp_len != 0 {
+            let stun = &udp_stun_servers[udp_count % udp_len];
             udp_count += 1;
-            match udp_stun_servers[udp_count % udp_len].to_socket_addrs() {
+            match stun.to_socket_addrs() {
                 Ok(mut addr) => {
                     if let Some(addr) = addr.next() {
                         if let Some(w) = pipe_writer.pipe_writer.udp_pipe_writer() {
@@ -32,17 +33,15 @@ pub(crate) async fn query_public_addr_loop(
                     }
                 }
                 Err(e) => {
-                    log::debug!(
-                        "query_public_addr to_socket_addrs {e:?} {:?}",
-                        udp_stun_servers[udp_count % udp_len]
-                    );
+                    log::debug!("query_public_addr to_socket_addrs {e:?} {stun:?}",);
                 }
             }
         }
         if tcp_len != 0 {
+            let stun = &tcp_stun_servers[tcp_count % tcp_len];
             if tcp_stream_owner.is_none() {
                 tcp_count += 1;
-                match tcp_stun_servers[tcp_count % tcp_len].to_socket_addrs() {
+                match stun.to_socket_addrs() {
                     Ok(mut addr) => {
                         if let Some(addr) = addr.next() {
                             if let Some(w) = pipe_writer.pipe_writer.tcp_pipe_writer() {
@@ -58,10 +57,7 @@ pub(crate) async fn query_public_addr_loop(
                         }
                     }
                     Err(e) => {
-                        log::debug!(
-                            "query_public_addr to_socket_addrs {e:?} {:?}",
-                            tcp_stun_servers[tcp_count % udp_len]
-                        );
+                        log::debug!("query_public_addr to_socket_addrs {e:?} {stun:?}",);
                     }
                 }
             }
@@ -74,10 +70,7 @@ pub(crate) async fn query_public_addr_loop(
                 {
                     Ok(rs) => {
                         if rs.is_err() {
-                            log::debug!(
-                                "is_err {rs:?},server={:?}",
-                                tcp_stun_servers[tcp_count % udp_len]
-                            );
+                            log::debug!("is_err {rs:?},server={stun:?}",);
                             tcp_stream_owner.take();
                         }
                     }
@@ -92,10 +85,7 @@ pub(crate) async fn query_public_addr_loop(
                         pipe_writer.pipe_context().update_tcp_public_addr(addr);
                     }
                     Err(e) => {
-                        log::debug!(
-                            "stun_tcp_read {e:?},server={:?}",
-                            tcp_stun_servers[tcp_count % udp_len]
-                        );
+                        log::debug!("stun_tcp_read {e:?},server={stun:?}",);
                         tcp_stream_owner.take();
                     }
                 }
