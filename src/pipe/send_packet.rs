@@ -10,7 +10,10 @@ pub struct SendPacket {
 
 impl SendPacket {
     pub(crate) fn new_capacity(head_reserve: usize, capacity: usize) -> Self {
-        let buf = vec![0u8; capacity];
+        let mut buf = Vec::with_capacity(capacity);
+        unsafe {
+            buf.set_len(capacity);
+        }
         Self {
             buf,
             head_reserve,

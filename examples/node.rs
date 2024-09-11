@@ -10,7 +10,7 @@ use tun_rs::AsyncDevice;
 
 use rustp2p::config::{PipeConfig, TcpPipeConfig, UdpPipeConfig};
 use rustp2p::error::*;
-use rustp2p::pipe::{HandleResult, PeerNodeAddress, Pipe, PipeLine, PipeWriter, SendPacket};
+use rustp2p::pipe::{PeerNodeAddress, Pipe, PipeLine, PipeWriter, SendPacket};
 use rustp2p::protocol::node_id::NodeID;
 
 #[global_allocator]
@@ -73,8 +73,8 @@ pub async fn main() -> Result<()> {
     let writer = pipe.writer();
     //let shutdown_writer = writer.clone();
     let device_r = device.clone();
-    let (sender1, mut receiver1) = channel::<Vec<u8>>(1024);
-    let (sender2, mut receiver2) = channel(1024);
+    let (sender1, mut receiver1) = channel::<(Vec<u8>, usize, usize)>(128);
+    let (sender2, mut receiver2) = channel(128);
     tokio::spawn(async move {
         tun_recv(sender2, writer, device_r).await.unwrap();
     });
@@ -87,8 +87,8 @@ pub async fn main() -> Result<()> {
         }
     });
     tokio::spawn(async move {
-        while let Some(buf) = receiver1.recv().await {
-            if let Err(e) = device.send(&buf).await {
+        while let Some((buf, start, end)) = receiver1.recv().await {
+            if let Err(e) = device.send(&buf[start..end]).await {
                 log::warn!("device.send {e:?}")
             }
         }
@@ -103,9 +103,12 @@ pub async fn main() -> Result<()> {
         tokio::spawn(recv(line, sender1.clone()));
     }
 }
-async fn recv(mut line: PipeLine, sender: Sender<Vec<u8>>) {
-    let mut buf = [0; 2048];
+async fn recv(mut line: PipeLine, sender: Sender<(Vec<u8>, usize, usize)>) {
     loop {
+        let mut buf = Vec::with_capacity(2048);
+        unsafe {
+            buf.set_len(2048);
+        }
         let rs = match line.recv_from(&mut buf).await {
             Ok(rs) => rs,
             Err(e) => {
@@ -120,17 +123,8 @@ async fn recv(mut line: PipeLine, sender: Sender<Vec<u8>>) {
                 continue;
             }
         };
-        match handle_rs {
-            HandleResult::Turn(buf, src_id, dest_id, route_key) => {
-                if let Err(e) = line.send_to(&buf, &dest_id).await {
-                    log::warn!("Turn {e:?},{src_id:?},{dest_id:?},{route_key:?}")
-                }
-            }
-            HandleResult::UserData(packet, src_id, dest_id, route_key) => {
-                if let Err(e) = sender.send(packet.payload().to_vec()).await {
-                    log::warn!("UserData {e:?},{src_id:?},{dest_id:?},{route_key:?}")
-                }
-            }
+        if let Err(e) = sender.send((buf, handle_rs.start, handle_rs.end)).await {
+            log::warn!("UserData {e:?},{handle_rs:?}")
         }
     }
 }

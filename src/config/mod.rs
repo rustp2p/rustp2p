@@ -5,7 +5,7 @@ use std::time::Duration;
 use crate::pipe::{NodeAddress, PeerNodeAddress};
 use crate::protocol::node_id::NodeID;
 use async_trait::async_trait;
-use bytes::{Buf, BufMut, BytesMut};
+use bytes::{Buf, BytesMut};
 use rust_p2p_core::pipe::tcp_pipe::{Decoder, Encoder, InitCodec};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
@@ -320,18 +320,14 @@ impl From<TcpPipeConfig> for rust_p2p_core::pipe::config::TcpPipeConfig {
 }
 
 /// Fixed-length prefix encoder/decoder.
-pub(crate) struct LengthPrefixedEncoder {
-    buf: BytesMut,
-}
+pub(crate) struct LengthPrefixedEncoder {}
 pub(crate) struct LengthPrefixedDecoder {
     offset: usize,
     buf: BytesMut,
 }
 impl LengthPrefixedEncoder {
     pub(crate) fn new() -> Self {
-        Self {
-            buf: Default::default(),
-        }
+        Self {}
     }
 }
 impl LengthPrefixedDecoder {
@@ -386,11 +382,16 @@ impl Encoder for LengthPrefixedEncoder {
         if data.len() > u16::MAX as usize {
             return Err(io::Error::from(io::ErrorKind::OutOfMemory));
         }
-        self.buf.clear();
-        self.buf.reserve(data.len());
-        self.buf.put_u16(data.len() as u16);
-        self.buf.extend_from_slice(data);
-        write.write_all(&self.buf).await?;
+        let head = (data.len() as u16).to_be_bytes();
+        let bufs: &[_] = &[io::IoSlice::new(&head), io::IoSlice::new(data)];
+        let len = data.len() + 2;
+        let w = write.write_vectored(bufs).await?;
+        if w < 2 {
+            write.write_all(&head[w..]).await?;
+            write.write_all(data).await?;
+        } else if w != len {
+            write.write_all(&data[w - 2..]).await?
+        }
         Ok(data.len())
     }
 }

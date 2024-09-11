@@ -26,11 +26,7 @@ rust-p2p-core = {version = "0.1"}
 # Example
 
 ````rust
-use rust_p2p::nat::{NatInfo, NatType};
-use rust_p2p::pipe::{
-    config::{PipeConfig, TcpPipeConfig, UdpPipeConfig},
-    pipe, PipeLine, PipeWriter,
-};
+
 #[tokio::main]
 async fn main() {
     let udp_config = UdpPipeConfig::default();

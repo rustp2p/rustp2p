@@ -348,10 +348,10 @@ impl PipeLine {
     pub fn store_self_id(&self, node_id: NodeID) -> Result<()> {
         self.pipe_context.store_self_id(node_id)
     }
-    pub async fn recv_from<'a>(
+    pub async fn recv_from(
         &mut self,
-        buf: &'a mut [u8],
-    ) -> core::result::Result<core::result::Result<HandleResult<'a>, HandleError>, RecvError> {
+        buf: &mut [u8],
+    ) -> core::result::Result<core::result::Result<HandleResult, HandleError>, RecvError> {
         loop {
             let (len, route_key) = match self.pipe_line.recv_from(buf).await {
                 None => return Err(RecvError::Done),
@@ -360,6 +360,11 @@ impl PipeLine {
                     Err(e) => return Err(RecvError::Io(e)),
                 },
             };
+            if len == 0 {
+                return Err(RecvError::Io(std::io::Error::from(
+                    std::io::ErrorKind::UnexpectedEof,
+                )));
+            }
             if rust_p2p_core::stun::is_stun_response(&buf[..len]) {
                 if let Some(pub_addr) = rust_p2p_core::stun::recv_stun_response(&buf[..len]) {
                     self.pipe_context
@@ -374,34 +379,21 @@ impl PipeLine {
                 .await
             {
                 Ok(handle_result) => {
-                    //return Ok(Ok(handle_result));
-                    // workaround borrowing checker
-                    let rs = match handle_result {
-                        HandleResultIn::Continue => continue,
-                        HandleResultIn::Turn(start, end, src, dest, route_key) => {
-                            HandleResult::Turn(
-                                NetPacket::new(&mut buf[start..end]).unwrap(),
-                                src,
-                                dest,
-                                route_key,
-                            )
-                        }
-                        HandleResultIn::UserData(start, end, src, dest, route_key) => {
-                            HandleResult::UserData(
-                                NetPacket::new(&mut buf[start..end]).unwrap(),
-                                src,
-                                dest,
-                                route_key,
-                            )
-                        }
-                    };
-                    Ok(Ok(rs))
+                    if let Some(rs) = handle_result {
+                        return Ok(Ok(rs));
+                    } else {
+                        continue;
+                    }
                 }
                 Err(e) => Ok(Err(HandleError::new(route_key, e))),
             };
         }
     }
-    pub async fn send_to<B: AsRef<[u8]>>(&self, buf: &NetPacket<B>, id: &NodeID) -> Result<()> {
+    pub(crate) async fn send_to<B: AsRef<[u8]>>(
+        &self,
+        buf: &NetPacket<B>,
+        id: &NodeID,
+    ) -> Result<()> {
         self.pipe_writer
             .pipe_writer
             .send_to_id(buf.buffer(), id)
@@ -412,7 +404,7 @@ impl PipeLine {
         self.pipe_writer.pipe_writer.send_to(buf, route_key).await?;
         Ok(())
     }
-    async fn handle<'a>(&mut self, recv_result: RecvResult<'a>) -> Result<HandleResultIn> {
+    async fn handle<'a>(&mut self, recv_result: RecvResult<'a>) -> Result<Option<HandleResult>> {
         let mut packet = NetPacket::new(recv_result.buf)?;
         let src_id = NodeID::new(packet.src_id())?;
 
@@ -426,7 +418,7 @@ impl PipeLine {
         }
 
         if packet.ttl() == 0 {
-            return Ok(HandleResultIn::Continue);
+            return Ok(None);
         }
         let route_key = recv_result.route_key;
 
@@ -439,17 +431,10 @@ impl PipeLine {
                 return Err(Error::InvalidArgument("id loop error".into()));
             }
             if self_id != dest_id && !dest_id.is_unspecified() && !dest_id.is_broadcast() {
-                return if packet.incr_ttl() {
-                    Ok(HandleResultIn::Turn(
-                        0,
-                        packet.buffer().len(),
-                        src_id,
-                        dest_id,
-                        route_key,
-                    ))
-                } else {
-                    return Ok(HandleResultIn::Continue);
-                };
+                if packet.incr_ttl() {
+                    self.send_to(&packet, &dest_id).await?;
+                }
+                return Ok(None);
             }
             self_id
         } else {
@@ -540,13 +525,13 @@ impl PipeLine {
                 }
             }
             ProtocolType::UserData => {
-                return Ok(HandleResultIn::UserData(
-                    0,
-                    packet.buffer().len(),
+                return Ok(Some(HandleResult {
+                    start: packet.head_len(),
+                    end: packet.buffer().len(),
                     src_id,
                     dest_id,
                     route_key,
-                ))
+                }))
             }
             ProtocolType::RangeBroadcast => {
                 let head_len = packet.head_len();
@@ -555,7 +540,7 @@ impl PipeLine {
                 let broadcast_packet =
                     RangeBroadcastPacket::new(packet.payload_mut(), id_length as _)?;
                 let in_packet = NetPacket::new(broadcast_packet.payload())?;
-                let start = head_len + broadcast_packet.head_len();
+                let start = head_len + broadcast_packet.head_len() + in_packet.head_len();
                 let mut broadcast_to_self = false;
 
                 let range_id: Vec<NodeID> = broadcast_packet.iter().collect();
@@ -567,9 +552,13 @@ impl PipeLine {
                     }
                 }
                 if broadcast_to_self {
-                    return Ok(HandleResultIn::UserData(
-                        start, end, src_id, dest_id, route_key,
-                    ));
+                    return Ok(Some(HandleResult {
+                        start,
+                        end,
+                        src_id,
+                        dest_id,
+                        route_key,
+                    }));
                 }
             }
             ProtocolType::PunchConsultRequest => {
@@ -605,7 +594,7 @@ impl PipeLine {
             }
         }
 
-        Ok(HandleResultIn::Continue)
+        Ok(None)
     }
 }
 
@@ -626,15 +615,13 @@ impl<'a> RecvResult<'a> {
     }
 }
 
-pub enum HandleResult<'a> {
-    Turn(NetPacket<&'a mut [u8]>, NodeID, NodeID, RouteKey),
-    UserData(NetPacket<&'a mut [u8]>, NodeID, NodeID, RouteKey),
-}
-
-enum HandleResultIn {
-    Continue,
-    Turn(usize, usize, NodeID, NodeID, RouteKey),
-    UserData(usize, usize, NodeID, NodeID, RouteKey),
+#[derive(Debug)]
+pub struct HandleResult {
+    pub start: usize,
+    pub end: usize,
+    pub src_id: NodeID,
+    pub dest_id: NodeID,
+    pub route_key: RouteKey,
 }
 
 #[derive(thiserror::Error, Debug)]
