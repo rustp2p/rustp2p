@@ -55,6 +55,9 @@ impl NodeID {
     pub fn len(&self) -> usize {
         self.as_ref().len()
     }
+    pub fn is_empty(&self) -> bool {
+        self.as_ref().len() == 0
+    }
 }
 
 macro_rules! impl_from_integer {

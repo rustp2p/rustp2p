@@ -1,3 +1,4 @@
+#![allow(clippy::type_complexity)]
 use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -43,7 +44,7 @@ impl PipeContext {
             reachable_nodes: Arc::new(Default::default()),
             punch_info: Arc::new(RwLock::new(punch_info)),
             default_interface: default_interface.map(|v| v.into()),
-            dns: dns.unwrap_or(vec![]),
+            dns: dns.unwrap_or_default(),
         }
     }
     pub fn store_self_id(&self, node_id: NodeID) -> crate::error::Result<()> {
@@ -80,7 +81,7 @@ impl PipeContext {
         for (_, id, v) in guard.iter() {
             let node_id = self.get_direct_node_id(id);
             for x in v {
-                addrs.push((x.clone(), node_id))
+                addrs.push((*x, node_id))
             }
         }
         addrs
@@ -91,7 +92,7 @@ impl PipeContext {
         for (_, id, v) in guard.iter() {
             let node_id = self.get_direct_node_id(id);
             for x in v {
-                addrs.push((x.clone(), *id, node_id))
+                addrs.push((*x, *id, node_id))
             }
         }
         addrs
@@ -135,7 +136,7 @@ impl PipeContext {
         let now = Instant::now();
         if let Some(timeout) = now.checked_sub(query_id_interval * 3) {
             self.direct_node_id_map
-                .retain(|_, (_, time)| &*time > &timeout);
+                .retain(|_, (_, time)| *time > timeout);
             for mut val in self.reachable_nodes.iter_mut() {
                 val.value_mut().retain(|(_, _, time)| time > &timeout);
             }
@@ -144,15 +145,15 @@ impl PipeContext {
     }
     pub fn reachable_node(&self, dest_id: &NodeID) -> Option<NodeID> {
         if let Some(v) = self.reachable_nodes.get(dest_id) {
-            v.value().get(0).map(|(v, _, _)| *v)
+            v.value().first().map(|(v, _, _)| *v)
         } else {
             None
         }
     }
     pub fn default_route(&self) -> Option<NodeAddress> {
         let guard = self.direct_node_address_list.read();
-        if let Some((_, _, v)) = guard.get(0) {
-            v.get(0).cloned()
+        if let Some((_, _, v)) = guard.first() {
+            v.first().cloned()
         } else {
             None
         }
@@ -231,12 +232,12 @@ impl PeerNodeAddress {
             PeerNodeAddress::Tcp(addr) => vec![NodeAddress::Tcp(*addr)],
             PeerNodeAddress::Udp(addr) => vec![NodeAddress::Udp(*addr)],
             PeerNodeAddress::TcpDomain(domain) => {
-                let addrs = dns_query_all(domain, &name_servers, default_interface).await?;
-                addrs.into_iter().map(|v| NodeAddress::Tcp(v)).collect()
+                let addrs = dns_query_all(domain, name_servers, default_interface).await?;
+                addrs.into_iter().map(NodeAddress::Tcp).collect()
             }
             PeerNodeAddress::UdpDomain(domain) => {
-                let addrs = dns_query_all(domain, &name_servers, default_interface).await?;
-                addrs.into_iter().map(|v| NodeAddress::Udp(v)).collect()
+                let addrs = dns_query_all(domain, name_servers, default_interface).await?;
+                addrs.into_iter().map(NodeAddress::Udp).collect()
             }
             PeerNodeAddress::TxtDomain(domain) => {
                 let txt = dns_query_txt(domain, name_servers.clone(), default_interface).await?;

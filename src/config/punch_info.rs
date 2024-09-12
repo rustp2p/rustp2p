@@ -48,23 +48,15 @@ impl NodePunchInfo {
         } else {
             return;
         };
-        if rust_p2p_core::extend::addr::is_ipv4_global(&ip) {
-            if !self.public_ips.contains(&ip) {
-                self.public_ips.push(ip);
-            }
+        if rust_p2p_core::extend::addr::is_ipv4_global(&ip) && !self.public_ips.contains(&ip) {
+            self.public_ips.push(ip);
         }
         self.public_tcp_port = port;
     }
     fn mapped_ip_port(addr: SocketAddr) -> Option<(Ipv4Addr, u16)> {
         match addr {
             SocketAddr::V4(addr) => Some((*addr.ip(), addr.port())),
-            SocketAddr::V6(addr) => {
-                if let Some(ip) = addr.ip().to_ipv4_mapped() {
-                    Some((ip, addr.port()))
-                } else {
-                    None
-                }
-            }
+            SocketAddr::V6(addr) => addr.ip().to_ipv4_mapped().map(|ip| (ip, addr.port())),
         }
     }
     pub fn update_public_addr(&mut self, index: Index, addr: SocketAddr) {
@@ -98,7 +90,7 @@ impl NodePunchInfo {
         }
     }
     pub fn set_public_ip(&mut self, mut ips: Vec<Ipv4Addr>) {
-        ips.retain(|v| rust_p2p_core::extend::addr::is_ipv4_global(v));
+        ips.retain(rust_p2p_core::extend::addr::is_ipv4_global);
         self.public_ips = ips;
     }
 }

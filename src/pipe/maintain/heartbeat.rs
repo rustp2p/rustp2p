@@ -14,10 +14,8 @@ pub async fn heartbeat_loop(pipe_writer: PipeWriter, heartbeat_interval: Duratio
             if let Err(e) = timestamp_request(&pipe_writer).await {
                 log::warn!("timestamp_request e={e:?}");
             }
-        } else {
-            if let Err(e) = heartbeat_request(&pipe_writer).await {
-                log::warn!("heartbeat_request e={e:?}");
-            }
+        } else if let Err(e) = heartbeat_request(&pipe_writer).await {
+            log::warn!("heartbeat_request e={e:?}");
         }
 
         tokio::time::sleep(heartbeat_interval).await;
@@ -110,10 +108,8 @@ async fn route_table_heartbeat_request(
                 .await
             {
                 log::warn!("route_table_heartbeat_request e={e:?},node_id={node_id:?}");
-            } else {
-                if route.is_p2p() {
-                    sent_ids.insert(node_id);
-                }
+            } else if route.is_p2p() {
+                sent_ids.insert(node_id);
             }
             tokio::time::sleep(Duration::from_millis(3)).await;
         }

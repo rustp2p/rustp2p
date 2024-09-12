@@ -204,7 +204,7 @@ pub fn send_stun_request() -> Vec<u8> {
     msg.as_bytes().to_vec()
 }
 pub fn is_stun_response(buf: &[u8]) -> bool {
-    return buf[0] == 0x01;
+    buf[0] == 0x01
 }
 pub fn recv_stun_response(buf: &[u8]) -> Option<SocketAddr> {
     let msg = stun_format::Msg::from(buf);

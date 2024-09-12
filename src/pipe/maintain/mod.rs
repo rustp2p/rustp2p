@@ -14,6 +14,7 @@ mod nat_query;
 mod punch_consult;
 mod query_public_addr;
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn start_task(
     pipe_writer: &PipeWriter,
     idle_route_manager: rust_p2p_core::idle::IdleRouteManager<NodeID>,

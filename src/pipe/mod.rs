@@ -114,13 +114,10 @@ impl Pipe {
             passive_punch_receiver,
         );
         let fut = shutdown_manager
-            .wrap_cancel(async move { while let Some(_) = join_set.join_next().await {} });
+            .wrap_cancel(async move { while join_set.join_next().await.is_some() {} });
         tokio::spawn(async move {
-            match fut.await {
-                Err(_) => {
-                    log::info!("maintain tasks are shutdown");
-                }
-                _ => {}
+            if fut.await.is_err() {
+                log::info!("maintain tasks are shutdown");
             }
         });
         Ok(Self {
@@ -217,28 +214,26 @@ impl PipeWriter {
             self.pipe_writer
                 .send_to(packet.buffer(), &route.route_key())
                 .await?
-        } else {
-            if let Some(turn_id) = self.pipe_context().reachable_node(dest_id) {
-                self.pipe_writer
-                    .send_to_id(packet.buffer(), &turn_id)
-                    .await?
-            } else if let Some(addr) = self.pipe_context().default_route() {
-                // default route
-                match addr {
-                    NodeAddress::Tcp(addr) => {
-                        self.pipe_writer
-                            .send_to_addr(ConnectProtocol::TCP, packet.buffer(), addr)
-                            .await?
-                    }
-                    NodeAddress::Udp(addr) => {
-                        self.pipe_writer
-                            .send_to_addr(ConnectProtocol::TCP, packet.buffer(), addr)
-                            .await?
-                    }
+        } else if let Some(turn_id) = self.pipe_context().reachable_node(dest_id) {
+            self.pipe_writer
+                .send_to_id(packet.buffer(), &turn_id)
+                .await?
+        } else if let Some(addr) = self.pipe_context().default_route() {
+            // default route
+            match addr {
+                NodeAddress::Tcp(addr) => {
+                    self.pipe_writer
+                        .send_to_addr(ConnectProtocol::TCP, packet.buffer(), addr)
+                        .await?
                 }
-            } else {
-                Err(Error::NodeIDNotAvailable)?
+                NodeAddress::Udp(addr) => {
+                    self.pipe_writer
+                        .send_to_addr(ConnectProtocol::TCP, packet.buffer(), addr)
+                        .await?
+                }
             }
+        } else {
+            Err(Error::NodeIDNotAvailable)?
         };
 
         Ok(len)
@@ -253,13 +248,11 @@ impl PipeWriter {
                 if !map.contains_key(id) {
                     map.insert(*id, (vec![*id], route.route_key()));
                 }
-            } else {
-                if let Some(owner_id) = route_table.get_id_by_route_key(&route.route_key()) {
-                    if let Some((list, _)) = map.get_mut(&owner_id) {
-                        list.push(*id);
-                    } else {
-                        map.insert(owner_id, (vec![owner_id, *id], route.route_key()));
-                    }
+            } else if let Some(owner_id) = route_table.get_id_by_route_key(&route.route_key()) {
+                if let Some((list, _)) = map.get_mut(&owner_id) {
+                    list.push(*id);
+                } else {
+                    map.insert(owner_id, (vec![owner_id, *id], route.route_key()));
                 }
             }
         }
@@ -503,7 +496,7 @@ impl PipeLine {
                 let now = std::time::SystemTime::now()
                     .duration_since(UNIX_EPOCH)?
                     .as_millis() as u32;
-                let rtt = now.checked_sub(time).unwrap_or(0) as _;
+                let rtt = now.saturating_sub(time);
                 self.route_table
                     .add_route(src_id, Route::from(route_key, metric, rtt));
             }
@@ -569,10 +562,8 @@ impl PipeLine {
                 for node_id in range_id {
                     if node_id == self_id {
                         broadcast_to_self = true
-                    } else {
-                        if let Err(e) = self.send_to(&in_packet, &node_id).await {
-                            log::debug!("RangeBroadcast {e:?}")
-                        }
+                    } else if let Err(e) = self.send_to(&in_packet, &node_id).await {
+                        log::debug!("RangeBroadcast {e:?}")
                     }
                 }
                 if broadcast_to_self {
@@ -604,13 +595,17 @@ impl PipeLine {
                 let punch_info = rmp_serde::from_slice::<PunchConsultInfo>(packet.payload())?;
                 log::debug!("PunchConsultReply {:?}", punch_info);
 
-                if let Err(_) = self.active_punch_sender.try_send((src_id, punch_info)) {
+                if self
+                    .active_punch_sender
+                    .try_send((src_id, punch_info))
+                    .is_err()
+                {
                     log::debug!("active_punch_sender err src_id={self_id:?}");
                 }
             }
         }
 
-        return Ok(HandleResultIn::Continue);
+        Ok(HandleResultIn::Continue)
     }
 }
 

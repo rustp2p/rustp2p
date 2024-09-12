@@ -223,7 +223,7 @@ impl<'a, B: AsMut<[u8]>> Builder<'a, B> {
     pub fn payload(&mut self, data: &[u8]) -> Result<&mut Self> {
         let slice = self.0.as_mut();
         let total = slice.len();
-        let head_len = 4 + 2 * self.1 as usize;
+        let head_len = 4 + 2 * self.1;
         let need_size = head_len + data.len();
         if need_size > total {
             return Err(Error::Overflow {

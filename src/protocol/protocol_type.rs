@@ -25,7 +25,7 @@ impl TryFrom<u8> for ProtocolType {
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         const MAX: u8 = ProtocolType::RangeBroadcast as u8;
         match value {
-            0..=MAX => unsafe { Ok(std::mem::transmute(value)) },
+            0..=MAX => unsafe { Ok(std::mem::transmute::<u8, ProtocolType>(value)) },
             val => Err(crate::error::Error::InvalidArgument(format!(
                 "Invalid protocol {val}"
             ))),
@@ -33,9 +33,9 @@ impl TryFrom<u8> for ProtocolType {
     }
 }
 
-impl Into<u8> for ProtocolType {
-    fn into(self) -> u8 {
-        self as u8
+impl From<ProtocolType> for u8 {
+    fn from(val: ProtocolType) -> Self {
+        val as u8
     }
 }
 
