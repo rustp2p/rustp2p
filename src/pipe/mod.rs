@@ -168,9 +168,9 @@ impl PipeWriter {
     pub fn pipe_context(&self) -> &PipeContext {
         &self.pipe_context
     }
-    pub(crate) async fn send_to_route(&self, buf: &[u8], route_key: &RouteKey) -> Result<usize> {
-        let len = self.pipe_writer.send_to(buf, route_key).await?;
-        Ok(len)
+    pub(crate) async fn send_to_route(&self, buf: &[u8], route_key: &RouteKey) -> Result<()> {
+        self.pipe_writer.send_to(buf, route_key).await?;
+        Ok(())
     }
     /// user data is `buf[start..end]`,
     ///
@@ -185,7 +185,7 @@ impl PipeWriter {
         start: usize,
         end: usize,
         dest_id: &NodeID,
-    ) -> Result<usize> {
+    ) -> Result<()> {
         let src_id = if let Some(src_id) = self.pipe_context.load_id() {
             src_id
         } else {
@@ -195,7 +195,7 @@ impl PipeWriter {
         self.send_to0(&mut buf[start - head_reserve..end], &src_id, dest_id)
             .await
     }
-    async fn send_to0(&self, buf: &mut [u8], src_id: &NodeID, dest_id: &NodeID) -> Result<usize> {
+    async fn send_to0(&self, buf: &mut [u8], src_id: &NodeID, dest_id: &NodeID) -> Result<()> {
         let mut packet = NetPacket::unchecked(buf);
         packet.set_high_flag();
         if packet.ttl() == 0 || packet.ttl() != packet.first_ttl() {
@@ -205,12 +205,11 @@ impl PipeWriter {
         packet.set_src_id(src_id)?;
         packet.set_dest_id(dest_id)?;
         if dest_id.is_broadcast() {
-            let len = packet.buffer().len();
             self.send_broadcast0(packet.buffer(), src_id).await?;
-            return Ok(len);
+            return Ok(());
         }
 
-        let len = if let Ok(route) = self.pipe_writer.route_table().get_route_by_id(dest_id) {
+        if let Ok(route) = self.pipe_writer.route_table().get_route_by_id(dest_id) {
             self.pipe_writer
                 .send_to(packet.buffer(), &route.route_key())
                 .await?
@@ -236,7 +235,7 @@ impl PipeWriter {
             Err(Error::NodeIDNotAvailable)?
         };
 
-        Ok(len)
+        Ok(())
     }
     async fn send_broadcast0(&self, buf: &[u8], src_id: &NodeID) -> Result<()> {
         let broadcast_id = src_id.broadcast();
@@ -296,7 +295,7 @@ impl PipeWriter {
             Err(Error::NoIDSpecified)
         }
     }
-    pub async fn send_to_packet(&self, packet: &mut SendPacket, dest_id: &NodeID) -> Result<usize> {
+    pub async fn send_to_packet(&self, packet: &mut SendPacket, dest_id: &NodeID) -> Result<()> {
         if let Some(src_id) = self.pipe_context.load_id() {
             self.send_to0(packet.buf_mut(), &src_id, dest_id).await
         } else {

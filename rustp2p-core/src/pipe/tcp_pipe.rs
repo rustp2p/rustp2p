@@ -7,6 +7,7 @@ use async_trait::async_trait;
 use dashmap::DashMap;
 use rand::Rng;
 use std::io;
+use std::io::IoSlice;
 use std::marker::PhantomData;
 use std::net::SocketAddr;
 use std::ops::Deref;
@@ -149,14 +150,14 @@ impl TcpPipeLine {
 
 impl TcpPipeLine {
     /// Writing `buf` to the target denoted by `route_key` via this pipeline
-    pub async fn send_to(&self, buf: &[u8], route_key: &RouteKey) -> crate::error::Result<usize> {
+    pub async fn send_to(&self, buf: &[u8], route_key: &RouteKey) -> crate::error::Result<()> {
         if &self.stream_owned.route_key != route_key {
             Err(crate::error::Error::RouteNotFound("mismatch".into()))?
         }
         let mut guard = self.tcp_write.lock().await;
         if let Some((write, encoder)) = guard.as_mut() {
-            let len = encoder.encode(write, buf).await?;
-            Ok(len)
+            encoder.encode(write, buf).await?;
+            Ok(())
         } else {
             Err(crate::error::Error::RouteNotFound("miss".into()))
         }
@@ -438,7 +439,7 @@ impl TcpPipeWriter {
         &self,
         buf: &[u8],
         addr: A,
-    ) -> crate::error::Result<usize> {
+    ) -> crate::error::Result<()> {
         self.send_to_addr_multi0(buf, addr, None).await
     }
     pub(crate) async fn send_to_addr_multi0<A: Into<SocketAddr>>(
@@ -446,7 +447,7 @@ impl TcpPipeWriter {
         buf: &[u8],
         addr: A,
         ttl: Option<u32>,
-    ) -> crate::error::Result<usize> {
+    ) -> crate::error::Result<()> {
         let index_offset = rand::thread_rng().gen_range(0..self.tcp_multiplexing_limit);
         let route_key = self.multi_connect0(addr.into(), index_offset, ttl).await?;
         self.send_to(buf, &route_key).await
@@ -456,7 +457,7 @@ impl TcpPipeWriter {
         &self,
         buf: &[u8],
         addr: A,
-    ) -> crate::error::Result<usize> {
+    ) -> crate::error::Result<()> {
         let route_key = self.connect_reuse_port(addr.into()).await?;
         self.send_to(buf, &route_key).await
     }
@@ -464,12 +465,12 @@ impl TcpPipeWriter {
         &self,
         buf: &[u8],
         addr: A,
-    ) -> crate::error::Result<usize> {
+    ) -> crate::error::Result<()> {
         let route_key = self.connect(addr.into()).await?;
         self.send_to(buf, &route_key).await
     }
     /// Writing `buf` to the target denoted by `route_key`
-    pub async fn send_to(&self, buf: &[u8], route_key: &RouteKey) -> crate::error::Result<usize> {
+    pub async fn send_to(&self, buf: &[u8], route_key: &RouteKey) -> crate::error::Result<()> {
         match route_key.index() {
             Index::Tcp(index) => {
                 let write_half = self.write_half_collect.get(&index).ok_or_else(|| {
@@ -477,8 +478,29 @@ impl TcpPipeWriter {
                 })?;
                 let mut guard = write_half.lock().await;
                 if let Some((write_half, encoder)) = guard.as_mut() {
-                    let len = encoder.encode(write_half, buf).await?;
-                    Ok(len)
+                    encoder.encode(write_half, buf).await?;
+                    Ok(())
+                } else {
+                    Err(crate::error::Error::RouteNotFound("miss".to_string()))
+                }
+            }
+            _ => Err(crate::error::Error::InvalidProtocol),
+        }
+    }
+    pub async fn send_vectored_to(
+        &self,
+        bufs: &[IoSlice<'_>],
+        route_key: &RouteKey,
+    ) -> crate::error::Result<()> {
+        match route_key.index() {
+            Index::Tcp(index) => {
+                let write_half = self.write_half_collect.get(&index).ok_or_else(|| {
+                    crate::error::Error::RouteNotFound(format!("not found {route_key:?}"))
+                })?;
+                let mut guard = write_half.lock().await;
+                if let Some((write_half, encoder)) = guard.as_mut() {
+                    encoder.encode_vectored(write_half, bufs).await?;
+                    Ok(())
                 } else {
                     Err(crate::error::Error::RouteNotFound("miss".to_string()))
                 }
@@ -551,11 +573,11 @@ pub struct TcpPipeWriterIndex<'a> {
 }
 
 impl<'a> TcpPipeWriterIndex<'a> {
-    pub async fn send(&self, buf: &[u8]) -> anyhow::Result<usize> {
+    pub async fn send(&self, buf: &[u8]) -> anyhow::Result<()> {
         let mut guard = self.shadow.lock().await;
         if let Some((write_half, encoder)) = guard.as_mut() {
-            let len = encoder.encode(write_half, buf).await?;
-            Ok(len)
+            encoder.encode(write_half, buf).await?;
+            Ok(())
         } else {
             Err(anyhow!("miss"))?
         }
@@ -603,9 +625,9 @@ impl Decoder for BytesCodec {
 
 #[async_trait]
 impl Encoder for BytesCodec {
-    async fn encode(&mut self, write: &mut OwnedWriteHalf, data: &[u8]) -> io::Result<usize> {
+    async fn encode(&mut self, write: &mut OwnedWriteHalf, data: &[u8]) -> io::Result<()> {
         write.write_all(data).await?;
-        Ok(data.len())
+        Ok(())
     }
 }
 
@@ -622,11 +644,11 @@ impl Decoder for LengthPrefixedCodec {
 
 #[async_trait]
 impl Encoder for LengthPrefixedCodec {
-    async fn encode(&mut self, write: &mut OwnedWriteHalf, data: &[u8]) -> io::Result<usize> {
+    async fn encode(&mut self, write: &mut OwnedWriteHalf, data: &[u8]) -> io::Result<()> {
         let head: [u8; 4] = (data.len() as u32).to_be_bytes();
         write.write_all(&head).await?;
         write.write_all(data).await?;
-        Ok(data.len())
+        Ok(())
     }
 }
 
@@ -657,7 +679,17 @@ pub trait Decoder: Send + Sync {
 
 #[async_trait]
 pub trait Encoder: Send + Sync {
-    async fn encode(&mut self, write: &mut OwnedWriteHalf, data: &[u8]) -> io::Result<usize>;
+    async fn encode(&mut self, write: &mut OwnedWriteHalf, data: &[u8]) -> io::Result<()>;
+    async fn encode_vectored(
+        &mut self,
+        write: &mut OwnedWriteHalf,
+        bufs: &[IoSlice<'_>],
+    ) -> io::Result<()> {
+        for buf in bufs {
+            self.encode(write, buf).await?
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -708,11 +740,11 @@ mod tests {
 
     #[async_trait]
     impl Encoder for MyCodeC {
-        async fn encode(&mut self, write: &mut OwnedWriteHalf, data: &[u8]) -> io::Result<usize> {
+        async fn encode(&mut self, write: &mut OwnedWriteHalf, data: &[u8]) -> io::Result<()> {
             let head: [u8; 2] = (data.len() as u16).to_be_bytes();
             write.write_all(&head).await?;
             write.write_all(data).await?;
-            Ok(data.len())
+            Ok(())
         }
     }
 }

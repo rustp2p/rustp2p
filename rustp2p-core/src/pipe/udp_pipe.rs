@@ -1,3 +1,4 @@
+use std::io::IoSlice;
 use std::net::SocketAddr;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -240,7 +241,7 @@ impl SocketLayer {
         buf: &[u8],
         addr: SocketAddr,
         index: usize,
-    ) -> crate::error::Result<usize> {
+    ) -> crate::error::Result<()> {
         let key = self.generate_route_key_from_addr(index, addr)?;
         self.send_to(buf, &key).await
     }
@@ -251,7 +252,7 @@ impl SocketLayer {
         buf: &[u8],
         addr: SocketAddr,
         index: usize,
-    ) -> crate::error::Result<usize> {
+    ) -> crate::error::Result<()> {
         let key = self.generate_route_key_from_addr(index, addr)?;
         self.try_send_to(buf, &key)
     }
@@ -297,26 +298,53 @@ impl SocketLayer {
         Ok(ports)
     }
     /// Writing `buf` to the target denoted by `route_key`
-    pub async fn send_to(&self, buf: &[u8], route_key: &RouteKey) -> crate::error::Result<usize> {
+    pub async fn send_to(&self, buf: &[u8], route_key: &RouteKey) -> crate::error::Result<()> {
         let len = self
             .get_udp_from_route(route_key)?
             .send_to(buf, route_key.addr())
             .await?;
-        Ok(len)
+        if len == 0 {
+            return Err(crate::error::Error::Io(std::io::Error::from(
+                std::io::ErrorKind::WriteZero,
+            )));
+        }
+        Ok(())
+    }
+    pub async fn send_vectored_to(
+        &self,
+        bufs: &[IoSlice<'_>],
+        route_key: &RouteKey,
+    ) -> crate::error::Result<()> {
+        let udp = self.get_udp_from_route(route_key)?;
+        for buf in bufs {
+            let len = udp.send_to(buf, route_key.addr()).await?;
+            if len == 0 {
+                return Err(crate::error::Error::Io(std::io::Error::from(
+                    std::io::ErrorKind::WriteZero,
+                )));
+            }
+        }
+
+        Ok(())
     }
     /// Try to write `buf` to the target denoted by `route_key`
-    pub fn try_send_to(&self, buf: &[u8], route_key: &RouteKey) -> crate::error::Result<usize> {
+    pub fn try_send_to(&self, buf: &[u8], route_key: &RouteKey) -> crate::error::Result<()> {
         let len = self
             .get_udp_from_route(route_key)?
             .try_send_to(buf, route_key.addr())?;
-        Ok(len)
+        if len == 0 {
+            return Err(crate::error::Error::Io(std::io::Error::from(
+                std::io::ErrorKind::WriteZero,
+            )));
+        }
+        Ok(())
     }
     /// Writing `buf` to the target denoted by SocketAddr
     pub async fn send_to_addr<A: Into<SocketAddr>>(
         &self,
         buf: &[u8],
         addr: A,
-    ) -> crate::error::Result<usize> {
+    ) -> crate::error::Result<()> {
         self.send_to_addr_via_index(buf, addr.into(), 0).await
     }
     /// Try to write `buf` to the target denoted by SocketAddr
@@ -324,7 +352,7 @@ impl SocketLayer {
         &self,
         buf: &[u8],
         addr: A,
-    ) -> crate::error::Result<usize> {
+    ) -> crate::error::Result<()> {
         self.try_send_to_addr_via_index(buf, addr.into(), 0)
     }
     /// Acquire the PipeWriter by the index
@@ -440,12 +468,12 @@ pub struct UdpPipeWriterIndex<'a> {
 }
 
 impl<'a> UdpPipeWriterIndex<'a> {
-    pub async fn send(&self, buf: &[u8]) -> crate::error::Result<usize> {
+    pub async fn send(&self, buf: &[u8]) -> crate::error::Result<()> {
         self.shadow
             .send_to_addr_via_index(buf, self.addr, self.index)
             .await
     }
-    pub fn try_send(&self, buf: &[u8]) -> crate::error::Result<usize> {
+    pub fn try_send(&self, buf: &[u8]) -> crate::error::Result<()> {
         self.shadow
             .try_send_to_addr_via_index(buf, self.addr, self.index)
     }
@@ -552,13 +580,18 @@ impl UdpPipeLine {
         }
     }
     /// Writing `buf` to the target denoted by `route_key` via this pipeline
-    pub async fn send_to(&self, buf: &[u8], route_key: &RouteKey) -> crate::error::Result<usize> {
+    pub async fn send_to(&self, buf: &[u8], route_key: &RouteKey) -> crate::error::Result<()> {
         if self.index != route_key.index() {
             Err(crate::error::Error::RouteNotFound("mismatch".into()))?
         }
         if let Some(udp) = &self.udp {
             let len = udp.send_to(buf, route_key.addr()).await?;
-            Ok(len)
+            if len == 0 {
+                return Err(crate::error::Error::Io(std::io::Error::from(
+                    std::io::ErrorKind::WriteZero,
+                )));
+            }
+            Ok(())
         } else {
             Err(crate::error::Error::RouteNotFound("miss".into()))
         }

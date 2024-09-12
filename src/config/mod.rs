@@ -1,4 +1,5 @@
 use std::io;
+use std::io::IoSlice;
 use std::net::SocketAddr;
 use std::time::Duration;
 
@@ -11,6 +12,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 
 pub(crate) mod punch_info;
+
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Default)]
 pub enum Model {
     High,
@@ -321,15 +323,18 @@ impl From<TcpPipeConfig> for rust_p2p_core::pipe::config::TcpPipeConfig {
 
 /// Fixed-length prefix encoder/decoder.
 pub(crate) struct LengthPrefixedEncoder {}
+
 pub(crate) struct LengthPrefixedDecoder {
     offset: usize,
     buf: BytesMut,
 }
+
 impl LengthPrefixedEncoder {
     pub(crate) fn new() -> Self {
         Self {}
     }
 }
+
 impl LengthPrefixedDecoder {
     pub(crate) fn new() -> Self {
         Self {
@@ -378,12 +383,12 @@ impl Decoder for LengthPrefixedDecoder {
 
 #[async_trait]
 impl Encoder for LengthPrefixedEncoder {
-    async fn encode(&mut self, write: &mut OwnedWriteHalf, data: &[u8]) -> io::Result<usize> {
+    async fn encode(&mut self, write: &mut OwnedWriteHalf, data: &[u8]) -> io::Result<()> {
         if data.len() > u16::MAX as usize {
             return Err(io::Error::from(io::ErrorKind::OutOfMemory));
         }
         let head = (data.len() as u16).to_be_bytes();
-        let bufs: &[_] = &[io::IoSlice::new(&head), io::IoSlice::new(data)];
+        let bufs: &[_] = &[IoSlice::new(&head), IoSlice::new(data)];
         let len = data.len() + 2;
         let w = write.write_vectored(bufs).await?;
         if w < 2 {
@@ -392,7 +397,70 @@ impl Encoder for LengthPrefixedEncoder {
         } else if w != len {
             write.write_all(&data[w - 2..]).await?
         }
-        Ok(data.len())
+        Ok(())
+    }
+
+    async fn encode_vectored(
+        &mut self,
+        write: &mut OwnedWriteHalf,
+        bufs: &[IoSlice<'_>],
+    ) -> io::Result<()> {
+        let mut heads = Vec::with_capacity(bufs.len());
+        let mut bufs0 = Vec::with_capacity(bufs.len() * 2);
+        let mut total = 0;
+        for buf in bufs {
+            let len = buf.len();
+            if len > u16::MAX as usize {
+                return Err(io::Error::from(io::ErrorKind::OutOfMemory));
+            }
+            total += len;
+            if len == 0 {
+                continue;
+            }
+            let head = (len as u16).to_be_bytes();
+            heads.push(head);
+        }
+        for (index, buf) in bufs.iter().enumerate() {
+            let len = buf.len();
+            if len == 0 {
+                continue;
+            }
+            bufs0.push(IoSlice::new(&heads[index]));
+            bufs0.push(*buf);
+        }
+        let mut index = 0;
+        let mut total_written = 0;
+        loop {
+            let len = write.write_vectored(&bufs0[index..]).await?;
+            if len == 0 {
+                return Err(io::Error::from(io::ErrorKind::WriteZero));
+            }
+            total_written += len;
+            if total_written == total {
+                return Ok(());
+            }
+            let mut written = len;
+            for buf in &bufs0[index..] {
+                if buf.len() > written {
+                    if written != 0 {
+                        index += 1;
+                        total_written += buf.len() - written;
+                        write.write_all(&buf[written..]).await?;
+                        if index == bufs0.len() {
+                            return Ok(());
+                        }
+                    }
+                    if index == bufs0.len() - 1 {
+                        write.write_all(&buf).await?;
+                        return Ok(());
+                    }
+                    break;
+                } else {
+                    index += 1;
+                    written -= buf.len();
+                }
+            }
+        }
     }
 }
 

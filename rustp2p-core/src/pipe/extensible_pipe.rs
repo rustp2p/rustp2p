@@ -1,44 +1,62 @@
 use std::io;
+use std::io::IoSlice;
 use std::net::SocketAddr;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::Poll;
 
 use anyhow::{anyhow, Context};
-use async_trait::async_trait;
 use crossbeam_utils::atomic::AtomicCell;
 use dashmap::DashMap;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::Mutex;
 
 use crate::route::{Index, RouteKey};
 
-#[async_trait]
-pub trait ExtendRead: Send + Sync {
-    async fn read(&mut self, buf: &mut [u8]) -> io::Result<usize>;
-}
-
-#[async_trait]
-pub trait ExtendWrite: Send + Sync {
-    async fn write(&mut self, buf: &[u8]) -> io::Result<usize>;
-}
-
 pub struct ExtensibleReader {
-    read: Box<dyn ExtendRead>,
+    read: Pin<Box<dyn AsyncRead + Send + Sync>>,
 }
 
 #[derive(Clone)]
 pub struct ExtensibleWriter {
-    write: Arc<Mutex<Box<dyn ExtendWrite>>>,
+    write: Arc<Mutex<Pin<Box<dyn AsyncWrite + Send + Sync>>>>,
 }
-
-impl ExtensibleReader {
-    pub async fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        self.read.read(buf).await
+impl AsyncRead for ExtensibleReader {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        self.read.as_mut().poll_read(cx, buf)
     }
 }
+
 impl ExtensibleWriter {
-    pub async fn write(&self, buf: &[u8]) -> io::Result<usize> {
+    pub async fn write(&self, buf: &[u8]) -> io::Result<()> {
         let mut guard = self.write.lock().await;
-        guard.write(buf).await
+        guard.write_all(buf).await
+    }
+    pub async fn write_vectored(&self, bufs: &[IoSlice<'_>]) -> io::Result<()> {
+        let total_len: usize = bufs.iter().map(|b| b.len()).sum();
+        let mut guard = self.write.lock().await;
+
+        let len = guard.write_vectored(bufs).await?;
+        if len == 0 {
+            return Err(io::Error::from(io::ErrorKind::WriteZero));
+        }
+        if len != total_len {
+            let mut index = len;
+            for buf in bufs {
+                if buf.len() > index {
+                    index = 0;
+                    guard.write_all(&buf[index..]).await?
+                } else {
+                    index -= buf.len();
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -121,12 +139,12 @@ impl ExtensiblePipeLine {
             Err(e) => Err(e),
         }
     }
-    pub async fn send_to(&self, buf: &[u8], route_key: &RouteKey) -> crate::error::Result<usize> {
+    pub async fn send_to(&self, buf: &[u8], route_key: &RouteKey) -> crate::error::Result<()> {
         if &self.line_owned.route_key != route_key {
             Err(crate::error::Error::RouteNotFound("mismatch".into()))?
         }
-        let len = self.w.write(buf).await?;
-        Ok(len)
+        self.w.write(buf).await?;
+        Ok(())
     }
 }
 
@@ -209,13 +227,25 @@ impl ExtensiblePipeWriter {
 }
 
 impl ExtensiblePipeWriter {
-    pub async fn send_to(&self, buf: &[u8], route_key: &RouteKey) -> crate::error::Result<usize> {
+    pub async fn send_to(&self, buf: &[u8], route_key: &RouteKey) -> crate::error::Result<()> {
         let w = self
             .write_half_collect
             .get(route_key)
             .ok_or(crate::error::Error::RouteNotFound("".into()))?;
-        let len = w.write(buf).await?;
-        Ok(len)
+        w.write(buf).await?;
+        Ok(())
+    }
+    pub async fn send_vectored_to(
+        &self,
+        bufs: &[IoSlice<'_>],
+        route_key: &RouteKey,
+    ) -> crate::error::Result<()> {
+        let w = self
+            .write_half_collect
+            .get(route_key)
+            .ok_or(crate::error::Error::RouteNotFound("".into()))?;
+        w.write_vectored(bufs).await?;
+        Ok(())
     }
 }
 
