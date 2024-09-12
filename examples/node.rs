@@ -46,9 +46,9 @@ pub async fn main() -> Result<()> {
     let device = tun_rs::create_as_async(
         tun_rs::Configuration::default()
             .address_with_prefix(self_id, mask)
-            .platform_config(|v| {
+            .platform_config(|_v| {
                 #[cfg(windows)]
-                v.ring_capacity(4 * 1024 * 1024);
+                _v.ring_capacity(4 * 1024 * 1024);
             })
             .mtu(1400)
             .up(),
