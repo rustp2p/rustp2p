@@ -17,9 +17,9 @@ use crate::error::{Error, Result};
 use crate::pipe::pipe_context::PipeContext;
 use crate::protocol::broadcast::RangeBroadcastPacket;
 use crate::protocol::id_route::IDRouteReplyPacket;
-use crate::protocol::node_id::NodeID;
+use crate::protocol::node_id::{NodeID, ID_LEN};
 use crate::protocol::protocol_type::ProtocolType;
-use crate::protocol::{broadcast, NetPacket};
+use crate::protocol::{broadcast, NetPacket, HEAD_LEN};
 
 mod maintain;
 mod pipe_context;
@@ -191,19 +191,17 @@ impl PipeWriter {
         } else {
             return Err(Error::NoIDSpecified);
         };
-        let head_reserve = 4 + src_id.len() * 2;
-        self.send_to0(&mut buf[start - head_reserve..end], &src_id, dest_id)
+        self.send_to0(&mut buf[start - HEAD_LEN..end], &src_id, dest_id)
             .await
     }
     async fn send_to0(&self, buf: &mut [u8], src_id: &NodeID, dest_id: &NodeID) -> Result<()> {
         let mut packet = NetPacket::unchecked(buf);
         packet.set_high_flag();
-        if packet.ttl() == 0 || packet.ttl() != packet.first_ttl() {
+        if packet.ttl() == 0 || packet.ttl() != packet.max_ttl() {
             packet.set_ttl(15);
         }
-        packet.set_id_length(src_id.len() as _);
-        packet.set_src_id(src_id)?;
-        packet.set_dest_id(dest_id)?;
+        packet.set_src_id(src_id);
+        packet.set_dest_id(dest_id);
         if dest_id.is_broadcast() {
             self.send_broadcast0(packet.buffer(), src_id).await?;
             return Ok(());
@@ -263,8 +261,8 @@ impl PipeWriter {
             } else {
                 match broadcast::Builder::build_range_broadcast(&list, buf) {
                     Ok(mut packet) => {
-                        packet.set_src_id(src_id)?;
-                        packet.set_dest_id(&broadcast_id)?;
+                        packet.set_src_id(src_id);
+                        packet.set_dest_id(&broadcast_id);
                         if let Err(e) = self.pipe_writer.send_to(packet.buffer(), &route_key).await
                         {
                             log::debug!("send_range_broadcast {e:?} {owner_id:?}");
@@ -279,12 +277,8 @@ impl PipeWriter {
         Ok(())
     }
     /// use [`PipeWriter::send_to()`] head reserve
-    pub fn head_reserve(&self) -> Result<usize> {
-        if let Some(id) = self.pipe_context.load_id() {
-            Ok(4 + id.len() * 2)
-        } else {
-            Err(Error::NoIDSpecified)
-        }
+    pub fn head_reserve(&self) -> usize {
+        4 + ID_LEN * 2
     }
     pub async fn broadcast_packet(&self, packet: &mut SendPacket) -> Result<()> {
         if let Some(src_id) = self.pipe_context.load_id() {
@@ -315,15 +309,14 @@ impl PipeWriter {
         } else {
             return Err(Error::NoIDSpecified);
         };
-        let head_reserve = 4 + src_id.len() * 2;
-        let mut send_packet = SendPacket::new_capacity(head_reserve, head_reserve + payload_size);
+        let mut send_packet = SendPacket::new_capacity(payload_size);
         let mut packet = NetPacket::unchecked(send_packet.buf_mut());
         packet.set_high_flag();
-        packet.set_id_length(src_id.len() as _);
-        packet.set_ttl(15);
-        packet.set_src_id(&src_id)?;
-        packet.set_dest_id(&src_id.unspecified())?;
         packet.set_protocol(protocol_type);
+        packet.set_ttl(15);
+        packet.set_src_id(&src_id);
+        packet.set_dest_id(&src_id.unspecified());
+        packet.reset_data_len();
         Ok(send_packet)
     }
     pub fn shutdown(&self) -> Result<()> {
@@ -405,14 +398,14 @@ impl PipeLine {
     }
     async fn handle<'a>(&mut self, recv_result: RecvResult<'a>) -> Result<Option<HandleResult>> {
         let mut packet = NetPacket::new(recv_result.buf)?;
-        let src_id = NodeID::new(packet.src_id())?;
+        let src_id = NodeID::try_from(packet.src_id())?;
 
         if src_id.is_unspecified() || src_id.is_broadcast() {
             return Err(Error::InvalidArgument("src id is unspecified".into()));
         }
-        let dest_id = NodeID::new(packet.dest_id())?;
+        let dest_id = NodeID::try_from(packet.dest_id())?;
 
-        if packet.first_ttl() < packet.ttl() {
+        if packet.max_ttl() < packet.ttl() {
             return Err(Error::InvalidArgument("ttl error".into()));
         }
 
@@ -422,9 +415,6 @@ impl PipeLine {
         let route_key = recv_result.route_key;
 
         let self_id = if let Some(self_id) = self.pipe_context.load_id() {
-            if self_id.len() != dest_id.len() {
-                return Err(Error::InvalidArgument("id len error".into()));
-            }
             if self_id == src_id {
                 log::debug!("{packet:?}");
                 return Err(Error::InvalidArgument("id loop error".into()));
@@ -439,16 +429,15 @@ impl PipeLine {
         } else {
             return Err(Error::InvalidArgument("self id is none".into()));
         };
-        let id_length = self_id.len();
-        let metric = packet.first_ttl() - packet.ttl() + 1;
+        let metric = packet.max_ttl() - packet.ttl() + 1;
         self.route_table
             .add_route_if_absent(src_id, Route::from_default_rt(route_key, metric));
         match packet.protocol()? {
             ProtocolType::PunchRequest => {
                 packet.set_protocol(ProtocolType::PunchReply);
-                packet.set_ttl(packet.first_ttl());
-                packet.exchange_id();
-                packet.set_src_id(&self_id)?;
+                packet.set_ttl(packet.max_ttl());
+                packet.set_dest_id(&src_id);
+                packet.set_src_id(&self_id);
                 self.send_to_route(packet.buffer(), &route_key).await?;
                 log::debug!("===========PunchRequest {route_key:?} {src_id:?}")
             }
@@ -457,17 +446,17 @@ impl PipeLine {
             }
             ProtocolType::EchoRequest => {
                 packet.set_protocol(ProtocolType::EchoReply);
-                packet.set_ttl(packet.first_ttl());
-                packet.exchange_id();
-                packet.set_src_id(&self_id)?;
+                packet.set_ttl(packet.max_ttl());
+                packet.set_dest_id(&src_id);
+                packet.set_src_id(&self_id);
                 self.send_to_route(packet.buffer(), &route_key).await?;
             }
             ProtocolType::EchoReply => {}
             ProtocolType::TimestampRequest => {
                 packet.set_protocol(ProtocolType::TimestampReply);
-                packet.set_ttl(packet.first_ttl());
-                packet.exchange_id();
-                packet.set_src_id(&self_id)?;
+                packet.set_ttl(packet.max_ttl());
+                packet.set_dest_id(&src_id);
+                packet.set_src_id(&self_id);
                 self.send_to_route(packet.buffer(), &route_key).await?;
             }
             ProtocolType::TimestampReply => {
@@ -500,17 +489,16 @@ impl PipeLine {
                     .map(|(node_id, route)| (node_id, route.metric()))
                     .collect();
                 let mut packet = crate::protocol::id_route::Builder::build_reply(
-                    self_id.len(),
                     &list,
                     query_id,
                     list.len() as _,
                 )?;
-                packet.set_dest_id(&src_id)?;
-                packet.set_src_id(&self_id)?;
+                packet.set_dest_id(&src_id);
+                packet.set_src_id(&self_id);
                 self.send_to_route(packet.buffer(), &route_key).await?;
             }
             ProtocolType::IDRouteReply => {
-                let reply_packet = IDRouteReplyPacket::new(packet.payload(), id_length as _)?;
+                let reply_packet = IDRouteReplyPacket::new(packet.payload())?;
                 let id = reply_packet.query_id();
                 if id != 0 {
                     self.pipe_context.update_direct_node_id(id, src_id);
@@ -525,7 +513,7 @@ impl PipeLine {
             }
             ProtocolType::UserData => {
                 return Ok(Some(HandleResult {
-                    start: packet.head_len(),
+                    start: HEAD_LEN,
                     end: packet.buffer().len(),
                     src_id,
                     dest_id,
@@ -533,13 +521,11 @@ impl PipeLine {
                 }))
             }
             ProtocolType::RangeBroadcast => {
-                let head_len = packet.head_len();
                 let end = packet.buffer().len();
 
-                let broadcast_packet =
-                    RangeBroadcastPacket::new(packet.payload_mut(), id_length as _)?;
+                let broadcast_packet = RangeBroadcastPacket::new(packet.payload_mut())?;
                 let in_packet = NetPacket::new(broadcast_packet.payload())?;
-                let start = head_len + broadcast_packet.head_len() + in_packet.head_len();
+                let start = HEAD_LEN + broadcast_packet.head_len() + HEAD_LEN;
                 let mut broadcast_to_self = false;
 
                 let range_id: Vec<NodeID> = broadcast_packet.iter().collect();

@@ -98,10 +98,7 @@ async fn route_table_heartbeat_request(
     let table = pipe_writer.pipe_writer.route_table().route_table();
     let mut sent_ids = HashSet::with_capacity(table.len());
     for (node_id, routes) in table {
-        if let Err(e) = packet.set_dest_id(&node_id) {
-            log::warn!("route_table_heartbeat_request e={e:?},node_id={node_id:?}");
-            continue;
-        }
+        packet.set_dest_id(&node_id);
         for route in routes {
             if let Err(e) = pipe_writer
                 .send_to_route(packet.buffer(), &route.route_key())
