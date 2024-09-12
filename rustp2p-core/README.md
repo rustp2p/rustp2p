@@ -20,7 +20,7 @@ It's a cross-platform crate
 Add this dependency to your `cargo.toml`
 
 ```toml
-rust-p2p = {version = "0.1"}
+rust-p2p-core = {version = "0.1"}
 ```
 
 # Example
