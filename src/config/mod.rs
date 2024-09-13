@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use crate::pipe::{NodeAddress, PeerNodeAddress};
 use crate::protocol::node_id::NodeID;
+use crate::protocol::{NetPacket, HEAD_LEN};
 use async_trait::async_trait;
 use bytes::{Buf, BytesMut};
 use rust_p2p_core::pipe::tcp_pipe::{Decoder, Encoder, InitCodec};
@@ -325,7 +326,6 @@ impl From<TcpPipeConfig> for rust_p2p_core::pipe::config::TcpPipeConfig {
 pub(crate) struct LengthPrefixedEncoder {}
 
 pub(crate) struct LengthPrefixedDecoder {
-    offset: usize,
     buf: BytesMut,
 }
 
@@ -338,7 +338,6 @@ impl LengthPrefixedEncoder {
 impl LengthPrefixedDecoder {
     pub(crate) fn new() -> Self {
         Self {
-            offset: 0,
             buf: Default::default(),
         }
     }
@@ -347,36 +346,58 @@ impl LengthPrefixedDecoder {
 #[async_trait]
 impl Decoder for LengthPrefixedDecoder {
     async fn decode(&mut self, read: &mut OwnedReadHalf, src: &mut [u8]) -> io::Result<usize> {
-        let len = src.len() + 2;
-        if self.buf.len() < len {
-            self.buf.reserve(len - self.buf.len());
-            unsafe {
-                self.buf.set_len(len);
-            }
+        if src.len() < HEAD_LEN {
+            return Err(io::Error::new(io::ErrorKind::Other, "too short"));
         }
-        while self.offset < 2 {
-            let len = read.read(&mut self.buf[self.offset..]).await?;
-            self.offset += len;
-        }
-        let data_len = ((self.buf[0] as usize) << 8) | self.buf[1] as usize;
-        if data_len > src.len() {
-            return Err(io::Error::from(io::ErrorKind::OutOfMemory));
-        }
-        let len = data_len + 2;
+        let mut offset = 0;
         loop {
-            if len == self.offset {
-                src[..data_len].copy_from_slice(&self.buf[2..len]);
-                self.offset = 0;
-                return Ok(data_len);
+            if self.buf.is_empty() {
+                let len = read.read(&mut src[offset..]).await?;
+                offset += len;
+                if offset < HEAD_LEN {
+                    continue;
+                }
+                let packet = NetPacket::unchecked(&src);
+                let data_length = packet.data_length() as usize;
+                if data_length > src.len() {
+                    return Err(io::Error::new(io::ErrorKind::Other, "too short"));
+                }
+                if data_length == offset {
+                    return Ok(data_length);
+                } else if data_length > offset {
+                    continue;
+                } else {
+                    self.buf.extend_from_slice(&src[data_length..offset]);
+                    return Ok(data_length);
+                }
+            } else {
+                let len = self.buf.len();
+                if len < HEAD_LEN {
+                    src[..len].copy_from_slice(self.buf.as_ref());
+                    offset += len;
+                    self.buf.clear();
+                    continue;
+                }
+                let packet = NetPacket::unchecked(self.buf.as_ref());
+                let data_length = packet.data_length() as usize;
+                if data_length > src.len() {
+                    return Err(io::Error::new(io::ErrorKind::Other, "too short"));
+                }
+                if data_length > len {
+                    src[..len].copy_from_slice(self.buf.as_ref());
+                    offset += len;
+                    self.buf.clear();
+                    continue;
+                } else {
+                    src[..data_length].copy_from_slice(&self.buf[..data_length]);
+                    if data_length == len {
+                        self.buf.clear();
+                    } else {
+                        self.buf.advance(data_length);
+                    }
+                    return Ok(data_length);
+                }
             }
-            if len < self.offset {
-                src[..data_len].copy_from_slice(&self.buf[2..len]);
-                self.buf.advance(len);
-                self.offset -= len;
-                return Ok(data_len);
-            }
-            let len = read.read(&mut self.buf[self.offset..]).await?;
-            self.offset += len;
         }
     }
 }
@@ -384,20 +405,12 @@ impl Decoder for LengthPrefixedDecoder {
 #[async_trait]
 impl Encoder for LengthPrefixedEncoder {
     async fn encode(&mut self, write: &mut OwnedWriteHalf, data: &[u8]) -> io::Result<()> {
-        if data.len() > u16::MAX as usize {
-            return Err(io::Error::from(io::ErrorKind::OutOfMemory));
+        let len = data.len();
+        let packet = NetPacket::unchecked(data);
+        if packet.data_length() as usize != len {
+            return Ok(());
         }
-        let head = (data.len() as u16).to_be_bytes();
-        let bufs: &[_] = &[IoSlice::new(&head), IoSlice::new(data)];
-        let len = data.len() + 2;
-        let w = write.write_vectored(bufs).await?;
-        if w < 2 {
-            write.write_all(&head[w..]).await?;
-            write.write_all(data).await?;
-        } else if w != len {
-            write.write_all(&data[w - 2..]).await?
-        }
-        Ok(())
+        write.write_all(data).await
     }
 
     async fn encode_vectored(
@@ -405,33 +418,11 @@ impl Encoder for LengthPrefixedEncoder {
         write: &mut OwnedWriteHalf,
         bufs: &[IoSlice<'_>],
     ) -> io::Result<()> {
-        let mut heads = Vec::with_capacity(bufs.len());
-        let mut bufs0 = Vec::with_capacity(bufs.len() * 2);
-        let mut total = 0;
-        for buf in bufs {
-            let len = buf.len();
-            if len > u16::MAX as usize {
-                return Err(io::Error::from(io::ErrorKind::OutOfMemory));
-            }
-            total += len;
-            if len == 0 {
-                continue;
-            }
-            let head = (len as u16).to_be_bytes();
-            heads.push(head);
-        }
-        for (index, buf) in bufs.iter().enumerate() {
-            let len = buf.len();
-            if len == 0 {
-                continue;
-            }
-            bufs0.push(IoSlice::new(&heads[index]));
-            bufs0.push(*buf);
-        }
         let mut index = 0;
         let mut total_written = 0;
+        let total: usize = bufs.iter().map(|v| v.len()).sum();
         loop {
-            let len = write.write_vectored(&bufs0[index..]).await?;
+            let len = write.write_vectored(&bufs[index..]).await?;
             if len == 0 {
                 return Err(io::Error::from(io::ErrorKind::WriteZero));
             }
@@ -440,17 +431,17 @@ impl Encoder for LengthPrefixedEncoder {
                 return Ok(());
             }
             let mut written = len;
-            for buf in &bufs0[index..] {
+            for buf in &bufs[index..] {
                 if buf.len() > written {
                     if written != 0 {
                         index += 1;
                         total_written += buf.len() - written;
                         write.write_all(&buf[written..]).await?;
-                        if index == bufs0.len() {
+                        if index == bufs.len() {
                             return Ok(());
                         }
                     }
-                    if index == bufs0.len() - 1 {
+                    if index == bufs.len() - 1 {
                         write.write_all(&buf).await?;
                         return Ok(());
                     }

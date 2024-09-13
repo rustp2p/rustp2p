@@ -141,6 +141,7 @@ impl Builder {
 
         packet.set_protocol(ProtocolType::IDRouteReply);
         packet.set_ttl(15);
+        packet.reset_data_len();
         let payload = packet.payload_mut();
         let id_num = list.len();
         let metric_len = id_num / 2 + if id_num & 0b1 == 0b1 { 1 } else { 0 };

@@ -47,7 +47,11 @@ impl<B: AsRef<[u8]>> NetPacket<B> {
                 required: 16,
             });
         }
-        Ok(Self::unchecked(buffer))
+        let packet = Self::unchecked(buffer);
+        if packet.data_length() as usize != len {
+            return Err(Error::InvalidArgument("packet len invalid".into()));
+        }
+        Ok(packet)
     }
     pub fn protocol(&self) -> Result<ProtocolType> {
         (self.buffer.as_ref()[0] & 0x7F).try_into()

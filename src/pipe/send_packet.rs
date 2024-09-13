@@ -1,6 +1,6 @@
 use std::ops::{Deref, DerefMut};
 
-use crate::protocol::HEAD_LEN;
+use crate::protocol::{NetPacket, HEAD_LEN};
 
 pub struct SendPacket {
     buf: Vec<u8>,
@@ -29,6 +29,8 @@ impl SendPacket {
         let len = HEAD_LEN + payload_len;
         assert!(self.buf.len() >= len);
         self.len = len;
+        let mut packet = NetPacket::unchecked(self.buf_mut());
+        packet.reset_data_len();
     }
     pub(crate) fn buf_mut(&mut self) -> &mut [u8] {
         &mut self.buf[..self.len]

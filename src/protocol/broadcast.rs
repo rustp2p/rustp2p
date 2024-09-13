@@ -121,6 +121,7 @@ impl Builder {
         packet.set_high_flag();
         packet.set_protocol(ProtocolType::RangeBroadcast);
         packet.set_ttl(1);
+        packet.reset_data_len();
         let packet_payload = packet.payload_mut();
         packet_payload[0] = list.len() as u8;
         for (index, id) in list.iter().enumerate() {
