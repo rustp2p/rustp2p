@@ -1,5 +1,6 @@
 use std::net::Ipv4Addr;
 
+#[repr(transparent)]
 #[derive(Hash, Eq, PartialEq, Ord, PartialOrd, Copy, Clone, Debug)]
 pub struct NodeID([u8; 4]);
 pub const ID_LEN: usize = 4;
@@ -11,10 +12,10 @@ impl AsRef<[u8]> for NodeID {
 }
 
 impl NodeID {
-    pub fn broadcast(&self) -> NodeID {
+    pub fn broadcast() -> NodeID {
         NodeID([255u8; 4])
     }
-    pub fn unspecified(&self) -> NodeID {
+    pub fn unspecified() -> NodeID {
         NodeID([0u8; 4])
     }
     pub fn is_unspecified(&self) -> bool {

@@ -125,7 +125,7 @@ impl<B: AsRef<[u8]>> Debug for NetPacket<B> {
             return f.write_str("Invalid Protocol Buffer");
         }
         let data_len = self.data_length();
-        let high = buf[0]>>7;
+        let high = buf[0] >> 7;
         let ttl = buf[3];
         let src_id = format!("{:?}", self.src_id());
         let dest_id = format!("{:?}", self.dest_id());

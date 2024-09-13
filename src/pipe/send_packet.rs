@@ -1,5 +1,6 @@
 use std::ops::{Deref, DerefMut};
 
+use crate::protocol::node_id::NodeID;
 use crate::protocol::{NetPacket, HEAD_LEN};
 
 pub struct SendPacket {
@@ -13,11 +14,22 @@ impl SendPacket {
         unsafe {
             buf.set_len(HEAD_LEN + capacity);
         }
+        let mut packet = NetPacket::unchecked(&mut buf);
+        packet.set_high_flag();
+        packet.set_ttl(15);
         Self { buf, len: HEAD_LEN }
     }
     pub fn set_ttl(&mut self, ttl: u8) {
         let ttl = ttl & 0xF;
         self.buf[3] = (ttl << 4) | ttl
+    }
+    pub fn set_dest_id(&mut self, id: &NodeID) {
+        let mut packet = NetPacket::unchecked(self.buf_mut());
+        packet.set_dest_id(id);
+    }
+    pub fn set_src_id(&mut self, id: &NodeID) {
+        let mut packet = NetPacket::unchecked(self.buf_mut());
+        packet.set_src_id(id);
     }
     pub fn data(&self) -> &[u8] {
         &self.buf[HEAD_LEN..]
