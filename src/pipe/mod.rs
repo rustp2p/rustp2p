@@ -1,10 +1,11 @@
 use std::collections::HashMap;
+use std::io::IoSlice;
 use std::net::SocketAddr;
 use std::time::UNIX_EPOCH;
 
 use async_shutdown::ShutdownManager;
 use rust_p2p_core::route::route_table::RouteTable;
-use rust_p2p_core::route::{ConnectProtocol, Route, RouteKey};
+use rust_p2p_core::route::{Route, RouteKey};
 use tokio::sync::mpsc::Sender;
 
 pub use pipe_context::NodeAddress;
@@ -17,7 +18,7 @@ use crate::error::{Error, Result};
 use crate::pipe::pipe_context::PipeContext;
 use crate::protocol::broadcast::RangeBroadcastPacket;
 use crate::protocol::id_route::IDRouteReplyPacket;
-use crate::protocol::node_id::{NodeID, ID_LEN};
+use crate::protocol::node_id::NodeID;
 use crate::protocol::protocol_type::ProtocolType;
 use crate::protocol::{broadcast, NetPacket, HEAD_LEN};
 
@@ -168,76 +169,59 @@ impl PipeWriter {
     pub fn pipe_context(&self) -> &PipeContext {
         &self.pipe_context
     }
+    pub(crate) async fn send_to_id<B: AsRef<[u8]>>(
+        &self,
+        buf: &NetPacket<B>,
+        id: &NodeID,
+    ) -> Result<()> {
+        self.pipe_writer.send_to_id(buf.buffer(), id).await?;
+        Ok(())
+    }
     pub(crate) async fn send_to_route(&self, buf: &[u8], route_key: &RouteKey) -> Result<()> {
         self.pipe_writer.send_to(buf, route_key).await?;
         Ok(())
     }
-    /// user data is `buf[start..end]`,
-    ///
-    ///  # Panics
-    /// Panics if dst buffer is too small.
-    /// Need to ensure that start>=head_reserve .
-    ///
-    /// [`PipeWriter::head_reserve()`]
-    pub async fn send_to(
+    async fn send_to0(&self, buf: &[u8], src_id: &NodeID, dest_id: &NodeID) -> Result<()> {
+        if dest_id.is_broadcast() {
+            self.send_broadcast0(buf, src_id).await;
+            return Ok(());
+        }
+
+        if let Ok(route) = self.pipe_writer.route_table().get_route_by_id(dest_id) {
+            self.pipe_writer.send_to(buf, &route.route_key()).await?
+        } else if let Some(turn_id) = self.pipe_context().reachable_node(dest_id) {
+            self.pipe_writer.send_to_id(buf, &turn_id).await?
+        } else {
+            Err(Error::NodeIDNotAvailable)?
+        };
+        Ok(())
+    }
+    async fn send_vectored_to0(
         &self,
-        buf: &mut [u8],
-        start: usize,
-        end: usize,
+        bufs: &[IoSlice<'_>],
+        src_id: &NodeID,
         dest_id: &NodeID,
     ) -> Result<()> {
-        let src_id = if let Some(src_id) = self.pipe_context.load_id() {
-            src_id
-        } else {
-            return Err(Error::NoIDSpecified);
-        };
-        self.send_to0(&mut buf[start - HEAD_LEN..end], &src_id, dest_id)
-            .await
-    }
-    async fn send_to0(&self, buf: &mut [u8], src_id: &NodeID, dest_id: &NodeID) -> Result<()> {
-        let mut packet = NetPacket::unchecked(buf);
-        packet.set_high_flag();
-        if packet.ttl() == 0 || packet.ttl() != packet.max_ttl() {
-            packet.set_ttl(15);
-        }
-        packet.set_src_id(src_id);
-        packet.set_dest_id(dest_id);
-        packet.reset_data_len();
         if dest_id.is_broadcast() {
-            self.send_broadcast0(packet.buffer(), src_id).await?;
+            for buf in bufs {
+                self.send_broadcast0(buf.as_ref(), src_id).await;
+            }
             return Ok(());
         }
 
         if let Ok(route) = self.pipe_writer.route_table().get_route_by_id(dest_id) {
             self.pipe_writer
-                .send_to(packet.buffer(), &route.route_key())
+                .send_vectored_to(bufs, &route.route_key())
                 .await?
         } else if let Some(turn_id) = self.pipe_context().reachable_node(dest_id) {
-            self.pipe_writer
-                .send_to_id(packet.buffer(), &turn_id)
-                .await?
-        } else if let Some(addr) = self.pipe_context().default_route() {
-            // default route
-            match addr {
-                NodeAddress::Tcp(addr) => {
-                    self.pipe_writer
-                        .send_to_addr(ConnectProtocol::TCP, packet.buffer(), addr)
-                        .await?
-                }
-                NodeAddress::Udp(addr) => {
-                    self.pipe_writer
-                        .send_to_addr(ConnectProtocol::TCP, packet.buffer(), addr)
-                        .await?
-                }
-            }
+            self.pipe_writer.send_vectored_to_id(bufs, &turn_id).await?
         } else {
             Err(Error::NodeIDNotAvailable)?
         };
-
         Ok(())
     }
-    async fn send_broadcast0(&self, buf: &[u8], src_id: &NodeID) -> Result<()> {
-        let broadcast_id = src_id.broadcast();
+    async fn send_broadcast0(&self, buf: &[u8], src_id: &NodeID) {
+        let broadcast_id = NodeID::broadcast();
         let route_table = self.pipe_writer.route_table();
         let table = route_table.route_table_one();
         let mut map: HashMap<NodeID, (Vec<NodeID>, RouteKey)> = HashMap::new();
@@ -275,15 +259,13 @@ impl PipeWriter {
                 }
             }
         }
-        Ok(())
     }
-    /// use [`PipeWriter::send_to()`] head reserve
-    pub fn head_reserve(&self) -> usize {
-        4 + ID_LEN * 2
-    }
+
     pub async fn broadcast_packet(&self, packet: &mut SendPacket) -> Result<()> {
         if let Some(src_id) = self.pipe_context.load_id() {
-            self.send_to0(packet.buf_mut(), &src_id, &src_id.broadcast())
+            packet.set_src_id(&src_id);
+            packet.set_dest_id(&NodeID::broadcast());
+            self.send_to0(packet.buf_mut(), &src_id, &NodeID::broadcast())
                 .await?;
             Ok(())
         } else {
@@ -292,7 +274,25 @@ impl PipeWriter {
     }
     pub async fn send_to_packet(&self, packet: &mut SendPacket, dest_id: &NodeID) -> Result<()> {
         if let Some(src_id) = self.pipe_context.load_id() {
+            packet.set_src_id(&src_id);
+            packet.set_dest_id(dest_id);
             self.send_to0(packet.buf_mut(), &src_id, dest_id).await
+        } else {
+            Err(Error::NoIDSpecified)
+        }
+    }
+    pub async fn send_vectored_to_packet(
+        &self,
+        packets: &mut [&mut SendPacket],
+        dest_id: &NodeID,
+    ) -> Result<()> {
+        if let Some(src_id) = self.pipe_context.load_id() {
+            for packet in packets.iter_mut() {
+                packet.set_src_id(&src_id);
+                packet.set_dest_id(dest_id);
+            }
+            let bufs: Vec<IoSlice> = packets.iter().map(|v| IoSlice::new(v.buf())).collect();
+            self.send_vectored_to0(&bufs, &src_id, dest_id).await
         } else {
             Err(Error::NoIDSpecified)
         }
@@ -316,7 +316,7 @@ impl PipeWriter {
         packet.set_protocol(protocol_type);
         packet.set_ttl(15);
         packet.set_src_id(&src_id);
-        packet.set_dest_id(&src_id.unspecified());
+        packet.set_dest_id(&NodeID::unspecified());
         packet.reset_data_len();
         Ok(send_packet)
     }
@@ -387,15 +387,10 @@ impl PipeLine {
         buf: &NetPacket<B>,
         id: &NodeID,
     ) -> Result<()> {
-        self.pipe_writer
-            .pipe_writer
-            .send_to_id(buf.buffer(), id)
-            .await?;
-        Ok(())
+        self.pipe_writer.send_to_id(buf, id).await
     }
     pub(crate) async fn send_to_route(&self, buf: &[u8], route_key: &RouteKey) -> Result<()> {
-        self.pipe_writer.pipe_writer.send_to(buf, route_key).await?;
-        Ok(())
+        self.pipe_writer.send_to_route(buf, route_key).await
     }
     async fn handle<'a>(&mut self, recv_result: RecvResult<'a>) -> Result<Option<HandleResult>> {
         let mut packet = NetPacket::new(recv_result.buf)?;
