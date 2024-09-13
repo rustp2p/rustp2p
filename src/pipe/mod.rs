@@ -202,6 +202,7 @@ impl PipeWriter {
         }
         packet.set_src_id(src_id);
         packet.set_dest_id(dest_id);
+        packet.reset_data_len();
         if dest_id.is_broadcast() {
             self.send_broadcast0(packet.buffer(), src_id).await?;
             return Ok(());
