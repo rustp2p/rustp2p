@@ -121,10 +121,11 @@ impl<B: AsRef<[u8]> + AsMut<[u8]>> NetPacket<B> {
 impl<B: AsRef<[u8]>> Debug for NetPacket<B> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let buf = self.buffer();
-        if buf.len() < 4 {
+        if buf.len() < HEAD_LEN {
             return f.write_str("Invalid Protocol Buffer");
         }
         let data_len = self.data_length();
+        let high = buf[0]>>7;
         let ttl = buf[3];
         let src_id = format!("{:?}", self.src_id());
         let dest_id = format!("{:?}", self.dest_id());
@@ -138,7 +139,7 @@ impl<B: AsRef<[u8]>> Debug for NetPacket<B> {
    0                                           15                                               31
    0  1  2  3  4  5  6  7  8  9  0  1  2  3  4  5  6  7  8  9  0  1  2  3  4  5  6  7  8  9  0  1
   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-  |1|   {0:^14}  |       {1:^30}      |   {2:^9} | {3:^9}   |
+  |{high}|   {0:^14}  |       {1:^30}      |   {2:^9} | {3:^9}   |
   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
   |                                       reserve(32)                                           |
   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
@@ -169,7 +170,7 @@ mod test {
     #[test]
     fn test_build() {
         let mut buf = [0u8; 20];
-        let mut packet = NetPacket::new(&mut buf).unwrap();
+        let mut packet = NetPacket::unchecked(&mut buf);
         packet.set_ttl(2);
         packet.reset_data_len();
         packet.set_src_id(&3.into());
