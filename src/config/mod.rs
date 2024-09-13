@@ -408,7 +408,7 @@ impl Encoder for LengthPrefixedEncoder {
         let len = data.len();
         let packet = NetPacket::unchecked(data);
         if packet.data_length() as usize != len {
-            return Ok(());
+            return Err(io::Error::from(io::ErrorKind::InvalidData));
         }
         write.write_all(data).await
     }
