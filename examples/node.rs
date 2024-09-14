@@ -130,10 +130,7 @@ async fn recv(
     mut _pipe_wirter: PipeWriter,
 ) {
     loop {
-        let mut buf = Vec::with_capacity(2048);
-        unsafe {
-            buf.set_len(2048);
-        }
+        let mut buf = vec![0u8; 2048];
         let rs = match line.recv_from(&mut buf).await {
             Ok(rs) => rs,
             Err(e) => {
@@ -152,11 +149,7 @@ async fn recv(
         log::info!(
             "recv from route_key: {:?} is_relay:{}",
             handle_rs.route_key,
-            if (net_pkt.max_ttl() - net_pkt.ttl()) != 0 {
-                true
-            } else {
-                false
-            }
+            (net_pkt.max_ttl() - net_pkt.ttl()) != 0
         );
         let payload = &buf[handle_rs.start..handle_rs.end];
         if let Some(ip_pkt) = pnet_packet::ipv4::Ipv4Packet::new(payload) {
