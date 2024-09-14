@@ -28,6 +28,7 @@ struct Args {
     #[arg(short, long)]
     local: String,
     /// Listen local port
+    #[arg(short, long)]
     port: Option<u16>,
 }
 
