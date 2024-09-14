@@ -228,7 +228,7 @@ impl ExtensiblePipeWriter {
         w.write_all(buf).await?;
         Ok(())
     }
-    pub async fn send_vectored_to(
+    pub async fn send_multiple_to(
         &self,
         bufs: &[IoSlice<'_>],
         route_key: &RouteKey,

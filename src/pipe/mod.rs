@@ -196,7 +196,7 @@ impl PipeWriter {
         };
         Ok(())
     }
-    async fn send_vectored_to0(
+    async fn send_multiple_to0(
         &self,
         bufs: &[IoSlice<'_>],
         src_id: &NodeID,
@@ -211,10 +211,10 @@ impl PipeWriter {
 
         if let Ok(route) = self.pipe_writer.route_table().get_route_by_id(dest_id) {
             self.pipe_writer
-                .send_vectored_to(bufs, &route.route_key())
+                .send_multiple_to(bufs, &route.route_key())
                 .await?
         } else if let Some(turn_id) = self.pipe_context().reachable_node(dest_id) {
-            self.pipe_writer.send_vectored_to_id(bufs, &turn_id).await?
+            self.pipe_writer.send_multiple_to_id(bufs, &turn_id).await?
         } else {
             Err(Error::NodeIDNotAvailable)?
         };
@@ -281,7 +281,7 @@ impl PipeWriter {
             Err(Error::NoIDSpecified)
         }
     }
-    pub async fn send_vectored_to_packet(
+    pub async fn send_multiple_to_packet(
         &self,
         packets: &mut [&mut SendPacket],
         dest_id: &NodeID,
@@ -292,7 +292,7 @@ impl PipeWriter {
                 packet.set_dest_id(dest_id);
             }
             let bufs: Vec<IoSlice> = packets.iter().map(|v| IoSlice::new(v.buf())).collect();
-            self.send_vectored_to0(&bufs, &src_id, dest_id).await
+            self.send_multiple_to0(&bufs, &src_id, dest_id).await
         } else {
             Err(Error::NoIDSpecified)
         }

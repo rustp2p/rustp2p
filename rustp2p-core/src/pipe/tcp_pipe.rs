@@ -487,7 +487,7 @@ impl TcpPipeWriter {
             _ => Err(crate::error::Error::InvalidProtocol),
         }
     }
-    pub async fn send_vectored_to(
+    pub async fn send_multiple_to(
         &self,
         bufs: &[IoSlice<'_>],
         route_key: &RouteKey,
@@ -499,7 +499,7 @@ impl TcpPipeWriter {
                 })?;
                 let mut guard = write_half.lock().await;
                 if let Some((write_half, encoder)) = guard.as_mut() {
-                    encoder.encode_vectored(write_half, bufs).await?;
+                    encoder.encode_multiple(write_half, bufs).await?;
                     Ok(())
                 } else {
                     Err(crate::error::Error::RouteNotFound("miss".to_string()))
@@ -680,7 +680,7 @@ pub trait Decoder: Send + Sync {
 #[async_trait]
 pub trait Encoder: Send + Sync {
     async fn encode(&mut self, write: &mut OwnedWriteHalf, data: &[u8]) -> io::Result<()>;
-    async fn encode_vectored(
+    async fn encode_multiple(
         &mut self,
         write: &mut OwnedWriteHalf,
         bufs: &[IoSlice<'_>],

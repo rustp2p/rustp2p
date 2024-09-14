@@ -212,7 +212,7 @@ impl<PeerID> PipeWriter<PeerID> {
         }
         Err(crate::error::Error::InvalidProtocol)
     }
-    pub async fn send_vectored_to(
+    pub async fn send_multiple_to(
         &self,
         bufs: &[IoSlice<'_>],
         route_key: &RouteKey,
@@ -220,17 +220,17 @@ impl<PeerID> PipeWriter<PeerID> {
         match route_key.protocol() {
             ConnectProtocol::UDP => {
                 if let Some(w) = self.udp_pipe_writer.as_ref() {
-                    return w.send_vectored_to(bufs, route_key).await;
+                    return w.send_multiple_to(bufs, route_key).await;
                 }
             }
             ConnectProtocol::TCP => {
                 if let Some(w) = self.tcp_pipe_writer.as_ref() {
-                    return w.send_vectored_to(bufs, route_key).await;
+                    return w.send_multiple_to(bufs, route_key).await;
                 }
             }
             ConnectProtocol::Extend => {
                 if let Some(w) = self.extensible_pipe_writer.as_ref() {
-                    return w.send_vectored_to(bufs, route_key).await;
+                    return w.send_multiple_to(bufs, route_key).await;
                 }
             }
         }
@@ -266,13 +266,13 @@ impl<PeerID: Hash + Eq> PipeWriter<PeerID> {
         let route = self.route_table.get_route_by_id(peer_id)?;
         self.send_to(buf, &route.route_key()).await
     }
-    pub async fn send_vectored_to_id(
+    pub async fn send_multiple_to_id(
         &self,
         bufs: &[IoSlice<'_>],
         peer_id: &PeerID,
     ) -> crate::error::Result<()> {
         let route = self.route_table.get_route_by_id(peer_id)?;
-        self.send_vectored_to(bufs, &route.route_key()).await
+        self.send_multiple_to(bufs, &route.route_key()).await
     }
 }
 

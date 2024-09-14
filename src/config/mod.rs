@@ -413,7 +413,7 @@ impl Encoder for LengthPrefixedEncoder {
         write.write_all(data).await
     }
 
-    async fn encode_vectored(
+    async fn encode_multiple(
         &mut self,
         write: &mut OwnedWriteHalf,
         bufs: &[IoSlice<'_>],
