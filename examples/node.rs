@@ -161,9 +161,8 @@ async fn recv(
         let payload = &buf[handle_rs.start..handle_rs.end];
         if let Some(ip_pkt) = pnet_packet::ipv4::Ipv4Packet::new(payload) {
             log::info!(
-                "read pkt from peer: {:?}, payload:{:?}",
+                "read pkt from peer: {:?}",
                 ip_pkt,
-                ip_pkt.payload()
             );
         }
         if is_icmp_request(payload).await {
