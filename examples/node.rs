@@ -160,10 +160,7 @@ async fn recv(
         );
         let payload = &buf[handle_rs.start..handle_rs.end];
         if let Some(ip_pkt) = pnet_packet::ipv4::Ipv4Packet::new(payload) {
-            log::info!(
-                "read pkt from peer: {:?}",
-                ip_pkt,
-            );
+            log::info!("read pkt from peer: {:?}", ip_pkt,);
         }
         if is_icmp_request(payload).await {
             if let Err(err) = process_icmp(payload, &mut _pipe_wirter).await {
