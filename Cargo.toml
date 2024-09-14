@@ -4,6 +4,7 @@ version = "0.1.1"
 edition = "2021"
 license = "Apache-2.0"
 readme = "README.md"
+description = "A decentralized p2p library powered by Rust, which is devoted to simple use. "
 repository = "https://github.com/rustp2p/rustp2p"
 
 [dependencies]
