@@ -48,6 +48,12 @@ pub async fn main() -> Result<()> {
             addrs.push(addr.parse::<PeerNodeAddress>().expect("--peer"))
         }
     }
+    let (tx, mut quit) = tokio::sync::mpsc::channel::<()>(1);
+
+    ctrlc2::set_async_handler(async move {
+        tx.send(()).await.expect("Signal error");
+    })
+    .await;
     let device = tun_rs::create_as_async(
         tun_rs::Configuration::default()
             .address_with_prefix(self_id, mask)
@@ -78,7 +84,7 @@ pub async fn main() -> Result<()> {
 
     let mut pipe = Pipe::new(config).await?;
     let writer = pipe.writer();
-    //let shutdown_writer = writer.clone();
+    let shutdown_writer = writer.clone();
     let device_r = device.clone();
     let (sender1, mut receiver1) = channel::<(Vec<u8>, usize, usize)>(128);
     let (sender2, mut receiver2) = channel(128);
@@ -100,15 +106,21 @@ pub async fn main() -> Result<()> {
             }
         }
     });
-    log::info!("listen {port}");
-    // tokio::spawn(async move{
-    // 	tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-    // 	_ = shutdown_writer.shutdown();
-    // });
-    loop {
-        let line = pipe.accept().await?;
-        tokio::spawn(recv(line, sender1.clone()));
-    }
+    log::info!("listen local port: {port}");
+
+    tokio::spawn(async move {
+        loop {
+            let line = pipe.accept().await?;
+            tokio::spawn(recv(line, sender1.clone()));
+        }
+        #[allow(unreachable_code)]
+        Ok::<(), Error>(())
+    });
+
+    quit.recv().await.expect("quit error");
+    _ = shutdown_writer.shutdown();
+    log::info!("exit!!!!");
+    Ok(())
 }
 async fn recv(mut line: PipeLine, sender: Sender<(Vec<u8>, usize, usize)>) {
     loop {

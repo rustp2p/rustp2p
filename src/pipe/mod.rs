@@ -118,7 +118,7 @@ impl Pipe {
             .wrap_cancel(async move { while join_set.join_next().await.is_some() {} });
         tokio::spawn(async move {
             if fut.await.is_err() {
-                log::info!("maintain tasks are shutdown");
+                log::debug!("recv shutdown signal: built-in maintain tasks are shutdown");
             }
         });
         Ok(Self {
