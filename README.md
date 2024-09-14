@@ -1,7 +1,7 @@
 A decentralized p2p library powered by Rust, which is devoted to simple use. 
 
-[![Crates.io](https://img.shields.io/crates/v/rust-p2p.svg)](https://crates.io/crates/rust-p2p)
-![rust-p2p](https://docs.rs/rust-p2p/badge.svg)
+[![Crates.io](https://img.shields.io/crates/v/rustp2p.svg)](https://crates.io/crates/rustp2p)
+![rustp2p](https://docs.rs/rustp2p/badge.svg)
 
 ### Features
 1.  UDP hole punching for both Cone and Symmetric Nat
