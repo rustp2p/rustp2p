@@ -159,6 +159,10 @@ async fn recv(
             }
         );
         let payload = &buf[handle_rs.start..handle_rs.end];
+        log::info!(
+            "read pkt from peer: {:?}",
+            pnet_packet::ipv4::Ipv4Packet::new(payload)
+        );
         if is_icmp_request(payload).await {
             if let Err(err) = process_icmp(payload, &mut _pipe_wirter).await {
                 log::error!("reply icmp error: {err:?}");
