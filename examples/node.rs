@@ -171,6 +171,7 @@ async fn tun_recv(
     }
 }
 
+#[allow(dead_code)]
 async fn process_myself(payload: &[u8], device: &Arc<AsyncDevice>) -> Result<()> {
     if let Some(ip_packet) = pnet_packet::ipv4::Ipv4Packet::new(payload) {
         match ip_packet.get_next_level_protocol() {
@@ -179,9 +180,10 @@ async fn process_myself(payload: &[u8], device: &Arc<AsyncDevice>) -> Result<()>
                     .ok_or(std::io::Error::other("invalid icmp packet"))?;
                 if IcmpTypes::EchoRequest == icmp_pkt.get_icmp_type() {
                     let mut v = ip_packet.payload().to_owned();
-                    let mut pkkt = pnet_packet::icmp::MutableIcmpPacket::new(&mut v[..]).unwrap();
-                    pkkt.set_icmp_type(IcmpTypes::EchoReply);
-                    pkkt.set_checksum(pnet_packet::icmp::checksum(&pkkt.to_immutable()));
+                    let mut icmp_new =
+                        pnet_packet::icmp::MutableIcmpPacket::new(&mut v[..]).unwrap();
+                    icmp_new.set_icmp_type(IcmpTypes::EchoReply);
+                    icmp_new.set_checksum(pnet_packet::icmp::checksum(&icmp_new.to_immutable()));
                     let len = ip_packet.packet().len();
                     let mut buf = vec![0u8; len];
                     let mut res = pnet_packet::ipv4::MutableIpv4Packet::new(&mut buf).unwrap();
