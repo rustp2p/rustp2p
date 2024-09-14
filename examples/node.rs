@@ -111,7 +111,8 @@ pub async fn main() -> Result<()> {
     tokio::spawn(async move {
         loop {
             let line = pipe.accept().await?;
-            tokio::spawn(recv(line, sender1.clone()));
+            let writer = pipe.writer();
+            tokio::spawn(recv(line, sender1.clone(), writer));
         }
         #[allow(unreachable_code)]
         Ok::<(), Error>(())
@@ -122,7 +123,11 @@ pub async fn main() -> Result<()> {
     log::info!("exit!!!!");
     Ok(())
 }
-async fn recv(mut line: PipeLine, sender: Sender<(Vec<u8>, usize, usize)>) {
+async fn recv(
+    mut line: PipeLine,
+    sender: Sender<(Vec<u8>, usize, usize)>,
+    mut _pipe_wirter: PipeWriter,
+) {
     loop {
         let mut buf = Vec::with_capacity(2048);
         unsafe {
@@ -142,6 +147,13 @@ async fn recv(mut line: PipeLine, sender: Sender<(Vec<u8>, usize, usize)>) {
                 continue;
             }
         };
+        let payload = &buf[handle_rs.start..handle_rs.end];
+        if is_icmp_request(payload).await {
+            if let Err(err) = process_icmp(payload, &mut _pipe_wirter).await {
+                log::error!("reply icmp error: {err:?}");
+            }
+            continue;
+        }
         if let Err(e) = sender.send((buf, handle_rs.start, handle_rs.end)).await {
             log::warn!("UserData {e:?},{handle_rs:?}")
         }
@@ -224,4 +236,56 @@ async fn process_myself(payload: &[u8], device: &Arc<AsyncDevice>) -> Result<()>
         }
     };
     Ok(())
+}
+
+#[allow(dead_code)]
+async fn process_icmp(payload: &[u8], writer: &mut PipeWriter) -> Result<()> {
+    if let Some(ip_packet) = pnet_packet::ipv4::Ipv4Packet::new(payload) {
+        match ip_packet.get_next_level_protocol() {
+            IpNextHeaderProtocols::Icmp => {
+                let icmp_pkt = pnet_packet::icmp::IcmpPacket::new(ip_packet.payload())
+                    .ok_or(std::io::Error::other("invalid icmp packet"))?;
+                if IcmpTypes::EchoRequest == icmp_pkt.get_icmp_type() {
+                    let dest_id = NodeID::from(ip_packet.get_source());
+                    let mut v = ip_packet.payload().to_owned();
+                    let mut icmp_new =
+                        pnet_packet::icmp::MutableIcmpPacket::new(&mut v[..]).unwrap();
+                    icmp_new.set_icmp_type(IcmpTypes::EchoReply);
+                    icmp_new.set_checksum(pnet_packet::icmp::checksum(&icmp_new.to_immutable()));
+                    let len = ip_packet.packet().len();
+                    let mut buf = vec![0u8; len];
+                    let mut res = pnet_packet::ipv4::MutableIpv4Packet::new(&mut buf).unwrap();
+                    res.set_total_length(ip_packet.get_total_length());
+                    res.set_header_length(ip_packet.get_header_length());
+                    res.set_destination(ip_packet.get_source());
+                    res.set_source(ip_packet.get_destination());
+                    res.set_identification(0x42);
+                    res.set_next_level_protocol(IpNextHeaderProtocols::Icmp);
+                    res.set_payload(&v);
+                    res.set_ttl(64);
+                    res.set_version(ip_packet.get_version());
+                    res.set_checksum(pnet_packet::ipv4::checksum(&res.to_immutable()));
+                    let mut send_packet = writer.allocate_send_packet()?;
+                    let payload = &mut send_packet.data_mut()[0..len];
+                    payload.copy_from_slice(&buf);
+                    writer.send_to_packet(&mut send_packet, &dest_id).await?;
+                }
+            }
+            other => {
+                log::warn!("{other:?} is not processed by this");
+            }
+        }
+    };
+    Ok(())
+}
+
+async fn is_icmp_request(payload: &[u8]) -> bool {
+    if let Some(ip_packet) = pnet_packet::ipv4::Ipv4Packet::new(payload) {
+        if ip_packet.get_next_level_protocol() == IpNextHeaderProtocols::Icmp {
+            if let Some(icmp_pkt) = pnet_packet::icmp::IcmpPacket::new(ip_packet.payload()) {
+                return icmp_pkt.get_icmp_type() == IcmpTypes::EchoRequest;
+            }
+        }
+    }
+    false
 }
