@@ -32,6 +32,23 @@ impl SendPacket {
     pub fn data(&self) -> &[u8] {
         &self.buf[HEAD_LEN..]
     }
+    pub fn set_payload(&mut self, buf: &[u8]) -> Result<(), std::io::Error> {
+        let payload_part = &mut self.buf[HEAD_LEN..];
+        let data_len = buf.len();
+        if data_len > payload_part.len() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::OutOfMemory,
+                format!(
+                    "The maximum capacity len:{} required len:{}",
+                    payload_part.len(),
+                    data_len
+                ),
+            ));
+        }
+        payload_part[0..data_len].copy_from_slice(buf);
+        self.set_payload_len(data_len);
+        Ok(())
+    }
     pub fn data_mut(&mut self) -> &mut [u8] {
         &mut self.buf[HEAD_LEN..]
     }

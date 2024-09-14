@@ -149,6 +149,7 @@ async fn recv(
         };
         let payload = &buf[handle_rs.start..handle_rs.end];
         if is_icmp_request(payload).await {
+            println!("is_icmp_request");
             if let Err(err) = process_icmp(payload, &mut _pipe_wirter).await {
                 log::error!("reply icmp error: {err:?}");
             }
@@ -266,8 +267,7 @@ async fn process_icmp(payload: &[u8], writer: &mut PipeWriter) -> Result<()> {
                     res.set_version(ip_packet.get_version());
                     res.set_checksum(pnet_packet::ipv4::checksum(&res.to_immutable()));
                     let mut send_packet = writer.allocate_send_packet()?;
-                    let payload = &mut send_packet.data_mut()[0..len];
-                    payload.copy_from_slice(&buf);
+                    send_packet.set_payload(&buf)?;
                     writer.send_to_packet(&mut send_packet, &dest_id).await?;
                 }
             }

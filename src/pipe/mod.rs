@@ -53,13 +53,13 @@ impl Pipe {
         };
         let mut tcp_stun_servers = config.tcp_stun_servers.take().unwrap_or_default();
         for x in tcp_stun_servers.iter_mut() {
-            if !x.contains(":") {
+            if !x.contains(':') {
                 x.push_str(":3478");
             }
         }
         let mut udp_stun_servers = config.udp_stun_servers.take().unwrap_or_default();
         for x in udp_stun_servers.iter_mut() {
-            if !x.contains(":") {
+            if !x.contains(':') {
                 x.push_str(":3478");
             }
         }
