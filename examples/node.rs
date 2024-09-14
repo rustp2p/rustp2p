@@ -27,6 +27,7 @@ struct Args {
     /// example: --local 10.26.0.2/24
     #[arg(short, long)]
     local: String,
+    /// Listen local port
     port: Option<u16>,
 }
 
@@ -49,6 +50,8 @@ pub async fn main() -> Result<()> {
             .platform_config(|_v| {
                 #[cfg(windows)]
                 _v.ring_capacity(4 * 1024 * 1024);
+                #[cfg(target_os = "linux")]
+                _v.tx_queue_len(1000);
             })
             .mtu(1400)
             .up(),
@@ -93,7 +96,7 @@ pub async fn main() -> Result<()> {
             }
         }
     });
-    log::info!("listen 23333");
+    log::info!("listen {port}");
     // tokio::spawn(async move{
     // 	tokio::time::sleep(std::time::Duration::from_secs(5)).await;
     // 	_ = shutdown_writer.shutdown();
