@@ -181,6 +181,7 @@ async fn tun_recv(
         let payload = send_packet.data_mut();
         let payload_len = device.recv(payload).await?;
         if payload[0] >> 4 != 4 {
+            log::warn!("payload[0] >> 4 != 4");
             continue;
         }
         let mut dest_ip = Ipv4Addr::new(payload[16], payload[17], payload[18], payload[19]);
@@ -199,6 +200,10 @@ async fn tun_recv(
                 continue;
             }
         }
+        log::info!(
+            "read tun pkt: {:?}",
+            pnet_packet::ipv4::Ipv4Packet::new(&payload[..payload_len])
+        );
         send_packet.set_payload_len(payload_len);
         if let Err(e) = sender.send((send_packet, dest_ip.into())).await {
             log::warn!("{e:?},{dest_ip:?}")
