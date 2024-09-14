@@ -139,7 +139,7 @@ async fn tun_recv(
     sender: Sender<(SendPacket, NodeID)>,
     pipe_writer: PipeWriter,
     device: Arc<AsyncDevice>,
-    self_id: Ipv4Addr,
+    _self_id: Ipv4Addr,
 ) -> Result<()> {
     loop {
         let mut send_packet = pipe_writer.allocate_send_packet()?;
@@ -157,7 +157,7 @@ async fn tun_recv(
         }
         #[cfg(target_os = "macos")]
         {
-            if dest_ip == self_id {
+            if dest_ip == _self_id {
                 if let Err(err) = process_myself(payload, &device).await {
                     log::error!("process myself err: {err:?}");
                 }
