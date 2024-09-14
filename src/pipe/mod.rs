@@ -310,7 +310,7 @@ impl PipeWriter {
         } else {
             return Err(Error::NoIDSpecified);
         };
-        let mut send_packet = SendPacket::new_capacity(payload_size);
+        let mut send_packet = SendPacket::allocate(payload_size);
         let mut packet = NetPacket::unchecked(send_packet.buf_mut());
         packet.set_high_flag();
         packet.set_protocol(protocol_type);

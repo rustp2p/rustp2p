@@ -362,13 +362,17 @@ impl Decoder for LengthPrefixedDecoder {
                 if data_length > src.len() {
                     return Err(io::Error::new(io::ErrorKind::Other, "too short"));
                 }
-                if data_length == offset {
-                    return Ok(data_length);
-                } else if data_length > offset {
-                    continue;
-                } else {
-                    self.buf.extend_from_slice(&src[data_length..offset]);
-                    return Ok(data_length);
+                match data_length.cmp(&offset) {
+                    std::cmp::Ordering::Less => {
+                        self.buf.extend_from_slice(&src[data_length..offset]);
+                        return Ok(data_length);
+                    }
+                    std::cmp::Ordering::Equal => {
+                        return Ok(data_length);
+                    }
+                    std::cmp::Ordering::Greater => {
+                        continue;
+                    }
                 }
             } else {
                 let len = self.buf.len();
@@ -442,7 +446,7 @@ impl Encoder for LengthPrefixedEncoder {
                         }
                     }
                     if index == bufs.len() - 1 {
-                        write.write_all(&buf).await?;
+                        write.write_all(buf).await?;
                         return Ok(());
                     }
                     break;

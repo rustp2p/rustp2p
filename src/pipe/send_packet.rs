@@ -9,11 +9,9 @@ pub struct SendPacket {
 }
 
 impl SendPacket {
-    pub(crate) fn new_capacity(capacity: usize) -> Self {
-        let mut buf = Vec::with_capacity(HEAD_LEN + capacity);
-        unsafe {
-            buf.set_len(HEAD_LEN + capacity);
-        }
+    pub(crate) fn allocate(capacity: usize) -> Self {
+        // This must be safe since `data` is marked with safe and returns a slice to the user to read from it.
+        let mut buf = vec![0u8; HEAD_LEN + capacity];
         let mut packet = NetPacket::unchecked(&mut buf);
         packet.set_high_flag();
         packet.set_ttl(15);

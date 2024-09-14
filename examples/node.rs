@@ -5,6 +5,9 @@ use std::sync::Arc;
 use clap::Parser;
 use env_logger::Env;
 use mimalloc_rust::GlobalMiMalloc;
+use pnet_packet::icmp::IcmpTypes;
+use pnet_packet::ip::IpNextHeaderProtocols;
+use pnet_packet::Packet;
 use tokio::sync::mpsc::{channel, Sender};
 use tun_rs::AsyncDevice;
 
@@ -80,7 +83,7 @@ pub async fn main() -> Result<()> {
     let (sender1, mut receiver1) = channel::<(Vec<u8>, usize, usize)>(128);
     let (sender2, mut receiver2) = channel(128);
     tokio::spawn(async move {
-        tun_recv(sender2, writer, device_r).await.unwrap();
+        tun_recv(sender2, writer, device_r, self_id).await.unwrap();
     });
     let writer = pipe.writer();
     tokio::spawn(async move {
@@ -136,6 +139,7 @@ async fn tun_recv(
     sender: Sender<(SendPacket, NodeID)>,
     pipe_writer: PipeWriter,
     device: Arc<AsyncDevice>,
+    self_id: Ipv4Addr,
 ) -> Result<()> {
     loop {
         let mut send_packet = pipe_writer.allocate_send_packet()?;
@@ -151,9 +155,59 @@ async fn tun_recv(
         if dest_ip.is_broadcast() || dest_ip.is_multicast() || payload[19] == 255 {
             dest_ip = Ipv4Addr::BROADCAST;
         }
+        #[cfg(target_os = "macos")]
+        {
+            if dest_ip == self_id {
+                if let Err(err) = process_myself(payload, &device).await {
+                    log::error!("process myself err: {err:?}");
+                }
+                continue;
+            }
+        }
         send_packet.set_payload_len(payload_len);
         if let Err(e) = sender.send((send_packet, dest_ip.into())).await {
             log::warn!("{e:?},{dest_ip:?}")
         }
     }
+}
+
+async fn process_myself(payload: &[u8], device: &Arc<AsyncDevice>) -> Result<()> {
+    if let Some(ip_packet) = pnet_packet::ipv4::Ipv4Packet::new(payload) {
+        match ip_packet.get_next_level_protocol() {
+            IpNextHeaderProtocols::Icmp => {
+                let icmp_pkt = pnet_packet::icmp::IcmpPacket::new(ip_packet.payload())
+                    .ok_or(std::io::Error::other("invalid icmp packet"))?;
+                if IcmpTypes::EchoRequest == icmp_pkt.get_icmp_type() {
+                    let mut v = ip_packet.payload().to_owned();
+                    let mut pkkt = pnet_packet::icmp::MutableIcmpPacket::new(&mut v[..]).unwrap();
+                    pkkt.set_icmp_type(IcmpTypes::EchoReply);
+                    pkkt.set_checksum(pnet_packet::icmp::checksum(&pkkt.to_immutable()));
+                    let len = ip_packet.packet().len();
+                    let mut buf = vec![0u8; len];
+                    let mut res = pnet_packet::ipv4::MutableIpv4Packet::new(&mut buf).unwrap();
+                    res.set_total_length(ip_packet.get_total_length());
+                    res.set_header_length(ip_packet.get_header_length());
+                    res.set_destination(ip_packet.get_source());
+                    res.set_source(ip_packet.get_destination());
+                    res.set_identification(0x42);
+                    res.set_next_level_protocol(IpNextHeaderProtocols::Icmp);
+                    res.set_payload(&v);
+                    res.set_ttl(64);
+                    res.set_version(ip_packet.get_version());
+                    res.set_checksum(pnet_packet::ipv4::checksum(&res.to_immutable()));
+                    device.send(&buf).await?;
+                }
+            }
+            IpNextHeaderProtocols::Tcp => {
+                device.send(payload).await?;
+            }
+            IpNextHeaderProtocols::Udp => {
+                device.send(payload).await?;
+            }
+            other => {
+                log::warn!("{other:?} is not processed by myself");
+            }
+        }
+    };
+    Ok(())
 }
