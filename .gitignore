@@ -2,3 +2,4 @@
 Cargo.lock
 .idea
 /src/protocol/proto
+wintun.dll

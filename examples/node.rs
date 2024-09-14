@@ -8,6 +8,7 @@ use mimalloc_rust::GlobalMiMalloc;
 use pnet_packet::icmp::IcmpTypes;
 use pnet_packet::ip::IpNextHeaderProtocols;
 use pnet_packet::Packet;
+use rustp2p::protocol::NetPacket;
 use tokio::sync::mpsc::{channel, Sender};
 use tun_rs::AsyncDevice;
 
@@ -147,9 +148,18 @@ async fn recv(
                 continue;
             }
         };
+        let net_pkt = NetPacket::unchecked(&buf);
+        log::info!(
+            "recv from route_key: {:?} is_relay:{}",
+            handle_rs.route_key,
+            if (net_pkt.max_ttl() - net_pkt.ttl()) != 0 {
+                true
+            } else {
+                false
+            }
+        );
         let payload = &buf[handle_rs.start..handle_rs.end];
         if is_icmp_request(payload).await {
-            println!("is_icmp_request");
             if let Err(err) = process_icmp(payload, &mut _pipe_wirter).await {
                 log::error!("reply icmp error: {err:?}");
             }
