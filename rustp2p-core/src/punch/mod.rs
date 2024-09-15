@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::ops;
+use std::ops::{Div, Mul};
 // use std::ops::{Div, Mul};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -197,7 +198,7 @@ pub struct Puncher<PeerID> {
     port_vec: Vec<u16>,
     // 指定IP的打洞记录
     sym_record: Arc<Mutex<HashMap<PeerID, usize>>>,
-    count_record: Arc<Mutex<HashMap<PeerID, usize>>>,
+    count_record: Arc<Mutex<HashMap<PeerID, (usize, usize)>>>,
     udp_pipe_writer: Option<UdpPipeWriter>,
     tcp_pipe_writer: Option<TcpPipeWriter>,
 }
@@ -236,6 +237,10 @@ impl<PeerID> Puncher<PeerID> {
 }
 
 impl<PeerID: Hash + Eq + Clone> Puncher<PeerID> {
+    pub fn reset_all(&self) {
+        self.sym_record.lock().clear();
+        self.count_record.lock().clear();
+    }
     pub fn reset_record(&self, peer_id: &PeerID) {
         self.sym_record.lock().remove(peer_id);
         self.count_record.lock().remove(peer_id);
@@ -248,12 +253,12 @@ impl<PeerID: Hash + Eq + Clone> Puncher<PeerID> {
             self.reset_record(id);
             return false;
         }
-        let count = *self
+        let (count, _) = *self
             .count_record
             .lock()
             .entry(id.clone())
-            .and_modify(|v| *v += 1)
-            .or_insert(0);
+            .and_modify(|(v, _)| *v += 1)
+            .or_insert((0, 0));
         if count > 8 {
             //降低频率
             let interval = count / 8;
@@ -280,12 +285,12 @@ impl<PeerID: Hash + Eq + Clone> Puncher<PeerID> {
         buf: &[u8],
         punch_info: PunchInfo,
     ) -> anyhow::Result<()> {
-        let count = self
+        let (_, count) = *self
             .count_record
             .lock()
-            .get(&peer_id)
-            .cloned()
-            .unwrap_or_default();
+            .entry(peer_id.clone())
+            .and_modify(|(_, v)| *v += 1)
+            .or_insert((0, 0));
         let ttl = if punch_info.use_ttl() && count < 255 {
             Some(count.max(2) as u32)
         } else {
@@ -352,7 +357,7 @@ impl<PeerID: Hash + Eq + Clone> Puncher<PeerID> {
     async fn punch_udp(
         &self,
         peer_id: PeerID,
-        _count: usize,
+        count: usize,
         buf: &[u8],
         peer_nat_info: &NatInfo,
         punch_model: &PunchModelBoxes,
@@ -405,11 +410,11 @@ impl<PeerID: Hash + Eq + Clone> Puncher<PeerID> {
                 //预测范围内最多发送max_k1个包
                 let max_k1 = 60;
                 //全局最多发送max_k2个包
-                let max_k2: usize = rand::thread_rng().gen_range(600..800);
-                // if count > 8 {
-                //     //递减探测规模
-                //     max_k2 = max_k2.mul(8).div(count).max(max_k1 as usize);
-                // }
+                let mut max_k2: usize = rand::thread_rng().gen_range(600..800);
+                if count > 8 {
+                    //递减探测规模
+                    max_k2 = max_k2.mul(8).div(count).max(max_k1 as usize);
+                }
                 let port = peer_nat_info.public_ports.first().copied().unwrap_or(0);
                 if peer_nat_info.public_port_range < max_k1 * 3 {
                     //端口变化不大时，在预测的范围内随机发送
