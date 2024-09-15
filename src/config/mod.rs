@@ -14,12 +14,7 @@ use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 
 pub(crate) mod punch_info;
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy, Default)]
-pub enum Model {
-    High,
-    #[default]
-    Low,
-}
+pub use rust_p2p_core::pipe::udp_pipe::Model;
 
 #[derive(Clone, Debug, Default)]
 pub struct LocalInterface {
@@ -265,15 +260,6 @@ impl UdpPipeConfig {
     }
 }
 
-impl From<Model> for rust_p2p_core::pipe::udp_pipe::Model {
-    fn from(value: Model) -> Self {
-        match value {
-            Model::High => rust_p2p_core::pipe::udp_pipe::Model::High,
-            Model::Low => rust_p2p_core::pipe::udp_pipe::Model::Low,
-        }
-    }
-}
-
 impl From<LocalInterface> for rust_p2p_core::socket::LocalInterface {
     fn from(value: LocalInterface) -> Self {
         #[cfg(unix)]
@@ -301,7 +287,7 @@ impl From<UdpPipeConfig> for rust_p2p_core::pipe::config::UdpPipeConfig {
         rust_p2p_core::pipe::config::UdpPipeConfig {
             main_pipeline_num: value.main_pipeline_num,
             sub_pipeline_num: value.sub_pipeline_num,
-            model: value.model.into(),
+            model: value.model,
             default_interface: value.default_interface.map(|v| v.into()),
             udp_ports: value.udp_ports,
             use_v6: value.use_v6,

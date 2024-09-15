@@ -18,6 +18,7 @@ pub(crate) async fn nat_test_loop(
             &udp_stun_servers
         };
         nat_test(
+            &pipe_writer,
             pipe_writer.pipe_context(),
             udp_stun_servers,
             default_interface.as_ref(),
@@ -32,6 +33,7 @@ pub(crate) async fn nat_test_loop(
 }
 
 async fn nat_test(
+    pipe_writer: &PipeWriter,
     pipe_context: &PipeContext,
     udp_stun_servers: &[String],
     default_interface: Option<&LocalInterface>,
@@ -61,9 +63,12 @@ async fn nat_test(
     }
     let rs = rust_p2p_core::stun::stun_test_nat(udp_stun_servers.to_vec(), default_interface).await;
 
-    let mut guard = pipe_context.punch_info().write();
     match rs {
         Ok((nat_type, ips, port_range)) => {
+            if let Err(err) = pipe_writer.switch_model(nat_type) {
+                log::error!("switch to {nat_type:?} model error:{err:?}");
+            }
+            let mut guard = pipe_context.punch_info().write();
             guard.nat_type = nat_type;
             guard.set_public_ip(ips);
             guard.public_port_range = port_range;

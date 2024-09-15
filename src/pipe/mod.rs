@@ -4,6 +4,7 @@ use std::net::SocketAddr;
 use std::time::UNIX_EPOCH;
 
 use async_shutdown::ShutdownManager;
+use rust_p2p_core::nat::NatType;
 use rust_p2p_core::route::route_table::RouteTable;
 use rust_p2p_core::route::{Route, RouteKey};
 use tokio::sync::mpsc::Sender;
@@ -168,6 +169,22 @@ pub struct PipeWriter {
 impl PipeWriter {
     pub fn pipe_context(&self) -> &PipeContext {
         &self.pipe_context
+    }
+    pub fn switch_model(&self, nat_type: NatType) -> Result<()> {
+        use rust_p2p_core::pipe::udp_pipe::Model;
+        match nat_type {
+            NatType::Cone => {
+                if let Some(writer) = self.pipe_writer.udp_pipe_writer() {
+                    writer.switch_model(Model::Low)?;
+                }
+            }
+            NatType::Symmetric => {
+                if let Some(writer) = self.pipe_writer.udp_pipe_writer() {
+                    writer.switch_model(Model::High)?;
+                }
+            }
+        }
+        Ok(())
     }
     pub(crate) async fn send_to_id<B: AsRef<[u8]>>(
         &self,
