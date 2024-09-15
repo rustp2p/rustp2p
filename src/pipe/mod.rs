@@ -358,10 +358,10 @@ impl PipeLine {
     pub fn store_self_id(&self, node_id: NodeID) -> Result<()> {
         self.pipe_context.store_self_id(node_id)
     }
-    pub async fn recv_from(
+    pub async fn recv_from<'a>(
         &mut self,
-        buf: &mut [u8],
-    ) -> core::result::Result<core::result::Result<HandleResult, HandleError>, RecvError> {
+        buf: &'a mut [u8],
+    ) -> core::result::Result<core::result::Result<HandleResult<'a>, HandleError>, RecvError> {
         loop {
             let (len, route_key) = match self.pipe_line.recv_from(buf).await {
                 None => return Err(RecvError::Done),
@@ -390,7 +390,14 @@ impl PipeLine {
             {
                 Ok(handle_result) => {
                     if let Some(rs) = handle_result {
-                        return Ok(Ok(rs));
+                        return Ok(Ok(HandleResult {
+                            _src_id: rs.src_id,
+                            _dest_id: rs.dest_id,
+                            _route_key: rs.route_key,
+                            _payload: &buf[rs.start..rs.end],
+                            _ttl: rs.ttl,
+                            _max_ttl: rs.max_ttl,
+                        }));
                     } else {
                         continue;
                     }
@@ -409,7 +416,10 @@ impl PipeLine {
     pub(crate) async fn send_to_route(&self, buf: &[u8], route_key: &RouteKey) -> Result<()> {
         self.pipe_writer.send_to_route(buf, route_key).await
     }
-    async fn handle<'a>(&mut self, recv_result: RecvResult<'a>) -> Result<Option<HandleResult>> {
+    async fn handle<'a>(
+        &mut self,
+        recv_result: RecvResult<'a>,
+    ) -> Result<Option<HandleResultInner>> {
         let mut packet = NetPacket::new(recv_result.buf)?;
         let src_id = NodeID::try_from(packet.src_id())?;
 
@@ -525,12 +535,14 @@ impl PipeLine {
                 }
             }
             ProtocolType::UserData => {
-                return Ok(Some(HandleResult {
+                return Ok(Some(HandleResultInner {
                     start: HEAD_LEN,
                     end: packet.buffer().len(),
                     src_id,
                     dest_id,
                     route_key,
+                    ttl: packet.ttl(),
+                    max_ttl: packet.max_ttl(),
                 }))
             }
             ProtocolType::RangeBroadcast => {
@@ -550,12 +562,14 @@ impl PipeLine {
                     }
                 }
                 if broadcast_to_self {
-                    return Ok(Some(HandleResult {
+                    return Ok(Some(HandleResultInner {
                         start,
                         end,
                         src_id,
                         dest_id,
                         route_key,
+                        ttl: packet.ttl(),
+                        max_ttl: packet.max_ttl(),
                     }));
                 }
             }
@@ -614,12 +628,48 @@ impl<'a> RecvResult<'a> {
 }
 
 #[derive(Debug)]
-pub struct HandleResult {
-    pub start: usize,
-    pub end: usize,
-    pub src_id: NodeID,
-    pub dest_id: NodeID,
-    pub route_key: RouteKey,
+struct HandleResultInner {
+    pub(crate) start: usize,
+    pub(crate) end: usize,
+    pub(crate) src_id: NodeID,
+    pub(crate) dest_id: NodeID,
+    pub(crate) route_key: RouteKey,
+    pub(crate) ttl: u8,
+    pub(crate) max_ttl: u8,
+}
+
+#[derive(Debug)]
+pub struct HandleResult<'a> {
+    _payload: &'a [u8],
+    _ttl: u8,
+    _max_ttl: u8,
+    _src_id: NodeID,
+    _dest_id: NodeID,
+    _route_key: RouteKey,
+}
+
+impl<'a> HandleResult<'a> {
+    pub fn ttl(&self) -> u8 {
+        self._ttl
+    }
+    pub fn max_ttl(&self) -> u8 {
+        self._max_ttl
+    }
+    pub fn payload(&self) -> &[u8] {
+        self._payload
+    }
+    pub fn src_id(&self) -> NodeID {
+        self._src_id
+    }
+    pub fn dest_id(&self) -> NodeID {
+        self._dest_id
+    }
+    pub fn route_key(&self) -> RouteKey {
+        self._route_key
+    }
+    pub fn is_relay(&self) -> bool {
+        (self._max_ttl - self._ttl) != 0
+    }
 }
 
 #[derive(thiserror::Error, Debug)]

@@ -8,7 +8,6 @@ use mimalloc_rust::GlobalMiMalloc;
 use pnet_packet::icmp::IcmpTypes;
 use pnet_packet::ip::IpNextHeaderProtocols;
 use pnet_packet::Packet;
-use rustp2p::protocol::NetPacket;
 use tokio::sync::mpsc::{channel, Sender};
 use tun_rs::AsyncDevice;
 
@@ -87,7 +86,7 @@ pub async fn main() -> Result<()> {
     let writer = pipe.writer();
     let shutdown_writer = writer.clone();
     let device_r = device.clone();
-    let (sender1, mut receiver1) = channel::<(Vec<u8>, usize, usize)>(128);
+    let (sender1, mut receiver1) = channel::<Vec<u8>>(128);
     let (sender2, mut receiver2) = channel(128);
     tokio::spawn(async move {
         tun_recv(sender2, writer, device_r, self_id).await.unwrap();
@@ -101,8 +100,8 @@ pub async fn main() -> Result<()> {
         }
     });
     tokio::spawn(async move {
-        while let Some((buf, start, end)) = receiver1.recv().await {
-            if let Err(e) = device.send(&buf[start..end]).await {
+        while let Some(buf) = receiver1.recv().await {
+            if let Err(e) = device.send(&buf).await {
                 log::warn!("device.send {e:?}")
             }
         }
@@ -124,13 +123,9 @@ pub async fn main() -> Result<()> {
     log::info!("exit!!!!");
     Ok(())
 }
-async fn recv(
-    mut line: PipeLine,
-    sender: Sender<(Vec<u8>, usize, usize)>,
-    mut _pipe_wirter: PipeWriter,
-) {
+async fn recv(mut line: PipeLine, sender: Sender<Vec<u8>>, mut _pipe_wirter: PipeWriter) {
+    let mut buf = [0u8; 2048];
     loop {
-        let mut buf = vec![0u8; 2048];
         let rs = match line.recv_from(&mut buf).await {
             Ok(rs) => rs,
             Err(e) => {
@@ -145,15 +140,13 @@ async fn recv(
                 continue;
             }
         };
-        let net_pkt = NetPacket::unchecked(&buf);
-        let payload = &buf[handle_rs.start..handle_rs.end];
         log::info!(
             "recv from peer from addr: {:?}, {:?} ->{:?} is_relay:{}\n{:?}",
-            handle_rs.route_key.addr(),
-            handle_rs.src_id,
-            handle_rs.dest_id,
-            (net_pkt.max_ttl() - net_pkt.ttl()) != 0,
-            pnet_packet::ipv4::Ipv4Packet::new(payload)
+            handle_rs.route_key().addr(),
+            handle_rs.src_id(),
+            handle_rs.dest_id(),
+            handle_rs.is_relay(),
+            pnet_packet::ipv4::Ipv4Packet::new(handle_rs.payload())
         );
 
         // if is_icmp_request(payload).await {
@@ -162,7 +155,7 @@ async fn recv(
         //     }
         //     continue;
         // }
-        if let Err(e) = sender.send((buf, handle_rs.start, handle_rs.end)).await {
+        if let Err(e) = sender.send(handle_rs.payload().to_vec()).await {
             log::warn!("UserData {e:?},{handle_rs:?}")
         }
     }
@@ -178,7 +171,7 @@ async fn tun_recv(
         let payload = send_packet.data_mut();
         let payload_len = device.recv(payload).await?;
         if payload[0] >> 4 != 4 {
-            log::warn!("payload[0] >> 4 != 4");
+            // log::warn!("payload[0] >> 4 != 4");
             continue;
         }
         let mut dest_ip = Ipv4Addr::new(payload[16], payload[17], payload[18], payload[19]);

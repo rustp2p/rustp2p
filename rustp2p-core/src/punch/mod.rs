@@ -494,7 +494,7 @@ impl<PeerID: Hash + Eq + Clone> Puncher<PeerID> {
                 if let Err(e) = udp_pipe_writer.try_send_to_addr(buf, addr) {
                     log::info!("{addr},{e:?}");
                 }
-                //tokio::time::sleep(Duration::from_millis(2)).await
+                tokio::time::sleep(Duration::from_millis(2)).await
             }
         }
         Ok(ports.len())
