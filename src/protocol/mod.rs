@@ -6,6 +6,9 @@
   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
   |                                         reserve(32)                                         |
   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+  |                                        group code(128)                                      |
+  |                                                                                             |
+  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
   |                                         src ID(32)                                          |
   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
   |                                         dest ID(32)                                         |
@@ -19,9 +22,10 @@ use std::fmt::Debug;
 use node_id::NodeID;
 
 use crate::error::{Error, Result};
+use crate::protocol::node_id::GroupCode;
 use crate::protocol::protocol_type::ProtocolType;
 
-pub const HEAD_LEN: usize = 16;
+pub const HEAD_LEN: usize = 32;
 
 pub mod broadcast;
 pub mod echo;
@@ -66,14 +70,17 @@ impl<B: AsRef<[u8]>> NetPacket<B> {
     pub fn ttl(&self) -> u8 {
         self.buffer.as_ref()[3] & 0xF
     }
+    pub fn group_code(&self) -> &[u8] {
+        &self.buffer.as_ref()[8..24]
+    }
     pub fn src_id(&self) -> &[u8] {
-        &self.buffer.as_ref()[8..12]
+        &self.buffer.as_ref()[24..28]
     }
     pub fn dest_id(&self) -> &[u8] {
-        &self.buffer.as_ref()[12..16]
+        &self.buffer.as_ref()[28..32]
     }
     pub fn payload(&self) -> &[u8] {
-        &self.buffer.as_ref()[16..]
+        &self.buffer.as_ref()[32..]
     }
     pub fn buffer(&self) -> &[u8] {
         self.buffer.as_ref()
@@ -104,14 +111,17 @@ impl<B: AsRef<[u8]> + AsMut<[u8]>> NetPacket<B> {
         self.buffer.as_mut()[1] = (len >> 8) as u8;
         self.buffer.as_mut()[2] = len as u8;
     }
+    pub fn set_group_code(&mut self, group_code: &GroupCode) {
+        self.buffer.as_mut()[8..24].copy_from_slice(group_code.as_ref());
+    }
     pub fn set_src_id(&mut self, id: &NodeID) {
-        self.buffer.as_mut()[8..12].copy_from_slice(id.as_ref());
+        self.buffer.as_mut()[24..28].copy_from_slice(id.as_ref());
     }
     pub fn set_dest_id(&mut self, id: &NodeID) {
-        self.buffer.as_mut()[12..16].copy_from_slice(id.as_ref());
+        self.buffer.as_mut()[28..32].copy_from_slice(id.as_ref());
     }
     pub fn payload_mut(&mut self) -> &mut [u8] {
-        &mut self.buffer.as_mut()[16..]
+        &mut self.buffer.as_mut()[32..]
     }
     pub fn buffer_mut(&mut self) -> &mut [u8] {
         self.buffer.as_mut()
@@ -127,6 +137,7 @@ impl<B: AsRef<[u8]>> Debug for NetPacket<B> {
         let data_len = self.data_length();
         let high = buf[0] >> 7;
         let ttl = buf[3];
+        let group_code = format!("{:?}", self.group_code());
         let src_id = format!("{:?}", self.src_id());
         let dest_id = format!("{:?}", self.dest_id());
         let payload_size = self.payload().len();
@@ -149,11 +160,14 @@ impl<B: AsRef<[u8]>> Debug for NetPacket<B> {
   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
   | {6:^91} |
   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+  | {7:^91} |
+  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 		",
             format!("{protocol_type}"),
             format!("{}bytes", data_len),
             format!("{:0b}", ttl >> 4),
             format!("{:0b}", ttl & 0b00001111),
+            group_code,
             src_id,
             dest_id,
             format!("{}bytes", payload_size)
@@ -165,14 +179,15 @@ impl<B: AsRef<[u8]>> Debug for NetPacket<B> {
 #[cfg(test)]
 mod test {
     use crate::protocol::protocol_type::ProtocolType;
-    use crate::protocol::NetPacket;
+    use crate::protocol::{NetPacket, HEAD_LEN};
 
     #[test]
     fn test_build() {
-        let mut buf = [0u8; 20];
+        let mut buf = [0u8; HEAD_LEN + 4];
         let mut packet = NetPacket::unchecked(&mut buf);
         packet.set_ttl(2);
         packet.reset_data_len();
+        packet.set_group_code(&100000u128.into());
         packet.set_src_id(&3.into());
         packet.set_dest_id(&2.into());
         packet.set_protocol(ProtocolType::IDRouteQuery);

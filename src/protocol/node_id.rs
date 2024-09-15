@@ -59,3 +59,41 @@ impl TryFrom<&[u8]> for NodeID {
         }
     }
 }
+
+#[repr(transparent)]
+#[derive(Hash, Eq, PartialEq, Ord, PartialOrd, Copy, Clone, Debug)]
+pub struct GroupCode([u8; 16]);
+
+pub const GROUP_CODE_LEN: usize = 16;
+
+impl AsRef<[u8]> for GroupCode {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl TryFrom<&[u8]> for GroupCode {
+    type Error = std::io::Error;
+
+    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
+        match value.len() {
+            16 => Ok(GroupCode(value.try_into().unwrap())),
+            _ => Err(std::io::Error::from(std::io::ErrorKind::InvalidData)),
+        }
+    }
+}
+impl From<u128> for GroupCode {
+    fn from(value: u128) -> Self {
+        GroupCode(value.to_be_bytes())
+    }
+}
+impl From<i128> for GroupCode {
+    fn from(value: i128) -> Self {
+        GroupCode(value.to_be_bytes())
+    }
+}
+impl From<[u8; 16]> for GroupCode {
+    fn from(value: [u8; 16]) -> Self {
+        GroupCode(value)
+    }
+}
