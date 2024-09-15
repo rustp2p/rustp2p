@@ -197,10 +197,10 @@ async fn tun_recv(
                 continue;
             }
         }
-        log::info!(
-            "read tun pkt: {:?}",
-            pnet_packet::ipv4::Ipv4Packet::new(&payload[..payload_len])
-        );
+        // log::info!(
+        //     "read tun pkt: {:?}",
+        //     pnet_packet::ipv4::Ipv4Packet::new(&payload[..payload_len])
+        // );
         send_packet.set_payload_len(payload_len);
         if let Err(e) = sender.send((send_packet, dest_ip.into())).await {
             log::warn!("{e:?},{dest_ip:?}")
