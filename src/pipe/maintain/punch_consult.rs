@@ -49,7 +49,7 @@ pub async fn punch_consult_loop(pipe_writer: PipeWriter, puncher: Puncher<NodeID
                 continue;
             }
             if pipe_writer
-                .send_to_packet(&mut send_packet, &node_id)
+                .send_packet_to(&mut send_packet, &node_id)
                 .await
                 .is_ok()
             {

@@ -94,7 +94,7 @@ pub async fn main() -> Result<()> {
     let writer = pipe.writer();
     tokio::spawn(async move {
         while let Some((mut packet, dest)) = receiver2.recv().await {
-            if let Err(e) = writer.send_to_packet(&mut packet, &dest).await {
+            if let Err(e) = writer.send_packet_to(&mut packet, &dest).await {
                 log::warn!("writer.send {e:?}")
             }
         }

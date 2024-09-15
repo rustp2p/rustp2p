@@ -289,7 +289,7 @@ impl PipeWriter {
             Err(Error::NoIDSpecified)
         }
     }
-    pub async fn send_to_packet(&self, packet: &mut SendPacket, dest_id: &NodeID) -> Result<()> {
+    pub async fn send_packet_to(&self, packet: &mut SendPacket, dest_id: &NodeID) -> Result<()> {
         if let Some(src_id) = self.pipe_context.load_id() {
             packet.set_src_id(&src_id);
             packet.set_dest_id(dest_id);
@@ -298,7 +298,7 @@ impl PipeWriter {
             Err(Error::NoIDSpecified)
         }
     }
-    pub async fn send_multiple_to_packet(
+    pub async fn send_multi_packet_to(
         &self,
         packets: &mut [&mut SendPacket],
         dest_id: &NodeID,
@@ -587,7 +587,7 @@ impl PipeLine {
                 send_packet.set_payload_len(data.len());
                 if let Ok(sender) = self.passive_punch_sender.try_reserve() {
                     self.pipe_writer
-                        .send_to_packet(&mut send_packet, &src_id)
+                        .send_packet_to(&mut send_packet, &src_id)
                         .await?;
                     sender.send((src_id, punch_info))
                 }
