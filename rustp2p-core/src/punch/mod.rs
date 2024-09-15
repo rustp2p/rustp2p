@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::ops;
-use std::ops::{Div, Mul};
+// use std::ops::{Div, Mul};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -352,7 +352,7 @@ impl<PeerID: Hash + Eq + Clone> Puncher<PeerID> {
     async fn punch_udp(
         &self,
         peer_id: PeerID,
-        count: usize,
+        _count: usize,
         buf: &[u8],
         peer_nat_info: &NatInfo,
         punch_model: &PunchModelBoxes,
@@ -405,11 +405,11 @@ impl<PeerID: Hash + Eq + Clone> Puncher<PeerID> {
                 //预测范围内最多发送max_k1个包
                 let max_k1 = 60;
                 //全局最多发送max_k2个包
-                let mut max_k2: usize = rand::thread_rng().gen_range(600..800);
-                if count > 8 {
-                    //递减探测规模
-                    max_k2 = max_k2.mul(8).div(count).max(max_k1 as usize);
-                }
+                let max_k2: usize = rand::thread_rng().gen_range(600..800);
+                // if count > 8 {
+                //     //递减探测规模
+                //     max_k2 = max_k2.mul(8).div(count).max(max_k1 as usize);
+                // }
                 let port = peer_nat_info.public_ports.first().copied().unwrap_or(0);
                 if peer_nat_info.public_port_range < max_k1 * 3 {
                     //端口变化不大时，在预测的范围内随机发送
@@ -494,7 +494,7 @@ impl<PeerID: Hash + Eq + Clone> Puncher<PeerID> {
                 if let Err(e) = udp_pipe_writer.try_send_to_addr(buf, addr) {
                     log::info!("{addr},{e:?}");
                 }
-                tokio::time::sleep(Duration::from_millis(2)).await
+                //tokio::time::sleep(Duration::from_millis(2)).await
             }
         }
         Ok(ports.len())
