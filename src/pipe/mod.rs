@@ -1,9 +1,11 @@
 use std::collections::HashMap;
 use std::io::IoSlice;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::UNIX_EPOCH;
 
 use async_shutdown::ShutdownManager;
+use dashmap::DashMap;
 use rust_p2p_core::nat::NatType;
 use rust_p2p_core::route::route_table::RouteTable;
 use rust_p2p_core::route::{Route, RouteKey};
@@ -19,7 +21,7 @@ use crate::error::{Error, Result};
 use crate::pipe::pipe_context::PipeContext;
 use crate::protocol::broadcast::RangeBroadcastPacket;
 use crate::protocol::id_route::IDRouteReplyPacket;
-use crate::protocol::node_id::NodeID;
+use crate::protocol::node_id::{GroupCode, NodeID};
 use crate::protocol::protocol_type::ProtocolType;
 use crate::protocol::{broadcast, NetPacket, HEAD_LEN};
 
@@ -35,6 +37,7 @@ pub struct Pipe {
     shutdown_manager: ShutdownManager<()>,
     active_punch_sender: Sender<(NodeID, PunchConsultInfo)>,
     passive_punch_sender: Sender<(NodeID, PunchConsultInfo)>,
+    other_route_table: Arc<DashMap<GroupCode, RouteTable<NodeID>>>,
 }
 
 impl Pipe {
@@ -133,6 +136,7 @@ impl Pipe {
             shutdown_manager,
             active_punch_sender,
             passive_punch_sender,
+            other_route_table: Arc::new(Default::default()),
         })
     }
     pub fn writer(&self) -> PipeWriter {
@@ -158,6 +162,7 @@ impl Pipe {
             route_table: self.pipe.route_table().clone(),
             active_punch_sender: self.active_punch_sender.clone(),
             passive_punch_sender: self.passive_punch_sender.clone(),
+            other_route_table: self.other_route_table.clone(),
         })
     }
 }
@@ -367,6 +372,7 @@ pub struct PipeLine {
     route_table: RouteTable<NodeID>,
     active_punch_sender: Sender<(NodeID, PunchConsultInfo)>,
     passive_punch_sender: Sender<(NodeID, PunchConsultInfo)>,
+    other_route_table: Arc<DashMap<GroupCode, RouteTable<NodeID>>>,
 }
 
 impl PipeLine {
@@ -428,7 +434,29 @@ impl PipeLine {
     pub(crate) async fn send_to_route(&self, buf: &[u8], route_key: &RouteKey) -> Result<()> {
         self.pipe_writer.send_to_route(buf, route_key).await
     }
-    async fn other_group_handle(&mut self, _packet: NetPacket<&mut [u8]>) -> Result<()> {
+    async fn other_group_handle(
+        &mut self,
+        mut packet: NetPacket<&mut [u8]>,
+        route_key: RouteKey,
+    ) -> Result<()> {
+        if !packet.incr_ttl() {
+            return Ok(());
+        }
+        let metric = packet.max_ttl() - packet.ttl();
+        let group_code = GroupCode::try_from(packet.group_code())?;
+        let src_id = NodeID::try_from(packet.src_id())?;
+        {
+            let ref_mut = self
+                .other_route_table
+                .entry(group_code)
+                .or_insert_with(|| RouteTable::new(false, 1));
+            ref_mut.add_route_if_absent(src_id, Route::from_default_rt(route_key, metric));
+        }
+        if group_code.is_unspecified() {
+            // The data of this group can be consumed by any node
+        } else {
+            // Need to be forwarded
+        }
         todo!()
     }
     async fn handle<'a>(
@@ -436,16 +464,17 @@ impl PipeLine {
         recv_result: RecvResult<'a>,
     ) -> Result<Option<HandleResultInner>> {
         let mut packet = NetPacket::new(recv_result.buf)?;
+        let route_key = recv_result.route_key;
         let group_code = if let Some(my_group_code) = self.pipe_context.load_group_code() {
             if my_group_code.as_ref() == packet.group_code() {
                 my_group_code
             } else {
-                self.other_group_handle(packet).await?;
+                self.other_group_handle(packet, route_key).await?;
                 return Ok(None);
             }
         } else {
             // If you haven't joined any groups, you can only do forwarding
-            self.other_group_handle(packet).await?;
+            self.other_group_handle(packet, route_key).await?;
             return Ok(None);
         };
         let src_id = NodeID::try_from(packet.src_id())?;
@@ -462,7 +491,7 @@ impl PipeLine {
         if packet.ttl() == 0 {
             return Ok(None);
         }
-        let route_key = recv_result.route_key;
+        let metric = packet.max_ttl() - packet.ttl() + 1;
 
         let self_id = if let Some(self_id) = self.pipe_context.load_id() {
             if self_id == src_id {
@@ -471,6 +500,8 @@ impl PipeLine {
             }
             if self_id != dest_id && !dest_id.is_unspecified() && !dest_id.is_broadcast() {
                 if packet.incr_ttl() {
+                    self.route_table
+                        .add_route_if_absent(src_id, Route::from_default_rt(route_key, metric));
                     self.send_to(&packet, &dest_id).await?;
                 }
                 return Ok(None);
@@ -479,7 +510,6 @@ impl PipeLine {
         } else {
             return Err(Error::InvalidArgument("self id is none".into()));
         };
-        let metric = packet.max_ttl() - packet.ttl() + 1;
         self.route_table
             .add_route_if_absent(src_id, Route::from_default_rt(route_key, metric));
         match packet.protocol()? {
