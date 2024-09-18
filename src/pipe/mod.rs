@@ -315,7 +315,12 @@ impl PipeWriter {
         }
     }
     pub fn allocate_send_packet(&self) -> Result<SendPacket> {
-        self.allocate_send_packet_proto(ProtocolType::UserData, self.send_buffer_size)
+        let mut packet =
+            self.allocate_send_packet_proto(ProtocolType::UserData, self.send_buffer_size)?;
+        unsafe {
+            packet.set_payload_len(HEAD_LEN);
+        }
+        Ok(packet)
     }
     pub(crate) fn allocate_send_packet_proto(
         &self,
@@ -327,7 +332,10 @@ impl PipeWriter {
         } else {
             return Err(Error::NoIDSpecified);
         };
-        let mut send_packet = SendPacket::allocate(payload_size);
+        let mut send_packet = SendPacket::with_capacity(payload_size);
+        unsafe {
+            send_packet.set_payload_len(payload_size);
+        }
         let mut packet = NetPacket::unchecked(send_packet.buf_mut());
         packet.set_high_flag();
         packet.set_protocol(protocol_type);
@@ -583,8 +591,7 @@ impl PipeLine {
                 let mut send_packet = self
                     .pipe_writer
                     .allocate_send_packet_proto(ProtocolType::PunchConsultReply, data.len())?;
-                send_packet.data_mut()[..data.len()].copy_from_slice(&data);
-                send_packet.set_payload_len(data.len());
+                send_packet.set_payload(&data);
                 if let Ok(sender) = self.passive_punch_sender.try_reserve() {
                     self.pipe_writer
                         .send_packet_to(&mut send_packet, &src_id)

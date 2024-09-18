@@ -35,8 +35,7 @@ pub async fn punch_consult_loop(pipe_writer: PipeWriter, puncher: Puncher<NodeID
                 continue;
             }
         };
-        send_packet.data_mut()[..data.len()].copy_from_slice(&data);
-        send_packet.set_payload_len(data.len());
+        send_packet.set_payload(&data);
 
         let mut node_ids = route_table.route_table_ids();
         node_ids.shuffle(&mut rand::thread_rng());

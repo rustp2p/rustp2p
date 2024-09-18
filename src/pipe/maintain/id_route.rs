@@ -32,7 +32,9 @@ async fn id_route_query(
         } else {
             return Ok(());
         };
-    packet.set_payload_len(4);
+    unsafe {
+        packet.set_payload_len(4);
+    }
     packet.set_ttl(1);
     let direct_nodes = pipe_writer.pipe_context.get_direct_nodes_and_id();
 

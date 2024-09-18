@@ -162,29 +162,28 @@ async fn recv(mut line: PipeLine, sender: Sender<Vec<u8>>, mut _pipe_wirter: Pip
 }
 async fn tun_recv(
     sender: Sender<(SendPacket, NodeID)>,
-    pipe_writer: PipeWriter,
+    _pipe_writer: PipeWriter,
     device: Arc<AsyncDevice>,
     _self_id: Ipv4Addr,
 ) -> Result<()> {
+    let mut buf = [0; 2000];
     loop {
-        let mut send_packet = pipe_writer.allocate_send_packet()?;
-        let payload = send_packet.data_mut();
-        let payload_len = device.recv(payload).await?;
-        if payload[0] >> 4 != 4 {
+        let payload_len = device.recv(&mut buf).await?;
+        if buf[0] >> 4 != 4 {
             // log::warn!("payload[0] >> 4 != 4");
             continue;
         }
-        let mut dest_ip = Ipv4Addr::new(payload[16], payload[17], payload[18], payload[19]);
+        let mut dest_ip = Ipv4Addr::new(buf[16], buf[17], buf[18], buf[19]);
         if dest_ip.is_unspecified() {
             continue;
         }
-        if dest_ip.is_broadcast() || dest_ip.is_multicast() || payload[19] == 255 {
+        if dest_ip.is_broadcast() || dest_ip.is_multicast() || buf[19] == 255 {
             dest_ip = Ipv4Addr::BROADCAST;
         }
         #[cfg(target_os = "macos")]
         {
             if dest_ip == _self_id {
-                if let Err(err) = process_myself(payload, &device).await {
+                if let Err(err) = process_myself(&buf[..payload_len], &device).await {
                     log::error!("process myself err: {err:?}");
                 }
                 continue;
@@ -192,9 +191,10 @@ async fn tun_recv(
         }
         // log::info!(
         //     "read tun pkt: {:?}",
-        //     pnet_packet::ipv4::Ipv4Packet::new(&payload[..payload_len])
+        //     pnet_packet::ipv4::Ipv4Packet::new(&buf[..payload_len])
         // );
-        send_packet.set_payload_len(payload_len);
+        let mut send_packet = SendPacket::with_capacity(payload_len);
+        send_packet.set_payload(&buf[..payload_len]);
         if let Err(e) = sender.send((send_packet, dest_ip.into())).await {
             log::warn!("{e:?},{dest_ip:?}")
         }

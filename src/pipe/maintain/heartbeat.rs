@@ -45,7 +45,9 @@ async fn timestamp_request(pipe_writer: &PipeWriter) -> Result<()> {
     } else {
         return Ok(());
     };
-    packet.set_payload_len(4);
+    unsafe {
+        packet.set_payload_len(4);
+    }
     let mut packet = NetPacket::new(packet.buf_mut())?;
     let now = std::time::SystemTime::now()
         .duration_since(UNIX_EPOCH)?
