@@ -439,10 +439,7 @@ impl PipeLine {
         mut packet: NetPacket<&mut [u8]>,
         route_key: RouteKey,
     ) -> Result<()> {
-        if !packet.incr_ttl() {
-            return Ok(());
-        }
-        let metric = packet.max_ttl() - packet.ttl();
+        let metric = packet.max_ttl() - packet.ttl() + 1;
         let group_code = GroupCode::try_from(packet.group_code())?;
         let src_id = NodeID::try_from(packet.src_id())?;
         {
@@ -454,7 +451,27 @@ impl PipeLine {
         }
         if group_code.is_unspecified() {
             // The data of this group can be consumed by any node
+            match packet.protocol()? {
+                ProtocolType::IDRouteQuery => {}
+                _ => {}
+            }
         } else {
+            if !packet.incr_ttl() {
+                return Ok(());
+            }
+            let dest_id = NodeID::try_from(packet.dest_id())?;
+            if dest_id.is_unspecified() {
+                return Ok(());
+            }
+            if let Some(route_table) = self.other_route_table.get(&group_code) {
+                if dest_id.is_broadcast() {
+                    // broadcast
+                } else {
+                    if let Ok(v) = route_table.get_route_by_id(&dest_id) {
+                        self.send_to_route(packet.buffer(), &v.route_key()).await?;
+                    }
+                }
+            }
             // Need to be forwarded
         }
         todo!()
@@ -464,6 +481,17 @@ impl PipeLine {
         recv_result: RecvResult<'a>,
     ) -> Result<Option<HandleResultInner>> {
         let mut packet = NetPacket::new(recv_result.buf)?;
+        if packet.max_ttl() < packet.ttl() {
+            return Err(Error::InvalidArgument("ttl error".into()));
+        }
+        if packet.ttl() == 0 {
+            return Ok(None);
+        }
+        let src_id = NodeID::try_from(packet.src_id())?;
+
+        if src_id.is_unspecified() || src_id.is_broadcast() {
+            return Err(Error::InvalidArgument("src id is unspecified".into()));
+        }
         let route_key = recv_result.route_key;
         let group_code = if let Some(my_group_code) = self.pipe_context.load_group_code() {
             if my_group_code.as_ref() == packet.group_code() {
@@ -477,20 +505,9 @@ impl PipeLine {
             self.other_group_handle(packet, route_key).await?;
             return Ok(None);
         };
-        let src_id = NodeID::try_from(packet.src_id())?;
 
-        if src_id.is_unspecified() || src_id.is_broadcast() {
-            return Err(Error::InvalidArgument("src id is unspecified".into()));
-        }
         let dest_id = NodeID::try_from(packet.dest_id())?;
 
-        if packet.max_ttl() < packet.ttl() {
-            return Err(Error::InvalidArgument("ttl error".into()));
-        }
-
-        if packet.ttl() == 0 {
-            return Ok(None);
-        }
         let metric = packet.max_ttl() - packet.ttl() + 1;
 
         let self_id = if let Some(self_id) = self.pipe_context.load_id() {
