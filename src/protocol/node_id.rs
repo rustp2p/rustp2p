@@ -65,6 +65,15 @@ impl TryFrom<&[u8]> for NodeID {
 pub struct GroupCode([u8; 16]);
 
 pub const GROUP_CODE_LEN: usize = 16;
+impl GroupCode {
+    pub fn unspecified() -> GroupCode {
+        GroupCode([0u8; 16])
+    }
+    pub fn is_unspecified(&self) -> bool {
+        let buf = self.as_ref();
+        buf.iter().all(|v| *v == 0)
+    }
+}
 
 impl AsRef<[u8]> for GroupCode {
     fn as_ref(&self) -> &[u8] {

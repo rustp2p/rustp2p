@@ -2,7 +2,7 @@ use std::ops::{Deref, DerefMut};
 
 use bytes::BytesMut;
 
-use crate::protocol::node_id::NodeID;
+use crate::protocol::node_id::{GroupCode, NodeID};
 use crate::protocol::protocol_type::ProtocolType;
 use crate::protocol::{NetPacket, HEAD_LEN};
 
@@ -38,6 +38,7 @@ impl SendPacket {
         let mut packet = NetPacket::unchecked(self.buf_mut());
         packet.reset_data_len();
     }
+    /// # Safety
     /// Sets the length of the buffer.
     /// This will explicitly set the size of the buffer without actually modifying the data,
     /// so it is up to the caller to ensure that the data has been initialized.
@@ -50,6 +51,10 @@ impl SendPacket {
     pub fn set_ttl(&mut self, ttl: u8) {
         let ttl = ttl & 0xF;
         self.buf[3] = (ttl << 4) | ttl
+    }
+    pub fn set_group_code(&mut self, code: &GroupCode) {
+        let mut packet = NetPacket::unchecked(self.buf_mut());
+        packet.set_group_code(code);
     }
     pub fn set_src_id(&mut self, id: &NodeID) {
         let mut packet = NetPacket::unchecked(self.buf_mut());

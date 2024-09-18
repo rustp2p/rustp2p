@@ -4,7 +4,7 @@ use std::net::SocketAddr;
 use std::time::Duration;
 
 use crate::pipe::{NodeAddress, PeerNodeAddress};
-use crate::protocol::node_id::NodeID;
+use crate::protocol::node_id::{GroupCode, NodeID};
 use crate::protocol::{NetPacket, HEAD_LEN};
 use async_trait::async_trait;
 use bytes::{Buf, BytesMut};
@@ -42,6 +42,7 @@ pub struct PipeConfig {
     pub udp_pipe_config: Option<UdpPipeConfig>,
     pub tcp_pipe_config: Option<TcpPipeConfig>,
     pub enable_extend: bool,
+    pub group_code: Option<GroupCode>,
     pub self_id: Option<NodeID>,
     pub direct_addrs: Option<Vec<PeerNodeAddress>>,
     pub send_buffer_size: usize,
@@ -63,6 +64,7 @@ impl Default for PipeConfig {
             udp_pipe_config: Some(Default::default()),
             tcp_pipe_config: Some(Default::default()),
             route_idle_time: ROUTE_IDLE_TIME,
+            group_code: None,
             self_id: None,
             direct_addrs: None,
             send_buffer_size: 2048,
@@ -119,6 +121,10 @@ impl PipeConfig {
     }
     pub fn set_tcp_pipe_config(mut self, tcp_pipe_config: TcpPipeConfig) -> Self {
         self.tcp_pipe_config.replace(tcp_pipe_config);
+        self
+    }
+    pub fn set_group_code(mut self, group_code: GroupCode) -> Self {
+        self.group_code.replace(group_code);
         self
     }
     pub fn set_node_id(mut self, self_id: NodeID) -> Self {

@@ -80,6 +80,7 @@ pub async fn main() -> Result<()> {
         .set_udp_pipe_config(udp_config)
         .set_tcp_pipe_config(tcp_config)
         .set_direct_addrs(addrs)
+        .set_group_code(123u128.into())
         .set_node_id(self_id.into());
 
     let mut pipe = Pipe::new(config).await?;

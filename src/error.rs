@@ -9,6 +9,8 @@ pub enum Error {
     InvalidArgument(String),
     #[error("No ID specified")]
     NoIDSpecified,
+    #[error("No Group Code specified")]
+    NoGroupCodeSpecified,
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error(transparent)]

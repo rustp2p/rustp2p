@@ -43,6 +43,7 @@ impl Pipe {
         let query_id_interval = config.query_id_interval;
         let query_id_max_num = config.query_id_max_num;
         let heartbeat_interval = config.heartbeat_interval;
+        let group_code = config.group_code.take();
         let self_id = config.self_id.take();
         let direct_addrs = config.direct_addrs.take();
         let mapping_addrs = config.mapping_addrs.take();
@@ -83,6 +84,9 @@ impl Pipe {
             default_interface.clone(),
             dns,
         );
+        if let Some(group_code) = group_code {
+            pipe_context.store_group_code(group_code)?;
+        }
         if let Some(node_id) = self_id {
             pipe_context.store_self_id(node_id)?;
         }
@@ -279,23 +283,20 @@ impl PipeWriter {
     }
 
     pub async fn broadcast_packet(&self, packet: &mut SendPacket) -> Result<()> {
-        if let Some(src_id) = self.pipe_context.load_id() {
-            packet.set_src_id(&src_id);
-            packet.set_dest_id(&NodeID::broadcast());
-            self.send_to0(packet.buf_mut(), &src_id, &NodeID::broadcast())
-                .await?;
-            Ok(())
-        } else {
-            Err(Error::NoIDSpecified)
-        }
+        self.send_packet_to(packet, &NodeID::broadcast()).await
     }
     pub async fn send_packet_to(&self, packet: &mut SendPacket, dest_id: &NodeID) -> Result<()> {
-        if let Some(src_id) = self.pipe_context.load_id() {
-            packet.set_src_id(&src_id);
-            packet.set_dest_id(dest_id);
-            self.send_to0(packet.buf_mut(), &src_id, dest_id).await
+        if let Some(group_code) = self.pipe_context.load_group_code() {
+            if let Some(src_id) = self.pipe_context.load_id() {
+                packet.set_group_code(&group_code);
+                packet.set_src_id(&src_id);
+                packet.set_dest_id(dest_id);
+                self.send_to0(packet.buf_mut(), &src_id, dest_id).await
+            } else {
+                Err(Error::NoIDSpecified)
+            }
         } else {
-            Err(Error::NoIDSpecified)
+            Err(Error::NoGroupCodeSpecified)
         }
     }
     pub async fn send_multi_packet_to(
@@ -327,6 +328,11 @@ impl PipeWriter {
         protocol_type: ProtocolType,
         payload_size: usize,
     ) -> Result<SendPacket> {
+        let group_code = if let Some(group_code) = self.pipe_context.load_group_code() {
+            group_code
+        } else {
+            return Err(Error::NoGroupCodeSpecified);
+        };
         let src_id = if let Some(src_id) = self.pipe_context.load_id() {
             src_id
         } else {
@@ -340,6 +346,7 @@ impl PipeWriter {
         packet.set_high_flag();
         packet.set_protocol(protocol_type);
         packet.set_ttl(15);
+        packet.set_group_code(&group_code);
         packet.set_src_id(&src_id);
         packet.set_dest_id(&NodeID::unspecified());
         packet.reset_data_len();
@@ -363,9 +370,6 @@ pub struct PipeLine {
 }
 
 impl PipeLine {
-    pub fn store_self_id(&self, node_id: NodeID) -> Result<()> {
-        self.pipe_context.store_self_id(node_id)
-    }
     pub async fn recv_from<'a>(
         &mut self,
         buf: &'a mut [u8],
@@ -424,11 +428,26 @@ impl PipeLine {
     pub(crate) async fn send_to_route(&self, buf: &[u8], route_key: &RouteKey) -> Result<()> {
         self.pipe_writer.send_to_route(buf, route_key).await
     }
+    async fn other_group_handle(&mut self, _packet: NetPacket<&mut [u8]>) -> Result<()> {
+        todo!()
+    }
     async fn handle<'a>(
         &mut self,
         recv_result: RecvResult<'a>,
     ) -> Result<Option<HandleResultInner>> {
         let mut packet = NetPacket::new(recv_result.buf)?;
+        let group_code = if let Some(my_group_code) = self.pipe_context.load_group_code() {
+            if my_group_code.as_ref() == packet.group_code() {
+                my_group_code
+            } else {
+                self.other_group_handle(packet).await?;
+                return Ok(None);
+            }
+        } else {
+            // If you haven't joined any groups, you can only do forwarding
+            self.other_group_handle(packet).await?;
+            return Ok(None);
+        };
         let src_id = NodeID::try_from(packet.src_id())?;
 
         if src_id.is_unspecified() || src_id.is_broadcast() {
@@ -526,6 +545,7 @@ impl PipeLine {
                 )?;
                 packet.set_dest_id(&src_id);
                 packet.set_src_id(&self_id);
+                packet.set_group_code(&group_code);
                 self.send_to_route(packet.buffer(), &route_key).await?;
             }
             ProtocolType::IDRouteReply => {

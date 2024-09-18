@@ -16,11 +16,12 @@ use rust_p2p_core::socket::LocalInterface;
 use crate::config::punch_info::NodePunchInfo;
 use crate::error::Error;
 use crate::extend::dns_query::{dns_query_all, dns_query_txt};
-use crate::protocol::node_id::NodeID;
+use crate::protocol::node_id::{GroupCode, NodeID};
 
 #[derive(Clone)]
 pub struct PipeContext {
     self_node_id: Arc<AtomicCell<Option<NodeID>>>,
+    group_code: Arc<AtomicCell<Option<GroupCode>>>,
     direct_node_address_list: Arc<RwLock<Vec<(PeerNodeAddress, u16, Vec<NodeAddress>)>>>,
     direct_node_id_map: Arc<DashMap<u16, (NodeID, Instant)>>,
     reachable_nodes: Arc<DashMap<NodeID, Vec<(NodeID, u8, Instant)>>>,
@@ -39,6 +40,7 @@ impl PipeContext {
         let punch_info = NodePunchInfo::new(local_udp_ports, local_tcp_port);
         Self {
             self_node_id: Arc::new(Default::default()),
+            group_code: Arc::new(Default::default()),
             direct_node_address_list: Arc::new(Default::default()),
             direct_node_id_map: Arc::new(Default::default()),
             reachable_nodes: Arc::new(Default::default()),
@@ -53,6 +55,16 @@ impl PipeContext {
         }
         self.self_node_id.store(Some(node_id));
         Ok(())
+    }
+    pub fn store_group_code(&self, group_code: GroupCode) -> crate::error::Result<()> {
+        if group_code.is_unspecified() {
+            return Err(Error::InvalidArgument("invalid group code".into()));
+        }
+        self.group_code.store(Some(group_code));
+        Ok(())
+    }
+    pub fn load_group_code(&self) -> Option<GroupCode> {
+        self.group_code.load()
     }
     pub fn load_id(&self) -> Option<NodeID> {
         self.self_node_id.load()
