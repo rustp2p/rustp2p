@@ -24,8 +24,7 @@ pub struct PipeContext {
     group_code: Arc<AtomicCell<Option<GroupCode>>>,
     direct_node_address_list: Arc<RwLock<Vec<(PeerNodeAddress, u16, Vec<NodeAddress>)>>>,
     direct_node_id_map: Arc<DashMap<u16, (NodeID, Instant)>>,
-    reachable_nodes: Arc<DashMap<NodeID, Vec<(NodeID, u8, Instant)>>>,
-    other_group_reachable_node: Arc<DashMap<GroupCode, DashMap<NodeID, (NodeID, u8, Instant)>>>,
+    reachable_nodes: Arc<DashMap<GroupCode, DashMap<NodeID, (NodeID, u8, Instant)>>>,
     punch_info: Arc<RwLock<NodePunchInfo>>,
     default_interface: Option<LocalInterface>,
     dns: Vec<String>,
@@ -45,7 +44,6 @@ impl PipeContext {
             direct_node_address_list: Arc::new(Default::default()),
             direct_node_id_map: Arc::new(Default::default()),
             reachable_nodes: Arc::new(Default::default()),
-            other_group_reachable_node: Arc::new(Default::default()),
             punch_info: Arc::new(RwLock::new(punch_info)),
             default_interface: default_interface.map(|v| v.into()),
             dns: dns.unwrap_or_default(),
@@ -128,48 +126,43 @@ impl PipeContext {
         self.direct_node_id_map
             .insert(id, (node_id, Instant::now()));
     }
-    pub fn update_reachable_nodes(&self, src_id: NodeID, reachable_id: NodeID, metric: u8) {
-        let now = Instant::now();
-        self.reachable_nodes
-            .entry(reachable_id)
-            .and_modify(|v| {
-                for (node, m, time) in &mut *v {
-                    if node == &src_id {
-                        *m = metric;
-                        *time = now;
-                        v.sort_by_key(|(_, m, _)| *m);
-                        return;
-                    }
-                }
-                v.push((src_id, metric, now));
-                v.sort_by_key(|(_, m, _)| *m);
-            })
-            .or_insert_with(|| vec![(src_id, metric, now)]);
-    }
+
     pub(crate) fn clear_timeout_reachable_nodes(&self, query_id_interval: Duration) {
         let now = Instant::now();
         if let Some(timeout) = now.checked_sub(query_id_interval * 3) {
             self.direct_node_id_map
                 .retain(|_, (_, time)| *time > timeout);
             for mut val in self.reachable_nodes.iter_mut() {
-                val.value_mut().retain(|(_, _, time)| time > &timeout);
+                val.value_mut().retain(|_k, (_, _, time)| &*time > &timeout);
             }
             self.reachable_nodes.retain(|_, v| !v.is_empty());
         }
     }
-    pub fn reachable_node(&self, dest_id: &NodeID) -> Option<NodeID> {
-        if let Some(v) = self.reachable_nodes.get(dest_id) {
-            v.value().first().map(|(v, _, _)| *v)
-        } else {
-            None
-        }
-    }
-    pub fn other_group_reachable_node(
+
+    pub fn update_reachable_nodes(
         &self,
-        group_code: &GroupCode,
-        dest_id: &NodeID,
-    ) -> Option<NodeID> {
-        if let Some(v) = self.other_group_reachable_node.get(group_code) {
+        group_code: GroupCode,
+        src_id: NodeID,
+        reachable_id: NodeID,
+        metric: u8,
+    ) {
+        let now = Instant::now();
+        self.reachable_nodes
+            .entry(group_code)
+            .or_insert_with(|| DashMap::new())
+            .entry(reachable_id)
+            .and_modify(|(node, m, time)| {
+                if *m < metric {
+                    return;
+                }
+                *m = metric;
+                *time = now;
+                *node = src_id;
+            })
+            .or_insert_with(|| (src_id, metric, now));
+    }
+    pub fn reachable_node(&self, group_code: &GroupCode, dest_id: &NodeID) -> Option<NodeID> {
+        if let Some(v) = self.reachable_nodes.get(group_code) {
             v.get(dest_id).map(|v| v.value().0)
         } else {
             None

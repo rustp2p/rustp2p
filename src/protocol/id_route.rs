@@ -4,12 +4,6 @@
    0                                            15                                              31
    0  1  2  3  4  5  6  7  8  9  0  1  2  3  4  5  6  7  8  9  0  1  2  3  4  5  6  7  8  9  0  1
   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-  |    unused(8)        | ID length(8)          |   protocol (8)       |max ttl(4) | cur ttl(4) |
-  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-  |                                           src ID                                            |
-  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-  |                                          dest ID                                            |
-  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
   |                  offset(16)                 |               query id(16)                    |
   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
   protocol = ProtocolType::IDRouteQuery
@@ -21,11 +15,7 @@
    0                                            15                                              31
    0  1  2  3  4  5  6  7  8  9  0  1  2  3  4  5  6  7  8  9  0  1  2  3  4  5  6  7  8  9  0  1
   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-  |    unused(8)        | ID length(8)          |   protocol (8)       |max ttl(4) | cur ttl(4) |
-  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-  |                                           src ID                                            |
-  +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-  |                                          dest ID                                            |
+  |                                     group code(128)                                         |
   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
   |   current id num(8) |                            query id(16)      |            all id num(16)                     |
   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
@@ -40,7 +30,7 @@
   protocol = ProtocolType::IDRouteReply
 */
 use crate::error::*;
-use crate::protocol::node_id::{NodeID, ID_LEN};
+use crate::protocol::node_id::{GroupCode, NodeID, ID_LEN};
 use crate::protocol::protocol_type::ProtocolType;
 use crate::protocol::{NetPacket, HEAD_LEN};
 
@@ -53,7 +43,7 @@ impl<B: AsRef<[u8]>> IDRouteReplyPacket<B> {
     }
     pub fn new(buffer: B) -> Result<IDRouteReplyPacket<B>> {
         let len = buffer.as_ref().len();
-        if len < 5 {
+        if len < 16 + 5 {
             return Err(Error::Overflow {
                 cap: len,
                 required: 5,
@@ -61,7 +51,7 @@ impl<B: AsRef<[u8]>> IDRouteReplyPacket<B> {
         }
         let packet = Self { buffer };
         let calculate_size =
-            packet.metric_len() as usize + packet.current_id_num() as usize * ID_LEN + 5;
+            packet.metric_len() as usize + packet.current_id_num() as usize * ID_LEN + 16 + 5;
         if calculate_size != len {
             return Err(Error::Overflow {
                 cap: len,
@@ -70,14 +60,17 @@ impl<B: AsRef<[u8]>> IDRouteReplyPacket<B> {
         }
         Ok(packet)
     }
+    pub fn group_code(&self) -> &[u8] {
+        &self.buffer.as_ref()[..16]
+    }
     pub fn current_id_num(&self) -> u8 {
-        self.buffer.as_ref()[0]
+        self.buffer.as_ref()[16]
     }
     pub fn query_id(&self) -> u16 {
-        u16::from_be_bytes(self.buffer.as_ref()[1..3].try_into().unwrap())
+        u16::from_be_bytes(self.buffer.as_ref()[17..19].try_into().unwrap())
     }
     pub fn all_id_num(&self) -> u16 {
-        u16::from_be_bytes(self.buffer.as_ref()[3..5].try_into().unwrap())
+        u16::from_be_bytes(self.buffer.as_ref()[19..21].try_into().unwrap())
     }
     pub fn metric_len(&self) -> u8 {
         let id_num = self.current_id_num();
@@ -106,10 +99,10 @@ impl<B: AsRef<[u8]>> Iterator for IDRouteReplyIter<'_, B> {
         if id_num == self.index {
             return None;
         }
-        let metric_index = 5 + self.index / 2;
+        let metric_index = 16 + 5 + self.index / 2;
         let metric_offset = if self.index & 0b1 == 0b0 { 4 } else { 0 };
         let metric = (self.packet.buffer()[metric_index] >> metric_offset) & 0xF;
-        let node_index_start = 5 + self.packet.metric_len() as usize + self.index * ID_LEN;
+        let node_index_start = 16 + 5 + self.packet.metric_len() as usize + self.index * ID_LEN;
         let node_index_end = node_index_start + ID_LEN;
         let node_id =
             NodeID::try_from(&self.packet.buffer()[node_index_start..node_index_end]).unwrap();
@@ -128,10 +121,11 @@ impl Builder {
         let id_num = list.len();
         let metric_len = id_num / 2 + if id_num & 0b1 == 0b1 { 1 } else { 0 };
 
-        let len = HEAD_LEN + 5 + metric_len + ID_LEN * id_num;
+        let len = HEAD_LEN + 16 + 5 + metric_len + ID_LEN * id_num;
         Ok(len)
     }
     pub fn build_reply(
+        group_code: &GroupCode,
         list: &[(NodeID, u8)],
         query_id: u16,
         all_id_num: u16,
@@ -145,14 +139,15 @@ impl Builder {
         let payload = packet.payload_mut();
         let id_num = list.len();
         let metric_len = id_num / 2 + if id_num & 0b1 == 0b1 { 1 } else { 0 };
-        payload[0] = id_num as _;
-        payload[1..3].copy_from_slice(&query_id.to_be_bytes());
-        payload[3..5].copy_from_slice(&all_id_num.to_be_bytes());
+        payload[..16].copy_from_slice(group_code.as_ref());
+        payload[16] = id_num as _;
+        payload[17..19].copy_from_slice(&query_id.to_be_bytes());
+        payload[19..21].copy_from_slice(&all_id_num.to_be_bytes());
         for (index, (node_id, metric)) in list.iter().enumerate() {
-            let metric_index = 5 + index / 2;
+            let metric_index = 16 + 5 + index / 2;
             let metric_offset = if index & 0b1 == 0b0 { 4 } else { 0 };
             payload[metric_index] |= (*metric) << metric_offset;
-            let node_index_start = 5 + metric_len + index * ID_LEN;
+            let node_index_start = 16 + 5 + metric_len + index * ID_LEN;
             let node_index_end = node_index_start + ID_LEN;
             payload[node_index_start..node_index_end].copy_from_slice(node_id.as_ref());
         }
@@ -183,7 +178,7 @@ mod test {
         test_build0(list);
     }
     fn test_build0(list: Vec<(NodeID, u8)>) {
-        let packet = Builder::build_reply(&list, 16, 20).unwrap();
+        let packet = Builder::build_reply(&1u128.into(), &list, 16, 20).unwrap();
         let packet = IDRouteReplyPacket::new(packet.payload()).unwrap();
         assert_eq!(packet.iter().count(), list.len());
         assert_eq!(packet.query_id(), 16);
