@@ -449,32 +449,34 @@ impl PipeLine {
                 .or_insert_with(|| RouteTable::new(false, 1));
             ref_mut.add_route_if_absent(src_id, Route::from_default_rt(route_key, metric));
         }
-        if group_code.is_unspecified() {
-            // The data of this group can be consumed by any node
-            match packet.protocol()? {
-                ProtocolType::IDRouteQuery => {}
-                _ => {}
-            }
-        } else {
-            if !packet.incr_ttl() {
-                return Ok(());
-            }
-            let dest_id = NodeID::try_from(packet.dest_id())?;
-            if dest_id.is_unspecified() {
-                return Ok(());
-            }
-            if let Some(route_table) = self.other_route_table.get(&group_code) {
-                if dest_id.is_broadcast() {
-                    // broadcast
-                } else {
-                    if let Ok(v) = route_table.get_route_by_id(&dest_id) {
-                        self.send_to_route(packet.buffer(), &v.route_key()).await?;
-                    }
-                }
-            }
-            // Need to be forwarded
+
+        if !packet.incr_ttl() {
+            return Ok(());
         }
-        todo!()
+        let dest_id = NodeID::try_from(packet.dest_id())?;
+        if dest_id.is_unspecified() {
+            return Ok(());
+        }
+
+        if let Some(route_table) = self.other_route_table.get(&group_code) {
+            if dest_id.is_broadcast() {
+                // broadcast
+            } else if let Ok(v) = route_table.get_route_by_id(&dest_id) {
+                self.send_to_route(packet.buffer(), &v.route_key()).await?;
+            } else if let Some(v) = self
+                .pipe_context
+                .other_group_reachable_node(&group_code, &dest_id)
+            {
+                if let Ok(v) = route_table.get_route_by_id(&v) {
+                    self.send_to_route(packet.buffer(), &v.route_key()).await?;
+                } else {
+                    // broadcast query?
+                }
+            } else {
+                // broadcast query?
+            }
+        }
+        Ok(())
     }
     async fn handle<'a>(
         &mut self,
@@ -678,6 +680,8 @@ impl PipeLine {
                     log::debug!("active_punch_sender err src_id={self_id:?}");
                 }
             }
+            ProtocolType::IDQuery => {}
+            ProtocolType::IDReply => {}
         }
 
         Ok(None)

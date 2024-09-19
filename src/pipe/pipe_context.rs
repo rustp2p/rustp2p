@@ -25,6 +25,7 @@ pub struct PipeContext {
     direct_node_address_list: Arc<RwLock<Vec<(PeerNodeAddress, u16, Vec<NodeAddress>)>>>,
     direct_node_id_map: Arc<DashMap<u16, (NodeID, Instant)>>,
     reachable_nodes: Arc<DashMap<NodeID, Vec<(NodeID, u8, Instant)>>>,
+    other_group_reachable_node: Arc<DashMap<GroupCode, DashMap<NodeID, (NodeID, u8, Instant)>>>,
     punch_info: Arc<RwLock<NodePunchInfo>>,
     default_interface: Option<LocalInterface>,
     dns: Vec<String>,
@@ -44,6 +45,7 @@ impl PipeContext {
             direct_node_address_list: Arc::new(Default::default()),
             direct_node_id_map: Arc::new(Default::default()),
             reachable_nodes: Arc::new(Default::default()),
+            other_group_reachable_node: Arc::new(Default::default()),
             punch_info: Arc::new(RwLock::new(punch_info)),
             default_interface: default_interface.map(|v| v.into()),
             dns: dns.unwrap_or_default(),
@@ -158,6 +160,17 @@ impl PipeContext {
     pub fn reachable_node(&self, dest_id: &NodeID) -> Option<NodeID> {
         if let Some(v) = self.reachable_nodes.get(dest_id) {
             v.value().first().map(|(v, _, _)| *v)
+        } else {
+            None
+        }
+    }
+    pub fn other_group_reachable_node(
+        &self,
+        group_code: &GroupCode,
+        dest_id: &NodeID,
+    ) -> Option<NodeID> {
+        if let Some(v) = self.other_group_reachable_node.get(group_code) {
+            v.get(dest_id).map(|v| v.value().0)
         } else {
             None
         }

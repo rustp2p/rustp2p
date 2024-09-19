@@ -17,13 +17,15 @@ pub enum ProtocolType {
     IDRouteReply = 10,
     /// Broadcast to the designated range
     RangeBroadcast = 11,
+    IDQuery = 12,
+    IDReply = 13,
 }
 
 impl TryFrom<u8> for ProtocolType {
     type Error = crate::error::Error;
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
-        const MAX: u8 = ProtocolType::RangeBroadcast as u8;
+        const MAX: u8 = ProtocolType::IDReply as u8;
         match value {
             0..=MAX => unsafe { Ok(std::mem::transmute::<u8, ProtocolType>(value)) },
             val => Err(crate::error::Error::InvalidArgument(format!(
