@@ -14,7 +14,7 @@ use tun_rs::AsyncDevice;
 use rustp2p::config::{PipeConfig, TcpPipeConfig, UdpPipeConfig};
 use rustp2p::error::*;
 use rustp2p::pipe::{PeerNodeAddress, Pipe, PipeLine, PipeWriter, SendPacket};
-use rustp2p::protocol::node_id::NodeID;
+use rustp2p::protocol::node_id::{GroupCode, NodeID};
 
 #[global_allocator]
 static GLOBAL_MI_MALLOC: GlobalMiMalloc = GlobalMiMalloc;
@@ -30,6 +30,9 @@ struct Args {
     /// example: --local 10.26.0.2/24
     #[arg(short, long)]
     local: String,
+    /// Nodes with the same group_comde can form a network
+    #[arg(short, long)]
+    group_code: String,
     /// Listen local port
     #[arg(short = 'P', long)]
     port: Option<u16>,
@@ -37,7 +40,12 @@ struct Args {
 
 #[tokio::main]
 pub async fn main() -> Result<()> {
-    let Args { peer, local, port } = Args::parse();
+    let Args {
+        peer,
+        local,
+        group_code,
+        port,
+    } = Args::parse();
     env_logger::Builder::from_env(Env::default().default_filter_or("debug")).init();
     let mut split = local.split("/");
     let self_id = Ipv4Addr::from_str(split.next().expect("--local error")).expect("--local error");
@@ -80,7 +88,7 @@ pub async fn main() -> Result<()> {
         .set_udp_pipe_config(udp_config)
         .set_tcp_pipe_config(tcp_config)
         .set_direct_addrs(addrs)
-        .set_group_code(123u128.into())
+        .set_group_code(string_to_group_code(&group_code))
         .set_node_id(self_id.into());
 
     let mut pipe = Pipe::new(config).await?;
@@ -123,6 +131,13 @@ pub async fn main() -> Result<()> {
     _ = shutdown_writer.shutdown();
     log::info!("exit!!!!");
     Ok(())
+}
+fn string_to_group_code(input: &str) -> GroupCode {
+    let mut array = [0u8; 16];
+    let bytes = input.as_bytes();
+    let len = bytes.len().min(16);
+    array[..len].copy_from_slice(&bytes[..len]);
+    array.into()
 }
 async fn recv(mut line: PipeLine, sender: Sender<Vec<u8>>, mut _pipe_wirter: PipeWriter) {
     let mut buf = [0u8; 2048];

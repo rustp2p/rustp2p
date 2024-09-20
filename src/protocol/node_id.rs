@@ -64,6 +64,11 @@ impl TryFrom<&[u8]> for NodeID {
 #[derive(Hash, Eq, PartialEq, Ord, PartialOrd, Copy, Clone, Debug)]
 pub struct GroupCode([u8; 16]);
 
+impl Default for GroupCode {
+    fn default() -> Self {
+        GroupCode::unspecified()
+    }
+}
 pub const GROUP_CODE_LEN: usize = 16;
 impl GroupCode {
     pub fn unspecified() -> GroupCode {

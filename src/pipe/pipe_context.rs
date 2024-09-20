@@ -10,6 +10,7 @@ use dashmap::DashMap;
 use parking_lot::RwLock;
 use rand::seq::SliceRandom;
 use rust_p2p_core::punch::{PunchConsultInfo, PunchModelBox};
+use rust_p2p_core::route::route_table::RouteTable;
 use rust_p2p_core::route::Index;
 use rust_p2p_core::socket::LocalInterface;
 
@@ -21,13 +22,14 @@ use crate::protocol::node_id::{GroupCode, NodeID};
 #[derive(Clone)]
 pub struct PipeContext {
     self_node_id: Arc<AtomicCell<Option<NodeID>>>,
-    group_code: Arc<AtomicCell<Option<GroupCode>>>,
+    group_code: Arc<AtomicCell<GroupCode>>,
     direct_node_address_list: Arc<RwLock<Vec<(PeerNodeAddress, u16, Vec<NodeAddress>)>>>,
     direct_node_id_map: Arc<DashMap<u16, (NodeID, Instant)>>,
-    reachable_nodes: Arc<DashMap<GroupCode, DashMap<NodeID, (NodeID, u8, Instant)>>>,
+    pub reachable_nodes: Arc<DashMap<GroupCode, DashMap<NodeID, (GroupCode, NodeID, u8, Instant)>>>,
     punch_info: Arc<RwLock<NodePunchInfo>>,
     default_interface: Option<LocalInterface>,
     dns: Vec<String>,
+    pub(crate) other_route_table: Arc<DashMap<GroupCode, RouteTable<NodeID>>>,
 }
 
 impl PipeContext {
@@ -47,6 +49,7 @@ impl PipeContext {
             punch_info: Arc::new(RwLock::new(punch_info)),
             default_interface: default_interface.map(|v| v.into()),
             dns: dns.unwrap_or_default(),
+            other_route_table: Arc::new(Default::default()),
         }
     }
     pub fn store_self_id(&self, node_id: NodeID) -> crate::error::Result<()> {
@@ -60,10 +63,10 @@ impl PipeContext {
         if group_code.is_unspecified() {
             return Err(Error::InvalidArgument("invalid group code".into()));
         }
-        self.group_code.store(Some(group_code));
+        self.group_code.store(group_code);
         Ok(())
     }
-    pub fn load_group_code(&self) -> Option<GroupCode> {
+    pub fn load_group_code(&self) -> GroupCode {
         self.group_code.load()
     }
     pub fn load_id(&self) -> Option<NodeID> {
@@ -133,7 +136,8 @@ impl PipeContext {
             self.direct_node_id_map
                 .retain(|_, (_, time)| *time > timeout);
             for mut val in self.reachable_nodes.iter_mut() {
-                val.value_mut().retain(|_k, (_, _, time)| *time > timeout);
+                val.value_mut()
+                    .retain(|_k, (_, _, _, time)| *time > timeout);
             }
             self.reachable_nodes.retain(|_, v| !v.is_empty());
         }
@@ -141,29 +145,35 @@ impl PipeContext {
 
     pub fn update_reachable_nodes(
         &self,
-        group_code: GroupCode,
-        src_id: NodeID,
+        reachable_group_code: GroupCode,
         reachable_id: NodeID,
+        src_group_code: GroupCode,
+        src_id: NodeID,
         metric: u8,
     ) {
         let now = Instant::now();
         self.reachable_nodes
-            .entry(group_code)
+            .entry(reachable_group_code)
             .or_default()
             .entry(reachable_id)
-            .and_modify(|(node, m, time)| {
+            .and_modify(|(group_code, node, m, time)| {
                 if *m < metric {
                     return;
                 }
                 *m = metric;
                 *time = now;
+                *group_code = src_group_code;
                 *node = src_id;
             })
-            .or_insert_with(|| (src_id, metric, now));
+            .or_insert_with(|| (src_group_code, src_id, metric, now));
     }
-    pub fn reachable_node(&self, group_code: &GroupCode, dest_id: &NodeID) -> Option<NodeID> {
+    pub fn reachable_node(
+        &self,
+        group_code: &GroupCode,
+        dest_id: &NodeID,
+    ) -> Option<(GroupCode, NodeID)> {
         if let Some(v) = self.reachable_nodes.get(group_code) {
-            v.get(dest_id).map(|v| v.value().0)
+            v.get(dest_id).map(|v| (v.value().0, v.value().1))
         } else {
             None
         }

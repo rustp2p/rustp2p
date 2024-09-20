@@ -37,7 +37,6 @@ pub struct Pipe {
     shutdown_manager: ShutdownManager<()>,
     active_punch_sender: Sender<(NodeID, PunchConsultInfo)>,
     passive_punch_sender: Sender<(NodeID, PunchConsultInfo)>,
-    other_route_table: Arc<DashMap<GroupCode, RouteTable<NodeID>>>,
 }
 
 impl Pipe {
@@ -136,7 +135,6 @@ impl Pipe {
             shutdown_manager,
             active_punch_sender,
             passive_punch_sender,
-            other_route_table: Arc::new(Default::default()),
         })
     }
     pub fn writer(&self) -> PipeWriter {
@@ -162,7 +160,6 @@ impl Pipe {
             route_table: self.pipe.route_table().clone(),
             active_punch_sender: self.active_punch_sender.clone(),
             passive_punch_sender: self.passive_punch_sender.clone(),
-            other_route_table: self.other_route_table.clone(),
         })
     }
 }
@@ -221,8 +218,20 @@ impl PipeWriter {
 
         if let Ok(route) = self.pipe_writer.route_table().get_route_by_id(dest_id) {
             self.pipe_writer.send_to(buf, &route.route_key()).await?
-        } else if let Some(turn_id) = self.pipe_context().reachable_node(group_code, dest_id) {
-            self.pipe_writer.send_to_id(buf, &turn_id).await?
+        } else if let Some((relay_group_code, relay_node_id)) =
+            self.pipe_context().reachable_node(group_code, dest_id)
+        {
+            if &relay_group_code != group_code {
+                self.pipe_writer.send_to_id(buf, &relay_node_id).await?
+            } else {
+                let route;
+                if let Some(v) = self.pipe_context().other_route_table.get(&relay_group_code) {
+                    route = v.get_route_by_id(&relay_node_id)?;
+                } else {
+                    return Err(Error::NodeIDNotAvailable);
+                }
+                self.pipe_writer.send_to(buf, &route.route_key()).await?
+            }
         } else {
             Err(Error::NodeIDNotAvailable)?
         };
@@ -246,8 +255,24 @@ impl PipeWriter {
             self.pipe_writer
                 .send_multiple_to(bufs, &route.route_key())
                 .await?
-        } else if let Some(turn_id) = self.pipe_context().reachable_node(group_code, dest_id) {
-            self.pipe_writer.send_multiple_to_id(bufs, &turn_id).await?
+        } else if let Some((relay_group_code, relay_node_id)) =
+            self.pipe_context().reachable_node(group_code, dest_id)
+        {
+            if &relay_group_code != group_code {
+                self.pipe_writer
+                    .send_multiple_to_id(bufs, &relay_node_id)
+                    .await?
+            } else {
+                let route;
+                if let Some(v) = self.pipe_context().other_route_table.get(&relay_group_code) {
+                    route = v.get_route_by_id(&relay_node_id)?;
+                } else {
+                    return Err(Error::NodeIDNotAvailable);
+                }
+                self.pipe_writer
+                    .send_multiple_to(bufs, &route.route_key())
+                    .await?
+            }
         } else {
             Err(Error::NodeIDNotAvailable)?
         };
@@ -298,18 +323,15 @@ impl PipeWriter {
         self.send_packet_to(packet, &NodeID::broadcast()).await
     }
     pub async fn send_packet_to(&self, packet: &mut SendPacket, dest_id: &NodeID) -> Result<()> {
-        if let Some(group_code) = self.pipe_context.load_group_code() {
-            if let Some(src_id) = self.pipe_context.load_id() {
-                packet.set_group_code(&group_code);
-                packet.set_src_id(&src_id);
-                packet.set_dest_id(dest_id);
-                self.send_to0(packet.buf_mut(), &group_code, &src_id, dest_id)
-                    .await
-            } else {
-                Err(Error::NoIDSpecified)
-            }
+        let group_code = self.pipe_context.load_group_code();
+        if let Some(src_id) = self.pipe_context.load_id() {
+            packet.set_group_code(&group_code);
+            packet.set_src_id(&src_id);
+            packet.set_dest_id(dest_id);
+            self.send_to0(packet.buf_mut(), &group_code, &src_id, dest_id)
+                .await
         } else {
-            Err(Error::NoGroupCodeSpecified)
+            Err(Error::NoIDSpecified)
         }
     }
     pub async fn send_multi_packet_to(
@@ -317,21 +339,18 @@ impl PipeWriter {
         packets: &mut [&mut SendPacket],
         dest_id: &NodeID,
     ) -> Result<()> {
-        if let Some(group_code) = self.pipe_context.load_group_code() {
-            if let Some(src_id) = self.pipe_context.load_id() {
-                for packet in packets.iter_mut() {
-                    packet.set_group_code(&group_code);
-                    packet.set_src_id(&src_id);
-                    packet.set_dest_id(dest_id);
-                }
-                let bufs: Vec<IoSlice> = packets.iter().map(|v| IoSlice::new(v.buf())).collect();
-                self.send_multiple_to0(&bufs, &group_code, &src_id, dest_id)
-                    .await
-            } else {
-                Err(Error::NoIDSpecified)
+        let group_code = self.pipe_context.load_group_code();
+        if let Some(src_id) = self.pipe_context.load_id() {
+            for packet in packets.iter_mut() {
+                packet.set_group_code(&group_code);
+                packet.set_src_id(&src_id);
+                packet.set_dest_id(dest_id);
             }
+            let bufs: Vec<IoSlice> = packets.iter().map(|v| IoSlice::new(v.buf())).collect();
+            self.send_multiple_to0(&bufs, &group_code, &src_id, dest_id)
+                .await
         } else {
-            Err(Error::NoGroupCodeSpecified)
+            Err(Error::NoIDSpecified)
         }
     }
     pub fn allocate_send_packet(&self) -> Result<SendPacket> {
@@ -347,11 +366,7 @@ impl PipeWriter {
         protocol_type: ProtocolType,
         payload_size: usize,
     ) -> Result<SendPacket> {
-        let group_code = if let Some(group_code) = self.pipe_context.load_group_code() {
-            group_code
-        } else {
-            return Err(Error::NoGroupCodeSpecified);
-        };
+        let group_code = self.pipe_context.load_group_code();
         let src_id = if let Some(src_id) = self.pipe_context.load_id() {
             src_id
         } else {
@@ -386,7 +401,6 @@ pub struct PipeLine {
     route_table: RouteTable<NodeID>,
     active_punch_sender: Sender<(NodeID, PunchConsultInfo)>,
     passive_punch_sender: Sender<(NodeID, PunchConsultInfo)>,
-    other_route_table: Arc<DashMap<GroupCode, RouteTable<NodeID>>>,
 }
 
 impl PipeLine {
@@ -452,14 +466,17 @@ impl PipeLine {
         &mut self,
         mut packet: NetPacket<&mut [u8]>,
         route_key: RouteKey,
+        self_group_code: GroupCode,
+        self_id: NodeID,
     ) -> Result<()> {
         let metric = packet.max_ttl() - packet.ttl() + 1;
-        let group_code = GroupCode::try_from(packet.group_code())?;
+        let src_group_code = GroupCode::try_from(packet.group_code())?;
         let src_id = NodeID::try_from(packet.src_id())?;
         {
             let ref_mut = self
+                .pipe_context
                 .other_route_table
-                .entry(group_code)
+                .entry(src_group_code)
                 .or_insert_with(|| RouteTable::new(false, 1));
             ref_mut.add_route_if_absent(src_id, Route::from_default_rt(route_key, metric));
         }
@@ -468,16 +485,23 @@ impl PipeLine {
                 self.id_route_query_handle(
                     packet,
                     route_key,
-                    group_code,
-                    NodeID::unspecified(),
+                    self_group_code,
+                    self_id,
+                    src_group_code,
                     src_id,
                 )
                 .await?;
                 return Ok(());
             }
             ProtocolType::IDRouteReply => {
-                self.id_route_reply_handle(packet, group_code, NodeID::unspecified(), src_id)
-                    .await?;
+                self.id_route_reply_handle(
+                    packet,
+                    self_group_code,
+                    self_id,
+                    src_group_code,
+                    src_id,
+                )
+                .await?;
                 return Ok(());
             }
             _ => {}
@@ -494,16 +518,23 @@ impl PipeLine {
             return Ok(());
         }
 
-        if let Some(route_table) = self.other_route_table.get(&group_code) {
+        if let Some(route_table) = self.pipe_context.other_route_table.get(&src_group_code) {
             if dest_id.is_broadcast() {
                 // broadcast
             } else if let Ok(v) = route_table.get_route_by_id(&dest_id) {
                 self.send_to_route(packet.buffer(), &v.route_key()).await?;
-            } else if let Some(v) = self.pipe_context.reachable_node(&group_code, &dest_id) {
-                if let Ok(v) = route_table.get_route_by_id(&v) {
-                    self.send_to_route(packet.buffer(), &v.route_key()).await?;
-                } else {
-                    // broadcast query?
+            } else if let Some((relay_group_code, relay_node_id)) =
+                self.pipe_context.reachable_node(&src_group_code, &dest_id)
+            {
+                drop(route_table);
+                if let Some(route_table) =
+                    self.pipe_context.other_route_table.get(&relay_group_code)
+                {
+                    if let Ok(v) = route_table.get_route_by_id(&relay_node_id) {
+                        self.send_to_route(packet.buffer(), &v.route_key()).await?;
+                    } else {
+                        // broadcast query?
+                    }
                 }
             } else {
                 // broadcast query?
@@ -522,18 +553,18 @@ impl PipeLine {
         if packet.ttl() == 0 {
             return Ok(None);
         }
-
-        let route_key = recv_result.route_key;
-        let group_code = if let Some(my_group_code) = self.pipe_context.load_group_code() {
-            if my_group_code.as_ref() == packet.group_code() {
-                my_group_code
-            } else {
-                self.other_group_handle(packet, route_key).await?;
-                return Ok(None);
-            }
+        let self_id = if let Some(self_id) = self.pipe_context.load_id() {
+            self_id
         } else {
-            // If you haven't joined any groups, you can only do forwarding
-            self.other_group_handle(packet, route_key).await?;
+            return Err(Error::InvalidArgument("self id is none".into()));
+        };
+        let my_group_code = self.pipe_context.load_group_code();
+        let route_key = recv_result.route_key;
+        let group_code = if my_group_code.as_ref() == packet.group_code() {
+            my_group_code
+        } else {
+            self.other_group_handle(packet, route_key, my_group_code, self_id)
+                .await?;
             return Ok(None);
         };
         let src_id = NodeID::try_from(packet.src_id())?;
@@ -545,23 +576,18 @@ impl PipeLine {
 
         let metric = packet.max_ttl() - packet.ttl() + 1;
 
-        let self_id = if let Some(self_id) = self.pipe_context.load_id() {
-            if self_id == src_id {
-                log::debug!("{packet:?}");
-                return Err(Error::InvalidArgument("id loop error".into()));
+        if self_id == src_id {
+            log::debug!("{packet:?}");
+            return Err(Error::InvalidArgument("id loop error".into()));
+        }
+        if self_id != dest_id && !dest_id.is_unspecified() && !dest_id.is_broadcast() {
+            if packet.incr_ttl() {
+                self.route_table
+                    .add_route_if_absent(src_id, Route::from_default_rt(route_key, metric));
+                self.send_to(&packet, &dest_id).await?;
             }
-            if self_id != dest_id && !dest_id.is_unspecified() && !dest_id.is_broadcast() {
-                if packet.incr_ttl() {
-                    self.route_table
-                        .add_route_if_absent(src_id, Route::from_default_rt(route_key, metric));
-                    self.send_to(&packet, &dest_id).await?;
-                }
-                return Ok(None);
-            }
-            self_id
-        } else {
-            return Err(Error::InvalidArgument("self id is none".into()));
-        };
+            return Ok(None);
+        }
         self.route_table
             .add_route_if_absent(src_id, Route::from_default_rt(route_key, metric));
         match packet.protocol()? {
@@ -606,11 +632,13 @@ impl PipeLine {
                     .add_route(src_id, Route::from(route_key, metric, rtt));
             }
             ProtocolType::IDRouteQuery => {
-                self.id_route_query_handle(packet, route_key, group_code, self_id, src_id)
-                    .await?
+                self.id_route_query_handle(
+                    packet, route_key, group_code, self_id, group_code, src_id,
+                )
+                .await?
             }
             ProtocolType::IDRouteReply => {
-                self.id_route_reply_handle(packet, group_code, self_id, src_id)
+                self.id_route_reply_handle(packet, group_code, self_id, group_code, src_id)
                     .await?
             }
             ProtocolType::UserData => {
@@ -694,6 +722,7 @@ impl PipeLine {
         route_key: RouteKey,
         self_group_code: GroupCode,
         self_id: NodeID,
+        src_group_code: GroupCode,
         src_id: NodeID,
     ) -> Result<()> {
         let payload = packet.payload();
@@ -705,28 +734,44 @@ impl PipeLine {
         let mut list = self.route_table.route_table_min_metric();
         // Not supporting too many nodes
         list.truncate(255);
-        let list: Vec<_> = list
-            .into_iter()
-            .filter(|(node_id, _)| node_id != &src_id)
-            .map(|(node_id, route)| (node_id, route.metric()))
-            .collect();
-        let mut packet = crate::protocol::id_route::Builder::build_reply(
-            &self_group_code,
-            &list,
-            query_id,
-            list.len() as _,
-        )?;
-        packet.set_dest_id(&src_id);
-        packet.set_src_id(&self_id);
-        packet.set_group_code(&GroupCode::unspecified());
-        self.send_to_route(packet.buffer(), &route_key).await?;
-        if !self.other_route_table.is_empty() {
+        let list: Vec<_> = if self_group_code == src_group_code {
+            list.into_iter()
+                .filter(|(node_id, _)| node_id != &src_id)
+                .map(|(node_id, route)| (node_id, route.metric()))
+                .collect()
+        } else {
+            list.into_iter()
+                .map(|(node_id, route)| (node_id, route.metric()))
+                .collect()
+        };
+        if !list.is_empty() {
+            let mut packet = crate::protocol::id_route::Builder::build_reply(
+                &self_group_code,
+                &list,
+                query_id,
+                list.len() as _,
+            )?;
+            packet.set_dest_id(&src_id);
+            packet.set_src_id(&self_id);
+            packet.set_group_code(&self_group_code);
+            self.send_to_route(packet.buffer(), &route_key).await?;
+        }
+
+        if !self.pipe_context.other_route_table.is_empty() {
             // Reply to reachable nodes of other groups
             let pipe_writer = self.pipe_writer.clone();
-            let other_route_table = self.other_route_table.clone();
+            let other_route_table = self.pipe_context.other_route_table.clone();
             tokio::spawn(async move {
-                if let Err(e) =
-                    id_route_reply(pipe_writer, other_route_table, route_key, src_id, self_id).await
+                if let Err(e) = id_route_reply(
+                    pipe_writer,
+                    other_route_table,
+                    route_key,
+                    self_group_code,
+                    self_id,
+                    src_group_code,
+                    src_id,
+                )
+                .await
                 {
                     log::debug!("id_route_reply {e:?}");
                 }
@@ -739,21 +784,27 @@ impl PipeLine {
         packet: NetPacket<&mut [u8]>,
         self_group_code: GroupCode,
         self_id: NodeID,
+        src_group_code: GroupCode,
         src_id: NodeID,
     ) -> Result<()> {
         let reply_packet = IDRouteReplyPacket::new(packet.payload())?;
-        let id_group_code = GroupCode::try_from(reply_packet.group_code())?;
+        let reachable_group_code = GroupCode::try_from(reply_packet.group_code())?;
 
         let id = reply_packet.query_id();
-        if id_group_code == self_group_code && id != 0 {
+        if reachable_group_code == self_group_code && id != 0 {
             self.pipe_context.update_direct_node_id(id, src_id);
         }
         for (reachable_id, metric) in reply_packet.iter() {
-            if reachable_id == self_id {
+            if self_group_code == reachable_group_code && reachable_id == self_id {
                 continue;
             }
-            self.pipe_context
-                .update_reachable_nodes(id_group_code, src_id, reachable_id, metric);
+            self.pipe_context.update_reachable_nodes(
+                reachable_group_code,
+                reachable_id,
+                src_group_code,
+                src_id,
+                metric,
+            );
         }
         Ok(())
     }
@@ -762,18 +813,30 @@ async fn id_route_reply(
     pipe_writer: PipeWriter,
     other_route_table: Arc<DashMap<GroupCode, RouteTable<NodeID>>>,
     route_key: RouteKey,
-    src_id: NodeID,
+    self_group_code: GroupCode,
     self_id: NodeID,
+    src_group_code: GroupCode,
+    src_id: NodeID,
 ) -> Result<()> {
     let mut list = Vec::with_capacity(other_route_table.len());
     for x in other_route_table.iter() {
-        let mut table: Vec<_> = x
-            .route_table_min_metric()
-            .into_iter()
-            .map(|(node_id, route)| (node_id, route.metric()))
-            .collect();
+        let mut table: Vec<_> = if &src_group_code == x.key() {
+            x.route_table_min_metric()
+                .into_iter()
+                .map(|(node_id, route)| (node_id, route.metric()))
+                .collect()
+        } else {
+            x.route_table_min_metric()
+                .into_iter()
+                .filter(|(node_id, _)| node_id != &src_id)
+                .map(|(node_id, route)| (node_id, route.metric()))
+                .collect()
+        };
         // Not supporting too many nodes
         table.truncate(255);
+        if table.is_empty() {
+            continue;
+        }
         list.push((*x.key(), table))
     }
     for (group_code, table) in list {
@@ -785,7 +848,7 @@ async fn id_route_reply(
         )?;
         packet.set_dest_id(&src_id);
         packet.set_src_id(&self_id);
-        packet.set_group_code(&GroupCode::unspecified());
+        packet.set_group_code(&self_group_code);
         pipe_writer
             .send_to_route(packet.buffer(), &route_key)
             .await?;
