@@ -68,8 +68,8 @@ impl Default for PipeConfig {
             self_id: None,
             direct_addrs: None,
             send_buffer_size: 2048,
-            query_id_interval: Duration::from_secs(12),
-            query_id_max_num: 5,
+            query_id_interval: Duration::from_secs(17),
+            query_id_max_num: 3,
             heartbeat_interval: Duration::from_secs(5),
             tcp_stun_servers: Some(vec![
                 "stun.flashdance.cx".to_string(),

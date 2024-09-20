@@ -463,9 +463,31 @@ impl PipeLine {
                 .or_insert_with(|| RouteTable::new(false, 1));
             ref_mut.add_route_if_absent(src_id, Route::from_default_rt(route_key, metric));
         }
+        match packet.protocol()? {
+            ProtocolType::IDRouteQuery => {
+                self.id_route_query_handle(
+                    packet,
+                    route_key,
+                    group_code,
+                    NodeID::unspecified(),
+                    src_id,
+                )
+                .await?;
+                return Ok(());
+            }
+            ProtocolType::IDRouteReply => {
+                self.id_route_reply_handle(packet, group_code, NodeID::unspecified(), src_id)
+                    .await?;
+                return Ok(());
+            }
+            _ => {}
+        }
 
         if !packet.incr_ttl() {
             return Ok(());
+        }
+        if src_id.is_unspecified() || src_id.is_broadcast() {
+            return Err(Error::InvalidArgument("src id is unspecified".into()));
         }
         let dest_id = NodeID::try_from(packet.dest_id())?;
         if dest_id.is_unspecified() {
@@ -500,11 +522,7 @@ impl PipeLine {
         if packet.ttl() == 0 {
             return Ok(None);
         }
-        let src_id = NodeID::try_from(packet.src_id())?;
 
-        if src_id.is_unspecified() || src_id.is_broadcast() {
-            return Err(Error::InvalidArgument("src id is unspecified".into()));
-        }
         let route_key = recv_result.route_key;
         let group_code = if let Some(my_group_code) = self.pipe_context.load_group_code() {
             if my_group_code.as_ref() == packet.group_code() {
@@ -518,7 +536,11 @@ impl PipeLine {
             self.other_group_handle(packet, route_key).await?;
             return Ok(None);
         };
+        let src_id = NodeID::try_from(packet.src_id())?;
 
+        if src_id.is_unspecified() || src_id.is_broadcast() {
+            return Err(Error::InvalidArgument("src id is unspecified".into()));
+        }
         let dest_id = NodeID::try_from(packet.dest_id())?;
 
         let metric = packet.max_ttl() - packet.ttl() + 1;
@@ -584,53 +606,12 @@ impl PipeLine {
                     .add_route(src_id, Route::from(route_key, metric, rtt));
             }
             ProtocolType::IDRouteQuery => {
-                let payload = packet.payload();
-                if payload.len() != 4 {
-                    return Err(Error::InvalidArgument("IDRouteQuery error".into()));
-                }
-                let query_id = u16::from_be_bytes(payload[2..].try_into().unwrap());
-                // reply reachable node id
-                let mut list = self.route_table.route_table_min_metric();
-                // Not supporting too many nodes
-                list.truncate(255);
-                let list: Vec<_> = list
-                    .into_iter()
-                    .filter(|(node_id, _)| node_id != &src_id)
-                    .map(|(node_id, route)| (node_id, route.metric()))
-                    .collect();
-                let mut packet = crate::protocol::id_route::Builder::build_reply(
-                    &group_code,
-                    &list,
-                    query_id,
-                    list.len() as _,
-                )?;
-                packet.set_dest_id(&src_id);
-                packet.set_src_id(&self_id);
-                packet.set_group_code(&group_code);
-                self.send_to_route(packet.buffer(), &route_key).await?;
-                if !self.other_route_table.is_empty() {
-                    // Reply to reachable nodes of other groups
-                }
+                self.id_route_query_handle(packet, route_key, group_code, self_id, src_id)
+                    .await?
             }
             ProtocolType::IDRouteReply => {
-                let reply_packet = IDRouteReplyPacket::new(packet.payload())?;
-                let id_group_code = GroupCode::try_from(reply_packet.group_code())?;
-
-                let id = reply_packet.query_id();
-                if id_group_code == group_code && id != 0 {
-                    self.pipe_context.update_direct_node_id(id, src_id);
-                }
-                for (reachable_id, metric) in reply_packet.iter() {
-                    if reachable_id == self_id {
-                        continue;
-                    }
-                    self.pipe_context.update_reachable_nodes(
-                        id_group_code,
-                        src_id,
-                        reachable_id,
-                        metric,
-                    );
-                }
+                self.id_route_reply_handle(packet, group_code, self_id, src_id)
+                    .await?
             }
             ProtocolType::UserData => {
                 return Ok(Some(HandleResultInner {
@@ -707,6 +688,109 @@ impl PipeLine {
 
         Ok(None)
     }
+    async fn id_route_query_handle(
+        &mut self,
+        packet: NetPacket<&mut [u8]>,
+        route_key: RouteKey,
+        self_group_code: GroupCode,
+        self_id: NodeID,
+        src_id: NodeID,
+    ) -> Result<()> {
+        let payload = packet.payload();
+        if payload.len() != 4 {
+            return Err(Error::InvalidArgument("IDRouteQuery error".into()));
+        }
+        let query_id = u16::from_be_bytes(payload[2..].try_into().unwrap());
+        // reply reachable node id
+        let mut list = self.route_table.route_table_min_metric();
+        // Not supporting too many nodes
+        list.truncate(255);
+        let list: Vec<_> = list
+            .into_iter()
+            .filter(|(node_id, _)| node_id != &src_id)
+            .map(|(node_id, route)| (node_id, route.metric()))
+            .collect();
+        let mut packet = crate::protocol::id_route::Builder::build_reply(
+            &self_group_code,
+            &list,
+            query_id,
+            list.len() as _,
+        )?;
+        packet.set_dest_id(&src_id);
+        packet.set_src_id(&self_id);
+        packet.set_group_code(&GroupCode::unspecified());
+        self.send_to_route(packet.buffer(), &route_key).await?;
+        if !self.other_route_table.is_empty() {
+            // Reply to reachable nodes of other groups
+            let pipe_writer = self.pipe_writer.clone();
+            let other_route_table = self.other_route_table.clone();
+            tokio::spawn(async move {
+                if let Err(e) =
+                    id_route_reply(pipe_writer, other_route_table, route_key, src_id, self_id).await
+                {
+                    log::debug!("id_route_reply {e:?}");
+                }
+            });
+        }
+        Ok(())
+    }
+    async fn id_route_reply_handle(
+        &mut self,
+        packet: NetPacket<&mut [u8]>,
+        self_group_code: GroupCode,
+        self_id: NodeID,
+        src_id: NodeID,
+    ) -> Result<()> {
+        let reply_packet = IDRouteReplyPacket::new(packet.payload())?;
+        let id_group_code = GroupCode::try_from(reply_packet.group_code())?;
+
+        let id = reply_packet.query_id();
+        if id_group_code == self_group_code && id != 0 {
+            self.pipe_context.update_direct_node_id(id, src_id);
+        }
+        for (reachable_id, metric) in reply_packet.iter() {
+            if reachable_id == self_id {
+                continue;
+            }
+            self.pipe_context
+                .update_reachable_nodes(id_group_code, src_id, reachable_id, metric);
+        }
+        Ok(())
+    }
+}
+async fn id_route_reply(
+    pipe_writer: PipeWriter,
+    other_route_table: Arc<DashMap<GroupCode, RouteTable<NodeID>>>,
+    route_key: RouteKey,
+    src_id: NodeID,
+    self_id: NodeID,
+) -> Result<()> {
+    let mut list = Vec::with_capacity(other_route_table.len());
+    for x in other_route_table.iter() {
+        let mut table: Vec<_> = x
+            .route_table_min_metric()
+            .into_iter()
+            .map(|(node_id, route)| (node_id, route.metric()))
+            .collect();
+        // Not supporting too many nodes
+        table.truncate(255);
+        list.push((*x.key(), table))
+    }
+    for (group_code, table) in list {
+        let mut packet = crate::protocol::id_route::Builder::build_reply(
+            &group_code,
+            &table,
+            0,
+            table.len() as _,
+        )?;
+        packet.set_dest_id(&src_id);
+        packet.set_src_id(&self_id);
+        packet.set_group_code(&GroupCode::unspecified());
+        pipe_writer
+            .send_to_route(packet.buffer(), &route_key)
+            .await?;
+    }
+    Ok(())
 }
 
 pub struct RecvResult<'a> {

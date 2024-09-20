@@ -133,7 +133,7 @@ impl PipeContext {
             self.direct_node_id_map
                 .retain(|_, (_, time)| *time > timeout);
             for mut val in self.reachable_nodes.iter_mut() {
-                val.value_mut().retain(|_k, (_, _, time)| &*time > &timeout);
+                val.value_mut().retain(|_k, (_, _, time)| *time > timeout);
             }
             self.reachable_nodes.retain(|_, v| !v.is_empty());
         }
@@ -149,7 +149,7 @@ impl PipeContext {
         let now = Instant::now();
         self.reachable_nodes
             .entry(group_code)
-            .or_insert_with(|| DashMap::new())
+            .or_default()
             .entry(reachable_id)
             .and_modify(|(node, m, time)| {
                 if *m < metric {
