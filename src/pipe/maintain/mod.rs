@@ -22,6 +22,7 @@ pub(crate) fn start_task(
     query_id_interval: Duration,
     query_id_max_num: usize,
     heartbeat_interval: Duration,
+    route_idle_time: Duration,
     tcp_stun_servers: Vec<String>,
     udp_stun_servers: Vec<String>,
     default_interface: Option<LocalInterface>,
@@ -34,6 +35,10 @@ pub(crate) fn start_task(
         heartbeat_interval,
     ));
     join_set.spawn(idle::idle_check_loop(idle_route_manager));
+    join_set.spawn(idle::other_group_idle_check_loop(
+        pipe_writer.pipe_context.clone(),
+        route_idle_time,
+    ));
     join_set.spawn(id_route::id_route_query_loop(
         pipe_writer.clone(),
         query_id_interval,

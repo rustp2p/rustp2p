@@ -45,6 +45,7 @@ impl Pipe {
         let query_id_interval = config.query_id_interval;
         let query_id_max_num = config.query_id_max_num;
         let heartbeat_interval = config.heartbeat_interval;
+        let route_idle_time = config.route_idle_time;
         let group_code = config.group_code.take();
         let self_id = config.self_id.take();
         let direct_addrs = config.direct_addrs.take();
@@ -115,6 +116,7 @@ impl Pipe {
             query_id_interval,
             query_id_max_num,
             heartbeat_interval,
+            route_idle_time,
             tcp_stun_servers,
             udp_stun_servers,
             default_interface,
