@@ -156,14 +156,14 @@ async fn recv(mut line: PipeLine, sender: Sender<Vec<u8>>, mut _pipe_wirter: Pip
                 continue;
             }
         };
-        // log::info!(
-        //     "recv from peer from addr: {:?}, {:?} ->{:?} is_relay:{}\n{:?}",
-        //     handle_rs.route_key().addr(),
-        //     handle_rs.src_id(),
-        //     handle_rs.dest_id(),
-        //     handle_rs.is_relay(),
-        //     pnet_packet::ipv4::Ipv4Packet::new(handle_rs.payload())
-        // );
+        log::info!(
+            "recv from peer from addr: {:?}, {:?} ->{:?} is_relay:{}\n{:?}",
+            handle_rs.route_key().addr(),
+            handle_rs.src_id(),
+            handle_rs.dest_id(),
+            handle_rs.is_relay(),
+            pnet_packet::ipv4::Ipv4Packet::new(handle_rs.payload())
+        );
 
         // if is_icmp_request(payload).await {
         //     if let Err(err) = process_icmp(payload, &mut _pipe_wirter).await {
