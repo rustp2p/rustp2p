@@ -503,7 +503,7 @@ impl PipeLine {
         self_group_code: GroupCode,
         self_id: NodeID,
     ) -> Result<()> {
-        let metric = packet.max_ttl() - packet.ttl() + 1;
+        let metric = packet.max_ttl() - packet.ttl();
         let src_group_code = GroupCode::try_from(packet.group_code())?;
         let src_id = NodeID::try_from(packet.src_id())?;
         {
@@ -621,7 +621,7 @@ impl PipeLine {
         }
         let dest_id = NodeID::try_from(packet.dest_id())?;
 
-        let metric = packet.max_ttl() - packet.ttl() + 1;
+        let metric = packet.max_ttl() - packet.ttl();
 
         if self_id == src_id {
             log::debug!("{packet:?}");

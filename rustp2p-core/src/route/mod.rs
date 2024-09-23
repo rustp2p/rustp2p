@@ -41,10 +41,10 @@ impl Route {
         }
     }
     pub fn is_direct(&self) -> bool {
-        self.metric <= 1
+        self.metric == 0
     }
     pub fn is_relay(&self) -> bool {
-        self.metric > 1
+        self.metric > 0
     }
     pub fn rtt(&self) -> u32 {
         self.rtt
