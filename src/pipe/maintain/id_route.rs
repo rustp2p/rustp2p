@@ -1,3 +1,4 @@
+use crate::pipe::pipe_context::DirectNodes;
 use crate::pipe::{NodeAddress, PipeWriter};
 use crate::protocol::node_id::NodeID;
 use crate::protocol::protocol_type::ProtocolType;
@@ -45,15 +46,16 @@ async fn id_route_query(
 }
 
 async fn poll_direct_peer_node(
-    direct_nodes: Vec<(NodeAddress, u16, Option<NodeID>)>,
+    direct_nodes: DirectNodes,
     sent_ids: HashSet<NodeID>,
     pipe_writer: &PipeWriter,
     buf: &mut [u8],
 ) {
+    let self_group_code = pipe_writer.pipe_context().load_group_code();
     let mut packet = NetPacket::unchecked(buf);
     for (addr, id, node_id) in direct_nodes {
-        if let Some(node_id) = node_id {
-            if sent_ids.contains(&node_id) {
+        if let Some((group_code, node_id)) = node_id {
+            if self_group_code == group_code && sent_ids.contains(&node_id) {
                 continue;
             }
         }

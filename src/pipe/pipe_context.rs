@@ -24,14 +24,15 @@ pub struct PipeContext {
     self_node_id: Arc<AtomicCell<Option<NodeID>>>,
     group_code: Arc<AtomicCell<GroupCode>>,
     direct_node_address_list: Arc<RwLock<Vec<(PeerNodeAddress, u16, Vec<NodeAddress>)>>>,
-    direct_node_id_map: Arc<DashMap<u16, (NodeID, Instant)>>,
-    pub reachable_nodes: Arc<DashMap<GroupCode, DashMap<NodeID, (GroupCode, NodeID, u8, Instant)>>>,
+    direct_node_id_map: Arc<DashMap<u16, (GroupCode, NodeID, Instant)>>,
+    pub(crate) reachable_nodes:
+        Arc<DashMap<GroupCode, DashMap<NodeID, (GroupCode, NodeID, u8, Instant)>>>,
     punch_info: Arc<RwLock<NodePunchInfo>>,
     default_interface: Option<LocalInterface>,
     dns: Vec<String>,
     pub(crate) other_route_table: Arc<DashMap<GroupCode, RouteTable<NodeID>>>,
 }
-
+pub type DirectNodes = Vec<(NodeAddress, u16, Option<(GroupCode, NodeID)>)>;
 impl PipeContext {
     pub(crate) fn new(
         local_udp_ports: Vec<u16>,
@@ -90,7 +91,7 @@ impl PipeContext {
     ) {
         *self.direct_node_address_list.write() = direct_node;
     }
-    pub fn get_direct_nodes(&self) -> Vec<(NodeAddress, Option<NodeID>)> {
+    pub fn get_direct_nodes(&self) -> Vec<(NodeAddress, Option<(GroupCode, NodeID)>)> {
         let guard = self.direct_node_address_list.read();
         let mut addrs = Vec::new();
         for (_, id, v) in guard.iter() {
@@ -101,7 +102,7 @@ impl PipeContext {
         }
         addrs
     }
-    pub fn get_direct_nodes_and_id(&self) -> Vec<(NodeAddress, u16, Option<NodeID>)> {
+    pub fn get_direct_nodes_and_id(&self) -> DirectNodes {
         let guard = self.direct_node_address_list.read();
         let mut addrs = Vec::new();
         for (_, id, v) in guard.iter() {
@@ -112,8 +113,10 @@ impl PipeContext {
         }
         addrs
     }
-    pub fn get_direct_node_id(&self, id: &u16) -> Option<NodeID> {
-        self.direct_node_id_map.get(id).map(|v| v.value().0)
+    pub fn get_direct_node_id(&self, id: &u16) -> Option<(GroupCode, NodeID)> {
+        self.direct_node_id_map
+            .get(id)
+            .map(|v| (v.value().0, v.value().1))
     }
     pub async fn update_direct_nodes(&self) -> crate::error::Result<()> {
         let mut addrs = self.direct_node_address_list.read().clone();
@@ -125,16 +128,16 @@ impl PipeContext {
         self.set_direct_nodes_and_id(addrs);
         Ok(())
     }
-    pub fn update_direct_node_id(&self, id: u16, node_id: NodeID) {
+    pub fn update_direct_node_id(&self, id: u16, group_code: GroupCode, node_id: NodeID) {
         self.direct_node_id_map
-            .insert(id, (node_id, Instant::now()));
+            .insert(id, (group_code, node_id, Instant::now()));
     }
 
     pub(crate) fn clear_timeout_reachable_nodes(&self, query_id_interval: Duration) {
         let now = Instant::now();
         if let Some(timeout) = now.checked_sub(query_id_interval * 3) {
             self.direct_node_id_map
-                .retain(|_, (_, time)| *time > timeout);
+                .retain(|_, (_, _, time)| *time > timeout);
             for mut val in self.reachable_nodes.iter_mut() {
                 val.value_mut()
                     .retain(|_k, (_, _, _, time)| *time > timeout);

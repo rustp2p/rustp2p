@@ -1,7 +1,7 @@
 use crate::error::*;
 use crate::pipe::pipe_context::NodeAddress;
 use crate::pipe::PipeWriter;
-use crate::protocol::node_id::NodeID;
+use crate::protocol::node_id::{GroupCode, NodeID};
 use crate::protocol::protocol_type::ProtocolType;
 use crate::protocol::NetPacket;
 use std::collections::HashSet;
@@ -32,8 +32,11 @@ async fn heartbeat_request(pipe_writer: &PipeWriter) -> Result<()> {
         };
     let mut packet = NetPacket::new(packet.buf_mut())?;
     let direct_nodes = pipe_writer.pipe_context.get_direct_nodes();
-    let sent_ids = route_table_heartbeat_request(pipe_writer, &mut packet).await;
-    direct_heartbeat_request(direct_nodes, sent_ids, pipe_writer, packet.buffer()).await;
+    let (mut sent_ids, sent_relay_ids) =
+        route_table_heartbeat_request(pipe_writer, &mut packet).await;
+    direct_heartbeat_request(direct_nodes, &sent_ids, pipe_writer, packet.buffer()).await;
+    sent_ids.extend(sent_relay_ids);
+    relay_heartbeat_request(sent_ids, pipe_writer, &mut packet).await;
     Ok(())
 }
 
@@ -54,21 +57,22 @@ async fn timestamp_request(pipe_writer: &PipeWriter) -> Result<()> {
         .as_millis() as u32;
     packet.payload_mut().copy_from_slice(&now.to_be_bytes());
     let direct_nodes = pipe_writer.pipe_context.get_direct_nodes();
-    let sent_ids = route_table_heartbeat_request(pipe_writer, &mut packet).await;
+    let (sent_ids, _) = route_table_heartbeat_request(pipe_writer, &mut packet).await;
     packet.set_dest_id(&NodeID::unspecified());
-    direct_heartbeat_request(direct_nodes, sent_ids, pipe_writer, packet.buffer()).await;
+    direct_heartbeat_request(direct_nodes, &sent_ids, pipe_writer, packet.buffer()).await;
     Ok(())
 }
 
 async fn direct_heartbeat_request(
-    direct_nodes: Vec<(NodeAddress, Option<NodeID>)>,
-    sent_ids: HashSet<NodeID>,
+    direct_nodes: Vec<(NodeAddress, Option<(GroupCode, NodeID)>)>,
+    sent_ids: &HashSet<NodeID>,
     pipe_writer: &PipeWriter,
     buf: &[u8],
 ) {
+    let self_group_code = pipe_writer.pipe_context().load_group_code();
     for (addr, node_id) in direct_nodes {
-        if let Some(node_id) = node_id {
-            if sent_ids.contains(&node_id) {
+        if let Some((group_code, node_id)) = node_id {
+            if self_group_code == group_code && sent_ids.contains(&node_id) {
                 continue;
             }
         }
@@ -97,9 +101,10 @@ async fn direct_heartbeat_request(
 async fn route_table_heartbeat_request(
     pipe_writer: &PipeWriter,
     packet: &mut NetPacket<&mut [u8]>,
-) -> HashSet<NodeID> {
+) -> (HashSet<NodeID>, HashSet<NodeID>) {
     let table = pipe_writer.pipe_writer.route_table().route_table();
-    let mut sent_ids = HashSet::with_capacity(table.len());
+    let mut sent_p2p_ids = HashSet::with_capacity(table.len());
+    let mut sent_relay_ids = HashSet::with_capacity(table.len());
     for (node_id, routes) in table {
         packet.set_dest_id(&node_id);
         for route in routes {
@@ -109,10 +114,37 @@ async fn route_table_heartbeat_request(
             {
                 log::warn!("route_table_heartbeat_request e={e:?},node_id={node_id:?}");
             } else if route.is_p2p() {
-                sent_ids.insert(node_id);
+                sent_p2p_ids.insert(node_id);
+            } else {
+                sent_relay_ids.insert(node_id);
             }
             tokio::time::sleep(Duration::from_millis(3)).await;
         }
     }
-    sent_ids
+    (sent_p2p_ids, sent_relay_ids)
+}
+async fn relay_heartbeat_request(
+    sent_ids: HashSet<NodeID>,
+    pipe_writer: &PipeWriter,
+    packet: &mut NetPacket<&mut [u8]>,
+) {
+    let group_code = pipe_writer.pipe_context().load_group_code();
+    let mut dest_list = Vec::new();
+    if let Some(x) = pipe_writer.pipe_context().reachable_nodes.get(&group_code) {
+        for x in x.value() {
+            if sent_ids.contains(x.key()) {
+                continue;
+            }
+            dest_list.push((*x.key(), x.value().0, x.value().1));
+        }
+    }
+    for (dest_id, relay_group_code, relay_id) in dest_list {
+        packet.set_dest_id(&dest_id);
+        if let Err(e) = pipe_writer
+            .send_to_id_by_code(packet, &relay_group_code, &relay_id)
+            .await
+        {
+            log::warn!("relay_heartbeat_request e={e:?},dest_id={dest_id:?},relay_group_code={relay_group_code:?},node_id={relay_id:?}");
+        }
+    }
 }

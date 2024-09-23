@@ -39,6 +39,9 @@ impl<PeerID: Hash + Eq> RouteTable<PeerID> {
     }
 }
 impl<PeerID: Hash + Eq> RouteTable<PeerID> {
+    pub fn is_empty(&self) -> bool {
+        self.route_table.is_empty()
+    }
     pub fn get_route_by_id(&self, id: &PeerID) -> io::Result<Route> {
         if let Some(entry) = self.route_table.get(id) {
             let (count, routes) = entry.value();

@@ -194,6 +194,24 @@ impl PipeWriter {
         }
         Ok(())
     }
+    pub(crate) async fn send_to_id_by_code<B: AsRef<[u8]>>(
+        &self,
+        buf: &NetPacket<B>,
+        group_code: &GroupCode,
+        id: &NodeID,
+    ) -> Result<()> {
+        let code = self.pipe_context.load_group_code();
+        if &code == group_code {
+            self.send_to_id(buf, id).await
+        } else {
+            let route = if let Some(v) = self.pipe_context.other_route_table.get(group_code) {
+                v.get_route_by_id(id)?
+            } else {
+                return Err(Error::NodeIDNotAvailable);
+            };
+            self.send_to_route(buf.buffer(), &route.route_key()).await
+        }
+    }
     pub(crate) async fn send_to_id<B: AsRef<[u8]>>(
         &self,
         buf: &NetPacket<B>,
@@ -817,8 +835,9 @@ impl PipeLine {
         let reachable_group_code = GroupCode::try_from(reply_packet.group_code())?;
 
         let id = reply_packet.query_id();
-        if reachable_group_code == self_group_code && id != 0 {
-            self.pipe_context.update_direct_node_id(id, src_id);
+        if id != 0 {
+            self.pipe_context
+                .update_direct_node_id(id, reachable_group_code, src_id);
         }
         for (reachable_id, metric) in reply_packet.iter() {
             if self_group_code == reachable_group_code && reachable_id == self_id {

@@ -20,6 +20,7 @@ pub async fn other_group_idle_check_loop(pipe_context: PipeContext, timeout: Dur
                 }
             }
         }
+        pipe_context.other_route_table.retain(|_k, v| !v.is_empty());
         tokio::time::sleep(timeout).await;
     }
 }
