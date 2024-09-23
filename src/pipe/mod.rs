@@ -528,6 +528,19 @@ impl PipeLine {
         }
         let dest_id = NodeID::try_from(packet.dest_id())?;
         if dest_id.is_unspecified() {
+            // 是不同组的节点发给自己的数据
+            match packet.protocol()? {
+                ProtocolType::EchoRequest => {
+                    packet.set_protocol(ProtocolType::EchoReply);
+                    packet.set_ttl(packet.max_ttl());
+                    packet.set_dest_id(&NodeID::unspecified());
+                    packet.set_src_id(&self_id);
+                    packet.set_group_code(&self_group_code);
+                    self.send_to_route(packet.buffer(), &route_key).await?;
+                }
+                ProtocolType::EchoReply => {}
+                _ => {}
+            }
             return Ok(());
         }
 

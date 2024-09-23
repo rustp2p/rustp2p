@@ -55,6 +55,7 @@ async fn timestamp_request(pipe_writer: &PipeWriter) -> Result<()> {
     packet.payload_mut().copy_from_slice(&now.to_be_bytes());
     let direct_nodes = pipe_writer.pipe_context.get_direct_nodes();
     let sent_ids = route_table_heartbeat_request(pipe_writer, &mut packet).await;
+    packet.set_dest_id(&NodeID::unspecified());
     direct_heartbeat_request(direct_nodes, sent_ids, pipe_writer, packet.buffer()).await;
     Ok(())
 }
