@@ -214,7 +214,7 @@ impl PipeWriter {
         dest_id: &NodeID,
     ) -> Result<()> {
         if dest_id.is_broadcast() {
-            self.send_broadcast0(buf, src_id).await;
+            self.send_broadcast0(buf, group_code, src_id).await;
             return Ok(());
         }
 
@@ -248,7 +248,7 @@ impl PipeWriter {
     ) -> Result<()> {
         if dest_id.is_broadcast() {
             for buf in bufs {
-                self.send_broadcast0(buf.as_ref(), src_id).await;
+                self.send_broadcast0(buf.as_ref(), group_code, src_id).await;
             }
             return Ok(());
         }
@@ -280,7 +280,7 @@ impl PipeWriter {
         };
         Ok(())
     }
-    async fn send_broadcast0(&self, buf: &[u8], src_id: &NodeID) {
+    async fn send_broadcast0(&self, buf: &[u8], group_code: &GroupCode, src_id: &NodeID) {
         let route_table = self.pipe_writer.route_table();
         let table = route_table.route_table_one();
         let mut map: HashMap<NodeID, (Vec<NodeID>, Route)> = HashMap::new();
@@ -315,6 +315,7 @@ impl PipeWriter {
                     Ok(mut packet) => {
                         packet.set_src_id(src_id);
                         packet.set_dest_id(&owner_id);
+                        packet.set_group_code(group_code);
                         if let Err(e) = self
                             .pipe_writer
                             .send_to(packet.buffer(), &route.route_key())
