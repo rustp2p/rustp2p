@@ -281,34 +281,44 @@ impl PipeWriter {
         Ok(())
     }
     async fn send_broadcast0(&self, buf: &[u8], src_id: &NodeID) {
-        let broadcast_id = NodeID::broadcast();
         let route_table = self.pipe_writer.route_table();
         let table = route_table.route_table_one();
-        let mut map: HashMap<NodeID, (Vec<NodeID>, RouteKey)> = HashMap::new();
+        let mut map: HashMap<NodeID, (Vec<NodeID>, Route)> = HashMap::new();
         for (id, route) in &table {
             if route.is_p2p() {
-                if !map.contains_key(id) {
-                    map.insert(*id, (vec![*id], route.route_key()));
-                }
+                let list = if let Some((list, _)) = map.remove(id) {
+                    list
+                } else {
+                    vec![*id]
+                };
+                map.insert(*id, (list, *route));
             } else if let Some(owner_id) = route_table.get_id_by_route_key(&route.route_key()) {
                 if let Some((list, _)) = map.get_mut(&owner_id) {
                     list.push(*id);
                 } else {
-                    map.insert(owner_id, (vec![owner_id, *id], route.route_key()));
+                    map.insert(owner_id, (vec![owner_id, *id], *route));
+                }
+            } else {
+                // 通过其他组的节点转发的，正常来说应该也要找到这个转发节点，这里为了简化操作，写为直接发送
+                if !map.contains_key(id) {
+                    map.insert(*id, (vec![*id], *route));
                 }
             }
         }
-        for (owner_id, (list, route_key)) in map {
-            if list.is_empty() {
-                if let Err(e) = self.pipe_writer.send_to(buf, &route_key).await {
+        for (owner_id, (list, route)) in map {
+            if list.len() <= 1 && route.is_p2p() {
+                if let Err(e) = self.pipe_writer.send_to(buf, &route.route_key()).await {
                     log::debug!("send_broadcast0 {e:?} {owner_id:?}");
                 }
             } else {
                 match broadcast::Builder::build_range_broadcast(&list, buf) {
                     Ok(mut packet) => {
                         packet.set_src_id(src_id);
-                        packet.set_dest_id(&broadcast_id);
-                        if let Err(e) = self.pipe_writer.send_to(packet.buffer(), &route_key).await
+                        packet.set_dest_id(&owner_id);
+                        if let Err(e) = self
+                            .pipe_writer
+                            .send_to(packet.buffer(), &route.route_key())
+                            .await
                         {
                             log::debug!("send_range_broadcast {e:?} {owner_id:?}");
                         }
