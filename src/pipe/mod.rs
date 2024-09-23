@@ -560,7 +560,6 @@ impl PipeLine {
         recv_result: RecvResult<'a>,
     ) -> Result<Option<HandleResultInner>> {
         let mut packet = NetPacket::new(recv_result.buf)?;
-        log::debug!("{packet:?}");
         if packet.max_ttl() < packet.ttl() {
             return Err(Error::InvalidArgument("ttl error".into()));
         }
@@ -801,7 +800,6 @@ impl PipeLine {
         src_group_code: GroupCode,
         src_id: NodeID,
     ) -> Result<()> {
-        log::debug!("{packet:?}");
         let reply_packet = IDRouteReplyPacket::new(packet.payload())?;
         let reachable_group_code = GroupCode::try_from(reply_packet.group_code())?;
 
@@ -821,7 +819,6 @@ impl PipeLine {
                 metric,
             );
         }
-        log::debug!("{:?}", self.pipe_context.reachable_nodes);
         Ok(())
     }
 }
