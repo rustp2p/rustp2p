@@ -40,7 +40,7 @@ impl Route {
             rtt: self.rtt,
         }
     }
-    pub fn is_p2p(&self) -> bool {
+    pub fn is_direct(&self) -> bool {
         self.metric <= 1
     }
     pub fn is_relay(&self) -> bool {

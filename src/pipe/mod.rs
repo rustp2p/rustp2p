@@ -303,7 +303,7 @@ impl PipeWriter {
         let table = route_table.route_table_one();
         let mut map: HashMap<NodeID, (Vec<NodeID>, Route)> = HashMap::new();
         for (id, route) in &table {
-            if route.is_p2p() {
+            if route.is_direct() {
                 let list = if let Some((list, _)) = map.remove(id) {
                     list
                 } else {
@@ -324,7 +324,7 @@ impl PipeWriter {
             }
         }
         for (owner_id, (list, route)) in map {
-            if list.len() <= 1 && route.is_p2p() {
+            if list.len() <= 1 && route.is_direct() {
                 if let Err(e) = self.pipe_writer.send_to(buf, &route.route_key()).await {
                     log::debug!("send_broadcast0 {e:?} {owner_id:?}");
                 }

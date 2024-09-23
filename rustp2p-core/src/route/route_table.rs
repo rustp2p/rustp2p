@@ -102,7 +102,7 @@ impl<PeerID: Hash + Eq + Clone> RouteTable<PeerID> {
     pub fn remove_all(&self, id: &PeerID) {
         self.route_table.remove_if(id, |_, (_, routes)| {
             for (route, _) in routes {
-                if route.is_p2p() {
+                if route.is_direct() {
                     self.route_key_table
                         .remove_if(&route.route_key(), |_, v| v == id);
                 }
@@ -135,7 +135,7 @@ impl<PeerID: Hash + Eq + Clone> RouteTable<PeerID> {
         if let Some(entry) = self.route_table.get(id) {
             let (_, routes) = entry.value();
             for (i, _) in routes {
-                if i.is_p2p() {
+                if i.is_direct() {
                     return Some(*i);
                 }
             }
@@ -147,7 +147,7 @@ impl<PeerID: Hash + Eq + Clone> RouteTable<PeerID> {
         for entry in table {
             let (id, (_, routes)) = (entry.key(), entry.value());
             for (route, _) in routes {
-                if &route.route_key() == route_key && route.is_p2p() {
+                if &route.route_key() == route_key && route.is_direct() {
                     return Some(id.clone());
                 }
             }
@@ -158,7 +158,7 @@ impl<PeerID: Hash + Eq + Clone> RouteTable<PeerID> {
         if let Some(entry) = self.route_table.get(id) {
             let (_, routes) = entry.value();
             //p2p的通道数符合要求
-            return !routes.iter().any(|(k, _)| k.is_p2p());
+            return !routes.iter().any(|(k, _)| k.is_direct());
         }
         true
     }
@@ -168,7 +168,7 @@ impl<PeerID: Hash + Eq + Clone> RouteTable<PeerID> {
     pub fn p2p_num(&self, id: &PeerID) -> usize {
         if let Some(entry) = self.route_table.get(id) {
             let (_, routes) = entry.value();
-            routes.iter().filter(|(k, _)| k.is_p2p()).count()
+            routes.iter().filter(|(k, _)| k.is_direct()).count()
         } else {
             0
         }
@@ -201,7 +201,7 @@ impl<PeerID: Hash + Eq + Clone> RouteTable<PeerID> {
         for entry in table {
             let (id, (_, routes)) = (entry.key(), entry.value());
             for (route, _) in routes.iter() {
-                if route.is_p2p() {
+                if route.is_direct() {
                     list.push((id.clone(), *route));
                     break;
                 }
@@ -229,7 +229,7 @@ impl<PeerID: Hash + Eq + Clone> RouteTable<PeerID> {
         for entry in table {
             let (id, (_, routes)) = (entry.key(), entry.value());
             for (route, _) in routes {
-                let is_p2p = route.is_p2p();
+                let is_p2p = route.is_direct();
                 map.entry(route.route_key())
                     .and_modify(|list| {
                         list.push(id.clone());
@@ -331,12 +331,12 @@ impl<PeerID: Hash + Eq + Clone> RouteTable<PeerID> {
         if exist {
             list.sort_by_key(|(k, _)| k.rtt);
         } else {
-            if !self.first_latency && route.is_p2p() {
+            if !self.first_latency && route.is_direct() {
                 //非优先延迟的情况下 添加了直连的则排除非直连的
-                list.retain(|(k, _)| k.is_p2p());
+                list.retain(|(k, _)| k.is_direct());
             };
             list.sort_by_key(|(k, _)| k.rtt);
-            if route.is_p2p() {
+            if route.is_direct() {
                 self.route_key_table
                     .insert(route.route_key(), peer_id.clone());
             }

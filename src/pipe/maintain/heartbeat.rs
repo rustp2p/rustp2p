@@ -113,7 +113,7 @@ async fn route_table_heartbeat_request(
                 .await
             {
                 log::warn!("route_table_heartbeat_request e={e:?},node_id={node_id:?}");
-            } else if route.is_p2p() {
+            } else if route.is_direct() {
                 sent_p2p_ids.insert(node_id);
             } else {
                 sent_relay_ids.insert(node_id);
