@@ -16,6 +16,8 @@ pub enum Error {
     NotSupportIPV6,
     #[error("index out of bounds:len is {len} but the index is {index}")]
     IndexOutOfBounds { len: usize, index: usize },
+    #[error("Packet loss")]
+    PacketLoss,
 }
 
 pub type Result<T, E = Error> = ::std::result::Result<T, E>;

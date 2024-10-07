@@ -3,7 +3,6 @@ use std::hash::Hash;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::ops;
 use std::ops::{Div, Mul};
-// use std::ops::{Div, Mul};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -340,7 +339,7 @@ impl<PeerID: Hash + Eq + Clone> Puncher<PeerID> {
     ) {
         match tokio::time::timeout(
             Duration::from_secs(3),
-            tcp_pipe_writer.send_to_addr_multi0(buf, addr, ttl),
+            tcp_pipe_writer.send_to_addr_multi0(buf.into(), addr, ttl),
         )
         .await
         {

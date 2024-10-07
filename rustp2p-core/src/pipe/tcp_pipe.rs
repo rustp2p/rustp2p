@@ -1,9 +1,10 @@
 use crate::pipe::config::TcpPipeConfig;
 use crate::route::{Index, RouteKey};
 use crate::socket::{connect_tcp, create_tcp_listener, LocalInterface};
-use anyhow::{anyhow, Context};
+use anyhow::Context;
 use async_lock::Mutex;
 use async_trait::async_trait;
+use bytes::BytesMut;
 use dashmap::DashMap;
 use rand::Rng;
 use std::io;
@@ -16,14 +17,15 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::mpsc::{Receiver, Sender};
 
 pub struct TcpPipe {
     route_idle_time: Duration,
     tcp_listener: TcpListener,
-    connect_receiver: Receiver<(RouteKey, ReadHalfBox, WriteHalfBox)>,
+    connect_receiver: Receiver<(RouteKey, ReadHalfBox, Sender<BytesMut>)>,
     tcp_pipe_writer: TcpPipeWriter,
-    write_half_collect: Arc<WriteHalfCollect>,
+    write_half_collect: WriteHalfCollect,
     init_codec: Arc<Box<dyn InitCodec>>,
 }
 
@@ -41,7 +43,7 @@ impl TcpPipe {
         let local_addr = tcp_listener.local_addr()?;
         let tcp_listener = TcpListener::from_std(tcp_listener)?;
         let (connect_sender, connect_receiver) = tokio::sync::mpsc::channel(64);
-        let write_half_collect = Arc::new(WriteHalfCollect::new(config.tcp_multiplexing_limit));
+        let write_half_collect = WriteHalfCollect::new(config.tcp_multiplexing_limit);
         let init_codec = Arc::new(config.init_codec);
         let tcp_pipe_writer = TcpPipeWriter {
             socket_layer: Arc::new(SocketLayer::new(
@@ -76,7 +78,7 @@ impl TcpPipe {
         tokio::select! {
             rs=self.connect_receiver.recv()=>{
                 let (route_key,read_half,write_half) = rs.context("connect_receiver done")?;
-                Ok(TcpPipeLine::new(self.route_idle_time,route_key,read_half,write_half,self.write_half_collect.clone()))
+                Ok(TcpPipeLine::new(self.route_idle_time,route_key,read_half,write_half))
             }
             rs=self.tcp_listener.accept()=>{
                 let (tcp_stream,addr) = rs?;
@@ -84,21 +86,20 @@ impl TcpPipe {
                 let route_key = tcp_stream.route_key()?;
                 let (read_half,write_half) = tcp_stream.into_split();
                 let (decoder,encoder) = self.init_codec.codec(addr)?;
-                let write_half = WriteHalfBox::new(write_half,encoder);
                 let read_half = ReadHalfBox::new(read_half,decoder);
-                self.write_half_collect.add_write_half(route_key,0, write_half.clone());
-                Ok(TcpPipeLine::new(self.route_idle_time,route_key,read_half,write_half,self.write_half_collect.clone()))
+                let s = self.write_half_collect.add_write_half(route_key,0, write_half,encoder);
+                Ok(TcpPipeLine::new(self.route_idle_time,route_key,read_half,s))
             }
         }
     }
 }
 
 pub struct TcpPipeLine {
+    route_key: RouteKey,
     route_idle_time: Duration,
     tcp_read: OwnedReadHalf,
-    tcp_write: WriteHalfBox,
-    stream_owned: StreamOwned,
     decoder: Box<dyn Decoder>,
+    sender: Sender<BytesMut>,
 }
 
 impl TcpPipeLine {
@@ -106,60 +107,53 @@ impl TcpPipeLine {
         route_idle_time: Duration,
         route_key: RouteKey,
         read: ReadHalfBox,
-        tcp_write: WriteHalfBox,
-        write_half_collect: Arc<WriteHalfCollect>,
+        sender: Sender<BytesMut>,
     ) -> Self {
-        let stream_owned = StreamOwned {
-            route_key,
-            write_half_collect,
-        };
         let decoder = read.decoder;
         let tcp_read = read.read_half;
         Self {
+            route_key,
             route_idle_time,
             tcp_read,
-            tcp_write,
-            stream_owned,
             decoder,
+            sender,
         }
     }
     #[inline]
     pub fn route_key(&self) -> RouteKey {
-        self.stream_owned.route_key
+        self.route_key
     }
-    /// Close this pipeline
-    pub async fn shutdown(self) -> anyhow::Result<()> {
-        let mut guard = self.tcp_write.lock().await;
-        if let Some((write, _)) = guard.as_mut() {
-            write.shutdown().await?;
-        }
-        Ok(())
-    }
+    // /// Close this pipeline
+    // pub async fn shutdown(self) -> anyhow::Result<()> {
+    //     let mut guard = self.tcp_write.lock().await;
+    //     if let Some((write, _)) = guard.as_mut() {
+    //         write.shutdown().await?;
+    //     }
+    //     Ok(())
+    // }
 }
 
-impl TcpPipeLine {
-    pub async fn into_raw(self) -> anyhow::Result<(OwnedWriteHalf, OwnedReadHalf)> {
-        let option = self.tcp_write.lock().await.take();
-        if let Some((write_half, _)) = option {
-            Ok((write_half, self.tcp_read))
-        } else {
-            Err(anyhow!("miss"))
-        }
-    }
-}
+// impl TcpPipeLine {
+//     pub async fn into_raw(self) -> anyhow::Result<(OwnedWriteHalf, OwnedReadHalf)> {
+//         let option = self.tcp_write.lock().await.take();
+//         if let Some((write_half, _)) = option {
+//             Ok((write_half, self.tcp_read))
+//         } else {
+//             Err(anyhow!("miss"))
+//         }
+//     }
+// }
 
 impl TcpPipeLine {
     /// Writing `buf` to the target denoted by `route_key` via this pipeline
-    pub async fn send_to(&self, buf: &[u8], route_key: &RouteKey) -> crate::error::Result<()> {
-        if &self.stream_owned.route_key != route_key {
+    pub async fn send_to(&self, buf: BytesMut, route_key: &RouteKey) -> crate::error::Result<()> {
+        if &self.route_key != route_key {
             Err(crate::error::Error::RouteNotFound("mismatch".into()))?
         }
-        let mut guard = self.tcp_write.lock().await;
-        if let Some((write, encoder)) = guard.as_mut() {
-            encoder.encode(write, buf).await?;
-            Ok(())
+        if let Err(_e) = self.sender.send(buf).await {
+            Err(crate::error::Error::PacketLoss)
         } else {
-            Err(crate::error::Error::RouteNotFound("miss".into()))
+            Ok(())
         }
     }
 
@@ -185,21 +179,11 @@ impl TcpPipeLine {
     }
 }
 
-struct StreamOwned {
-    route_key: RouteKey,
-    write_half_collect: Arc<WriteHalfCollect>,
-}
-
-impl Drop for StreamOwned {
-    fn drop(&mut self) {
-        self.write_half_collect.remove(&self.route_key);
-    }
-}
-
+#[derive(Clone)]
 pub struct WriteHalfCollect {
     tcp_multiplexing_limit: usize,
-    addr_mapping: DashMap<SocketAddr, Vec<usize>>,
-    write_half_map: DashMap<usize, WriteHalfBox>,
+    addr_mapping: Arc<DashMap<SocketAddr, Vec<usize>>>,
+    write_half_map: Arc<DashMap<usize, Sender<BytesMut>>>,
 }
 
 impl WriteHalfCollect {
@@ -223,37 +207,16 @@ impl ReadHalfBox {
     }
 }
 
-type W = Mutex<Option<(OwnedWriteHalf, Box<dyn Encoder>)>>;
-
-#[derive(Clone)]
-pub(crate) struct WriteHalfBox {
-    write_half: Arc<W>,
-}
-
-impl Deref for WriteHalfBox {
-    type Target = W;
-
-    fn deref(&self) -> &Self::Target {
-        &self.write_half
-    }
-}
-
-impl WriteHalfBox {
-    pub(crate) fn new(write_half: OwnedWriteHalf, encoder: Box<dyn Encoder>) -> WriteHalfBox {
-        Self {
-            write_half: Arc::new(Mutex::new(Some((write_half, encoder)))),
-        }
-    }
-}
-
 impl WriteHalfCollect {
     pub(crate) fn add_write_half(
         &self,
         route_key: RouteKey,
         index_offset: usize,
-        write_half: WriteHalfBox,
-    ) {
+        mut writer: OwnedWriteHalf,
+        mut decoder: Box<dyn Encoder>,
+    ) -> Sender<BytesMut> {
         assert!(index_offset < self.tcp_multiplexing_limit);
+
         let index = route_key.index_usize();
         let _ref = self
             .addr_mapping
@@ -266,7 +229,19 @@ impl WriteHalfCollect {
                 v[index_offset] = index;
                 v
             });
-        self.write_half_map.insert(index, write_half);
+        let (s, mut r) = tokio::sync::mpsc::channel(32);
+        self.write_half_map.insert(index, s.clone());
+        let collect = self.clone();
+        tokio::spawn(async move {
+            while let Some(v) = r.recv().await {
+                if let Err(e) = decoder.encode(&mut writer, &v).await {
+                    log::debug!("{route_key:?},{e:?}");
+                    break;
+                }
+            }
+            collect.remove(&route_key);
+        });
+        s
     }
     pub(crate) fn remove(&self, route_key: &RouteKey) {
         let index_usize = route_key.index_usize();
@@ -286,7 +261,7 @@ impl WriteHalfCollect {
 
         self.write_half_map.remove(&index_usize);
     }
-    pub(crate) fn get(&self, index: &usize) -> Option<WriteHalfBox> {
+    pub(crate) fn get(&self, index: &usize) -> Option<Sender<BytesMut>> {
         self.write_half_map.get(index).map(|v| v.value().clone())
     }
 
@@ -317,8 +292,8 @@ pub struct SocketLayer {
     lock: Mutex<()>,
     local_addr: SocketAddr,
     tcp_multiplexing_limit: usize,
-    write_half_collect: Arc<WriteHalfCollect>,
-    connect_sender: Sender<(RouteKey, ReadHalfBox, WriteHalfBox)>,
+    write_half_collect: WriteHalfCollect,
+    connect_sender: Sender<(RouteKey, ReadHalfBox, Sender<BytesMut>)>,
     default_interface: Option<LocalInterface>,
     init_codec: Arc<Box<dyn InitCodec>>,
 }
@@ -327,8 +302,8 @@ impl SocketLayer {
     pub(crate) fn new(
         local_addr: SocketAddr,
         tcp_multiplexing_limit: usize,
-        write_half_collect: Arc<WriteHalfCollect>,
-        connect_sender: Sender<(RouteKey, ReadHalfBox, WriteHalfBox)>,
+        write_half_collect: WriteHalfCollect,
+        connect_sender: Sender<(RouteKey, ReadHalfBox, Sender<BytesMut>)>,
         default_interface: Option<LocalInterface>,
         init_codec: Arc<Box<dyn InitCodec>>,
     ) -> Self {
@@ -418,18 +393,17 @@ impl SocketLayer {
         let route_key = stream.route_key()?;
         let (read_half, write_half) = stream.into_split();
         let (decoder, encoder) = self.init_codec.codec(addr)?;
-        let write_half = WriteHalfBox::new(write_half, encoder);
         let read_half = ReadHalfBox::new(read_half, decoder);
-
+        let sender =
+            self.write_half_collect
+                .add_write_half(route_key, index_offset, write_half, encoder);
         if let Err(_e) = self
             .connect_sender
-            .send((route_key, read_half, write_half.clone()))
+            .send((route_key, read_half, sender))
             .await
         {
             Err(crate::error::Error::Eof)?
         }
-        self.write_half_collect
-            .add_write_half(route_key, index_offset, write_half);
         Ok(route_key)
     }
 }
@@ -437,14 +411,14 @@ impl SocketLayer {
 impl TcpPipeWriter {
     pub async fn send_to_addr_multi<A: Into<SocketAddr>>(
         &self,
-        buf: &[u8],
+        buf: BytesMut,
         addr: A,
     ) -> crate::error::Result<()> {
         self.send_to_addr_multi0(buf, addr, None).await
     }
     pub(crate) async fn send_to_addr_multi0<A: Into<SocketAddr>>(
         &self,
-        buf: &[u8],
+        buf: BytesMut,
         addr: A,
         ttl: Option<u32>,
     ) -> crate::error::Result<()> {
@@ -455,7 +429,7 @@ impl TcpPipeWriter {
     /// Reuse the bound port to initiate a connection, which can be used to penetrate NAT1 network type.
     pub async fn send_to_addr_reuse_port<A: Into<SocketAddr>>(
         &self,
-        buf: &[u8],
+        buf: BytesMut,
         addr: A,
     ) -> crate::error::Result<()> {
         let route_key = self.connect_reuse_port(addr.into()).await?;
@@ -463,46 +437,26 @@ impl TcpPipeWriter {
     }
     pub async fn send_to_addr<A: Into<SocketAddr>>(
         &self,
-        buf: &[u8],
+        buf: BytesMut,
         addr: A,
     ) -> crate::error::Result<()> {
         let route_key = self.connect(addr.into()).await?;
         self.send_to(buf, &route_key).await
     }
     /// Writing `buf` to the target denoted by `route_key`
-    pub async fn send_to(&self, buf: &[u8], route_key: &RouteKey) -> crate::error::Result<()> {
+    pub async fn send_to(&self, buf: BytesMut, route_key: &RouteKey) -> crate::error::Result<()> {
         match route_key.index() {
             Index::Tcp(index) => {
                 let write_half = self.write_half_collect.get(&index).ok_or_else(|| {
                     crate::error::Error::RouteNotFound(format!("not found {route_key:?}"))
                 })?;
-                let mut guard = write_half.lock().await;
-                if let Some((write_half, encoder)) = guard.as_mut() {
-                    encoder.encode(write_half, buf).await?;
-                    Ok(())
+                if let Err(e) = write_half.try_send(buf) {
+                    match e {
+                        TrySendError::Full(_) => Err(crate::error::Error::PacketLoss),
+                        TrySendError::Closed(_) => Err(io::Error::from(io::ErrorKind::WriteZero))?,
+                    }
                 } else {
-                    Err(crate::error::Error::RouteNotFound("miss".to_string()))
-                }
-            }
-            _ => Err(crate::error::Error::InvalidProtocol),
-        }
-    }
-    pub async fn send_multiple_to(
-        &self,
-        bufs: &[IoSlice<'_>],
-        route_key: &RouteKey,
-    ) -> crate::error::Result<()> {
-        match route_key.index() {
-            Index::Tcp(index) => {
-                let write_half = self.write_half_collect.get(&index).ok_or_else(|| {
-                    crate::error::Error::RouteNotFound(format!("not found {route_key:?}"))
-                })?;
-                let mut guard = write_half.lock().await;
-                if let Some((write_half, encoder)) = guard.as_mut() {
-                    encoder.encode_multiple(write_half, bufs).await?;
                     Ok(())
-                } else {
-                    Err(crate::error::Error::RouteNotFound("miss".to_string()))
                 }
             }
             _ => Err(crate::error::Error::InvalidProtocol),
@@ -568,18 +522,16 @@ impl<'a> Deref for TcpPipeWriterRef<'a> {
 }
 
 pub struct TcpPipeWriterIndex<'a> {
-    shadow: WriteHalfBox,
+    shadow: Sender<BytesMut>,
     marker: PhantomData<&'a ()>,
 }
 
 impl<'a> TcpPipeWriterIndex<'a> {
-    pub async fn send(&self, buf: &[u8]) -> anyhow::Result<()> {
-        let mut guard = self.shadow.lock().await;
-        if let Some((write_half, encoder)) = guard.as_mut() {
-            encoder.encode(write_half, buf).await?;
-            Ok(())
+    pub async fn send(&self, buf: BytesMut) -> crate::error::Result<()> {
+        if let Err(_e) = self.shadow.send(buf).await {
+            Err(io::Error::from(io::ErrorKind::WriteZero))?
         } else {
-            Err(anyhow!("miss"))?
+            Ok(())
         }
     }
 }

@@ -1,15 +1,20 @@
+use std::io;
 use std::io::IoSlice;
 use std::net::SocketAddr;
 use std::ops::Deref;
 use std::sync::Arc;
 
+use anyhow::{anyhow, Context};
+use bytes::BytesMut;
+use dashmap::DashMap;
+use parking_lot::{Mutex, RwLock};
+use tokio::net::UdpSocket;
+use tokio::sync::mpsc::Sender;
+
 use crate::pipe::config::UdpPipeConfig;
 use crate::pipe::{DEFAULT_ADDRESS_V4, DEFAULT_ADDRESS_V6};
 use crate::route::{Index, RouteKey};
 use crate::socket::{bind_udp, LocalInterface};
-use anyhow::{anyhow, Context};
-use parking_lot::{Mutex, RwLock};
-use tokio::net::UdpSocket;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Default)]
 pub enum Model {
@@ -86,6 +91,7 @@ pub(crate) fn udp_pipe(config: UdpPipeConfig) -> anyhow::Result<UdpPipe> {
         pipe_line_sender,
         sub_udp_num: config.sub_pipeline_num,
         default_interface: config.default_interface,
+        sender_map: Default::default(),
     });
     let udp_pipe = UdpPipe {
         pipe_line_receiver,
@@ -104,6 +110,7 @@ pub struct SocketLayer {
     pipe_line_sender: tokio::sync::mpsc::UnboundedSender<UdpPipeLine>,
     sub_udp_num: usize,
     default_interface: Option<LocalInterface>,
+    sender_map: DashMap<usize, Sender<(BytesMut, SocketAddr)>>,
 }
 
 impl SocketLayer {
@@ -297,6 +304,22 @@ impl SocketLayer {
         }
         Ok(ports)
     }
+    pub async fn send_to_buf(
+        &self,
+        buf: BytesMut,
+        route_key: &RouteKey,
+    ) -> crate::error::Result<()> {
+        let sender = if let Some(sender) = self.sender_map.get(&route_key.index_usize()) {
+            sender.value().clone()
+        } else {
+            return Err(crate::error::Error::RouteNotFound("".into()));
+        };
+        if let Err(_e) = sender.send((buf, route_key.addr())).await {
+            Err(io::Error::from(io::ErrorKind::WriteZero))?
+        } else {
+            Ok(())
+        }
+    }
     /// Writing `buf` to the target denoted by `route_key`
     pub async fn send_to(&self, buf: &[u8], route_key: &RouteKey) -> crate::error::Result<()> {
         let len = self
@@ -423,6 +446,19 @@ impl UdpPipe {
             .await
             .context("UdpPipe close")?;
         line.active = true;
+        let (s, mut r) = tokio::sync::mpsc::channel(32);
+        self.socket_layer
+            .sender_map
+            .insert(line.index.index(), s.clone());
+        line.sender.replace(s);
+        let udp = line.udp.clone().unwrap();
+        tokio::spawn(async move {
+            while let Some((buf, addr)) = r.recv().await {
+                if let Err(e) = udp.send_to(&buf, addr).await {
+                    log::debug!("{addr:?},{e:?}")
+                }
+            }
+        });
         Ok(line)
     }
     /// The number of pipelines established by main `UDP` sockets(IPv4)
@@ -506,6 +542,7 @@ pub struct UdpPipeLine {
     udp: Option<Arc<UdpSocket>>,
     close_notify: Option<tokio::sync::broadcast::Receiver<()>>,
     re_sender: Option<tokio::sync::mpsc::UnboundedSender<UdpPipeLine>>,
+    sender: Option<Sender<(BytesMut, SocketAddr)>>,
 }
 impl Drop for UdpPipeLine {
     fn drop(&mut self) {
@@ -519,6 +556,7 @@ impl Drop for UdpPipeLine {
                 udp: self.udp.take(),
                 close_notify: self.close_notify.take(),
                 re_sender: self.re_sender.clone(),
+                sender: None,
             });
         }
     }
@@ -536,6 +574,7 @@ impl UdpPipeLine {
             udp: Some(udp),
             close_notify: Some(close_notify),
             re_sender: None,
+            sender: None,
         }
     }
     pub(crate) fn main_new(
@@ -549,6 +588,7 @@ impl UdpPipeLine {
             udp: Some(udp),
             close_notify: None,
             re_sender: Some(re_sender),
+            sender: None,
         }
     }
     pub(crate) fn done(&mut self) {
