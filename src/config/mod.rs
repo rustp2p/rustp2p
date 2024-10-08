@@ -170,7 +170,7 @@ impl PipeConfig {
         self.dns.replace(dns);
         self
     }
-    pub fn set_queue(mut self, recycle_buf: RecycleBuf) -> Self {
+    pub fn set_recycle_buf(mut self, recycle_buf: RecycleBuf) -> Self {
         self.recycle_buf.replace(recycle_buf);
         self
     }

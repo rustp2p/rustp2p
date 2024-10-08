@@ -25,4 +25,12 @@ impl RecycleBuf {
     pub fn pop(&self) -> Option<BytesMut> {
         self.queue.pop()
     }
+    pub fn alloc(&self, capacity: usize) -> BytesMut {
+        if let Some(mut buf) = self.queue.pop() {
+            buf.reserve(capacity);
+            buf
+        } else {
+            BytesMut::with_capacity(capacity)
+        }
+    }
 }
