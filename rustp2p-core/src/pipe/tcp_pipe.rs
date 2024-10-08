@@ -219,7 +219,7 @@ impl WriteHalfCollect {
         let queue = self.queue.clone();
         tokio::spawn(async move {
             let mut vec_buf = Vec::with_capacity(16);
-
+            let vec: Vec<IoSlice> = Vec::with_capacity(16);
             while let Some(v) = r.recv().await {
                 if let Ok(buf) = r.try_recv() {
                     vec_buf.push(v);
@@ -230,11 +230,13 @@ impl WriteHalfCollect {
                             break;
                         }
                     }
-                    let mut vec = Vec::with_capacity(vec_buf.len());
+                    let vec = unsafe { &mut *(vec.as_ptr() as *mut Vec<IoSlice>) };
+
                     for x in &vec_buf {
                         vec.push(IoSlice::new(x));
                     }
                     let rs = decoder.encode_multiple(&mut writer, &vec).await;
+                    vec.clear();
                     if let Some(queue) = queue.as_ref() {
                         while let Some(buf) = vec_buf.pop() {
                             let _ = queue.push(buf);
