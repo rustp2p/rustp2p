@@ -219,7 +219,9 @@ impl WriteHalfCollect {
         let queue = self.queue.clone();
         tokio::spawn(async move {
             let mut vec_buf = Vec::with_capacity(16);
-            let mut vec: Vec<IoSlice> = Vec::with_capacity(16);
+            const IO_SLICE_CAPACITY: usize = 16;
+            let mut io_buffer: Vec<IoSlice> = Vec::with_capacity(IO_SLICE_CAPACITY);
+            let io_slice_storage = io_buffer.as_mut_slice();
             while let Some(v) = r.recv().await {
                 if let Ok(buf) = r.try_recv() {
                     vec_buf.push(v);
@@ -232,17 +234,19 @@ impl WriteHalfCollect {
                     }
 
                     // Safety
-                    // Guarantees that vec_buf is not otherwise borrowed during this time
-                    // so the inner &[u8] cannot be invalid
-                    // the saved &[u8] will be clean from `vec` when exiting this block
+                    // reuse the storage of `io_buffer` via `vec` that only lives in this block and manually clear the content
+                    // within the storage when exiting the block
+                    // leak the memory storage after using `vec` since the storage is managed by `io_buffer`
                     let rs = {
+                        let mut vec = unsafe {
+                            Vec::from_raw_parts(io_slice_storage.as_mut_ptr(), 0, IO_SLICE_CAPACITY)
+                        };
                         for x in &vec_buf {
-                            let u8_slice =
-                                unsafe { std::slice::from_raw_parts(x.as_ptr(), x.len()) };
-                            vec.push(IoSlice::new(u8_slice));
+                            vec.push(IoSlice::new(x));
                         }
                         let rs = decoder.encode_multiple(&mut writer, &vec).await;
                         vec.clear();
+                        std::mem::forget(vec);
                         rs
                     };
 
