@@ -59,6 +59,11 @@ impl SendPacket {
     pub fn clear(&mut self) {
         unsafe {
             self.set_payload_len(0);
+            self.buf.fill(0);
+
+            let mut packet = NetPacket::unchecked(self.buf_mut());
+            packet.set_protocol(ProtocolType::UserData);
+            packet.set_ttl(15);
         }
     }
     pub fn set_ttl(&mut self, ttl: u8) {

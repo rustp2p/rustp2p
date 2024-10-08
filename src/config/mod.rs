@@ -55,6 +55,7 @@ pub struct PipeConfig {
     pub udp_stun_servers: Option<Vec<String>>,
     pub mapping_addrs: Option<Vec<NodeAddress>>,
     pub dns: Option<Vec<String>>,
+    pub queue: Option<Arc<ArrayQueue<BytesMut>>>,
 }
 
 impl Default for PipeConfig {
@@ -88,6 +89,7 @@ impl Default for PipeConfig {
             ]),
             mapping_addrs: None,
             dns: None,
+            queue: None,
         }
     }
 }
@@ -169,6 +171,10 @@ impl PipeConfig {
         self.dns.replace(dns);
         self
     }
+    pub fn set_queue(mut self, queue: Arc<ArrayQueue<BytesMut>>) -> Self {
+        self.queue.replace(queue);
+        self
+    }
 }
 
 pub struct TcpPipeConfig {
@@ -177,7 +183,6 @@ pub struct TcpPipeConfig {
     pub default_interface: Option<LocalInterface>,
     pub tcp_port: u16,
     pub use_v6: bool,
-    pub queue: Option<Arc<ArrayQueue<BytesMut>>>,
 }
 
 impl Default for TcpPipeConfig {
@@ -188,7 +193,6 @@ impl Default for TcpPipeConfig {
             default_interface: None,
             tcp_port: 0,
             use_v6: true,
-            queue: None,
         }
     }
 }
@@ -224,7 +228,6 @@ pub struct UdpPipeConfig {
     pub default_interface: Option<LocalInterface>,
     pub udp_ports: Vec<u16>,
     pub use_v6: bool,
-    pub queue: Option<Arc<ArrayQueue<BytesMut>>>,
 }
 
 impl Default for UdpPipeConfig {
@@ -236,7 +239,6 @@ impl Default for UdpPipeConfig {
             default_interface: None,
             udp_ports: vec![0, 0],
             use_v6: true,
-            queue: None,
         }
     }
 }
@@ -283,12 +285,22 @@ impl From<LocalInterface> for rust_p2p_core::socket::LocalInterface {
 
 impl From<PipeConfig> for rust_p2p_core::pipe::config::PipeConfig {
     fn from(value: PipeConfig) -> Self {
+        let udp_pipe_config = value.udp_pipe_config.map(|v| {
+            let mut config: rust_p2p_core::pipe::config::UdpPipeConfig = v.into();
+            config.queue = value.queue.clone();
+            config
+        });
+        let tcp_pipe_config = value.tcp_pipe_config.map(|v| {
+            let mut config: rust_p2p_core::pipe::config::TcpPipeConfig = v.into();
+            config.queue = value.queue.clone();
+            config
+        });
         rust_p2p_core::pipe::config::PipeConfig {
             first_latency: value.first_latency,
             multi_pipeline: value.multi_pipeline,
             route_idle_time: value.route_idle_time,
-            udp_pipe_config: value.udp_pipe_config.map(|v| v.into()),
-            tcp_pipe_config: value.tcp_pipe_config.map(|v| v.into()),
+            udp_pipe_config,
+            tcp_pipe_config,
             enable_extend: value.enable_extend,
         }
     }
@@ -303,7 +315,7 @@ impl From<UdpPipeConfig> for rust_p2p_core::pipe::config::UdpPipeConfig {
             default_interface: value.default_interface.map(|v| v.into()),
             udp_ports: value.udp_ports,
             use_v6: value.use_v6,
-            queue: value.queue,
+            queue: None,
         }
     }
 }
@@ -317,7 +329,7 @@ impl From<TcpPipeConfig> for rust_p2p_core::pipe::config::TcpPipeConfig {
             tcp_port: value.tcp_port,
             use_v6: value.use_v6,
             init_codec: Box::new(LengthPrefixedInitCodec),
-            queue: value.queue,
+            queue: None,
         }
     }
 }
