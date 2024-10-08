@@ -98,13 +98,13 @@ async fn handler(route_table: RouteTable<u32>, mut line: PipeLine, writer: PipeW
                     .unwrap();
                     response.extend_from_slice(json.as_bytes());
                     writer
-                        .send_to(&response, &peer_route.route_key())
+                        .send_to(response, &peer_route.route_key())
                         .await
                         .unwrap();
                 }
             }
             PUNCH_START_1 | PUNCH_START_2 => {
-                if let Err(e) = writer.send_to_id(&buf[..len], &dest_id).await {
+                if let Err(e) = writer.send_to_id((&buf[..len]).into(), &dest_id).await {
                     log::warn!(
                         "{:?},src_id={src_id},peer_id={dest_id},addr={route_key:?},{e:?}",
                         &buf[..len]
@@ -117,7 +117,7 @@ async fn handler(route_table: RouteTable<u32>, mut line: PipeLine, writer: PipeW
                 response.put_u32(MY_SERVER_ID);
                 response.put_u32(src_id);
                 response.extend_from_slice(route_key.addr().to_string().as_bytes());
-                if let Err(e) = writer.send_to(&response, &route_key).await {
+                if let Err(e) = writer.send_to(response, &route_key).await {
                     log::warn!(
                         "{:?},src_id={src_id},peer_id={dest_id},addr={route_key:?},{e:?}",
                         &buf[..len]

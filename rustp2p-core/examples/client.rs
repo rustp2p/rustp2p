@@ -83,7 +83,7 @@ async fn main() {
         request.put_u32(my_id);
         request.put_u32(MY_SERVER_ID);
         pipe_writer
-            .send_to_addr(connect_protocol, &request, server)
+            .send_to_addr(connect_protocol, request, server)
             .await
             .unwrap();
     }
@@ -122,7 +122,7 @@ async fn main() {
                         let data = serde_json::to_string(&nat_info).unwrap();
                         request.extend_from_slice(data.as_bytes());
                         pipe_writer1
-                            .send_to_addr(connect_protocol, &request, server)
+                            .send_to_addr(connect_protocol, request, server)
                             .await
                             .unwrap();
                     }
@@ -140,7 +140,7 @@ async fn main() {
             request.put_u32(my_id);
             request.put_u32(MY_SERVER_ID);
             pipe_writer2
-                .send_to_addr(connect_protocol, &request, server)
+                .send_to_addr(connect_protocol, request, server)
                 .await
                 .unwrap();
         }
@@ -218,10 +218,7 @@ impl ContextHandler {
                     nat_info.seq = peer_nat_info.seq;
                     let data = serde_json::to_string(&nat_info).unwrap();
                     request.extend_from_slice(data.as_bytes());
-                    self.pipe_writer
-                        .send_to(&request, &route_key)
-                        .await
-                        .unwrap();
+                    self.pipe_writer.send_to(request, &route_key).await.unwrap();
 
                     {
                         let mut request = BytesMut::new();
@@ -271,10 +268,7 @@ impl ContextHandler {
                     request.put_u32(PUNCH_RES);
                     request.put_u32(self.my_id);
                     request.put_u32(src_id);
-                    self.pipe_writer
-                        .send_to(&request, &route_key)
-                        .await
-                        .unwrap();
+                    self.pipe_writer.send_to(request, &route_key).await.unwrap();
                     self.route_table.add_route(src_id, (route_key, 1));
                 }
                 PUNCH_RES => {

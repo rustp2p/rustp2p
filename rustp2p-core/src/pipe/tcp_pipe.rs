@@ -123,26 +123,7 @@ impl TcpPipeLine {
     pub fn route_key(&self) -> RouteKey {
         self.route_key
     }
-    // /// Close this pipeline
-    // pub async fn shutdown(self) -> anyhow::Result<()> {
-    //     let mut guard = self.tcp_write.lock().await;
-    //     if let Some((write, _)) = guard.as_mut() {
-    //         write.shutdown().await?;
-    //     }
-    //     Ok(())
-    // }
 }
-
-// impl TcpPipeLine {
-//     pub async fn into_raw(self) -> anyhow::Result<(OwnedWriteHalf, OwnedReadHalf)> {
-//         let option = self.tcp_write.lock().await.take();
-//         if let Some((write_half, _)) = option {
-//             Ok((write_half, self.tcp_read))
-//         } else {
-//             Err(anyhow!("miss"))
-//         }
-//     }
-// }
 
 impl TcpPipeLine {
     /// Writing `buf` to the target denoted by `route_key` via this pipeline
@@ -233,10 +214,32 @@ impl WriteHalfCollect {
         self.write_half_map.insert(index, s.clone());
         let collect = self.clone();
         tokio::spawn(async move {
+            let mut vec_buf = Vec::with_capacity(16);
+
             while let Some(v) = r.recv().await {
-                if let Err(e) = decoder.encode(&mut writer, &v).await {
-                    log::debug!("{route_key:?},{e:?}");
-                    break;
+                if let Ok(buf) = r.try_recv() {
+                    vec_buf.push(v);
+                    vec_buf.push(buf);
+                    while let Ok(buf) = r.try_recv() {
+                        vec_buf.push(buf);
+                        if vec_buf.len() == 16 {
+                            break;
+                        }
+                    }
+                    let mut vec = Vec::with_capacity(vec_buf.len());
+                    for x in &vec_buf {
+                        vec.push(IoSlice::new(x));
+                    }
+                    if let Err(e) = decoder.encode_multiple(&mut writer, &vec).await {
+                        log::debug!("{route_key:?},{e:?}");
+                        break;
+                    }
+                    vec_buf.clear();
+                } else {
+                    if let Err(e) = decoder.encode(&mut writer, &v).await {
+                        log::debug!("{route_key:?},{e:?}");
+                        break;
+                    }
                 }
             }
             collect.remove(&route_key);

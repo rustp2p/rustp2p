@@ -1,10 +1,10 @@
 use std::collections::HashMap;
-use std::io::IoSlice;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::UNIX_EPOCH;
 
 use async_shutdown::ShutdownManager;
+use bytes::BytesMut;
 use dashmap::DashMap;
 use rust_p2p_core::nat::NatType;
 use rust_p2p_core::route::route_table::RouteTable;
@@ -220,22 +220,22 @@ impl PipeWriter {
         buf: &NetPacket<B>,
         id: &NodeID,
     ) -> Result<()> {
-        self.pipe_writer.send_to_id(buf.buffer(), id).await?;
+        self.pipe_writer.send_to_id(buf.buffer().into(), id).await?;
         Ok(())
     }
     pub(crate) async fn send_to_route(&self, buf: &[u8], route_key: &RouteKey) -> Result<()> {
-        self.pipe_writer.send_to(buf, route_key).await?;
+        self.pipe_writer.send_to(buf.into(), route_key).await?;
         Ok(())
     }
     async fn send_to0(
         &self,
-        buf: &[u8],
+        buf: BytesMut,
         group_code: &GroupCode,
         src_id: &NodeID,
         dest_id: &NodeID,
     ) -> Result<()> {
         if dest_id.is_broadcast() {
-            self.send_broadcast0(buf, group_code, src_id).await;
+            self.send_broadcast0(&buf, group_code, src_id).await;
             return Ok(());
         }
 
@@ -260,47 +260,7 @@ impl PipeWriter {
         };
         Ok(())
     }
-    async fn send_multiple_to0(
-        &self,
-        bufs: &[IoSlice<'_>],
-        group_code: &GroupCode,
-        src_id: &NodeID,
-        dest_id: &NodeID,
-    ) -> Result<()> {
-        if dest_id.is_broadcast() {
-            for buf in bufs {
-                self.send_broadcast0(buf.as_ref(), group_code, src_id).await;
-            }
-            return Ok(());
-        }
 
-        if let Ok(route) = self.pipe_writer.route_table().get_route_by_id(dest_id) {
-            self.pipe_writer
-                .send_multiple_to(bufs, &route.route_key())
-                .await?
-        } else if let Some((relay_group_code, relay_node_id)) =
-            self.pipe_context().reachable_node(group_code, dest_id)
-        {
-            if &relay_group_code != group_code {
-                self.pipe_writer
-                    .send_multiple_to_id(bufs, &relay_node_id)
-                    .await?
-            } else {
-                let route;
-                if let Some(v) = self.pipe_context().other_route_table.get(&relay_group_code) {
-                    route = v.get_route_by_id(&relay_node_id)?;
-                } else {
-                    return Err(Error::NodeIDNotAvailable);
-                }
-                self.pipe_writer
-                    .send_multiple_to(bufs, &route.route_key())
-                    .await?
-            }
-        } else {
-            Err(Error::NodeIDNotAvailable)?
-        };
-        Ok(())
-    }
     async fn send_broadcast0(&self, buf: &[u8], group_code: &GroupCode, src_id: &NodeID) {
         let route_table = self.pipe_writer.route_table();
         let table = route_table.route_table_one();
@@ -328,7 +288,11 @@ impl PipeWriter {
         }
         for (owner_id, (list, route)) in map {
             if list.len() <= 1 && route.is_direct() {
-                if let Err(e) = self.pipe_writer.send_to(buf, &route.route_key()).await {
+                if let Err(e) = self
+                    .pipe_writer
+                    .send_to(buf.into(), &route.route_key())
+                    .await
+                {
                     log::debug!("send_broadcast0 {e:?} {owner_id:?}");
                 }
             } else {
@@ -339,7 +303,7 @@ impl PipeWriter {
                         packet.set_group_code(group_code);
                         if let Err(e) = self
                             .pipe_writer
-                            .send_to(packet.buffer(), &route.route_key())
+                            .send_to(packet.buffer().into(), &route.route_key())
                             .await
                         {
                             log::debug!("send_range_broadcast {e:?} {owner_id:?}");
@@ -353,40 +317,22 @@ impl PipeWriter {
         }
     }
 
-    pub async fn broadcast_packet(&self, packet: &mut SendPacket) -> Result<()> {
+    pub async fn broadcast_packet(&self, packet: SendPacket) -> Result<()> {
         self.send_packet_to(packet, &NodeID::broadcast()).await
     }
-    pub async fn send_packet_to(&self, packet: &mut SendPacket, dest_id: &NodeID) -> Result<()> {
+    pub async fn send_packet_to(&self, mut packet: SendPacket, dest_id: &NodeID) -> Result<()> {
         let group_code = self.pipe_context.load_group_code();
         if let Some(src_id) = self.pipe_context.load_id() {
             packet.set_group_code(&group_code);
             packet.set_src_id(&src_id);
             packet.set_dest_id(dest_id);
-            self.send_to0(packet.buf_mut(), &group_code, &src_id, dest_id)
+            self.send_to0(packet.into_buf(), &group_code, &src_id, dest_id)
                 .await
         } else {
             Err(Error::NoIDSpecified)
         }
     }
-    pub async fn send_multi_packet_to(
-        &self,
-        packets: &mut [&mut SendPacket],
-        dest_id: &NodeID,
-    ) -> Result<()> {
-        let group_code = self.pipe_context.load_group_code();
-        if let Some(src_id) = self.pipe_context.load_id() {
-            for packet in packets.iter_mut() {
-                packet.set_group_code(&group_code);
-                packet.set_src_id(&src_id);
-                packet.set_dest_id(dest_id);
-            }
-            let bufs: Vec<IoSlice> = packets.iter().map(|v| IoSlice::new(v.buf())).collect();
-            self.send_multiple_to0(&bufs, &group_code, &src_id, dest_id)
-                .await
-        } else {
-            Err(Error::NoIDSpecified)
-        }
-    }
+
     pub fn allocate_send_packet(&self) -> Result<SendPacket> {
         let mut packet =
             self.allocate_send_packet_proto(ProtocolType::UserData, self.send_buffer_size)?;
@@ -740,7 +686,7 @@ impl PipeLine {
                 send_packet.set_payload(&data);
                 if let Ok(sender) = self.passive_punch_sender.try_reserve() {
                     self.pipe_writer
-                        .send_packet_to(&mut send_packet, &src_id)
+                        .send_packet_to(send_packet, &src_id)
                         .await?;
                     sender.send((src_id, punch_info))
                 }

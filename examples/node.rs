@@ -102,8 +102,8 @@ pub async fn main() -> Result<()> {
     });
     let writer = pipe.writer();
     tokio::spawn(async move {
-        while let Some((mut packet, dest)) = receiver2.recv().await {
-            if let Err(e) = writer.send_packet_to(&mut packet, &dest).await {
+        while let Some((packet, dest)) = receiver2.recv().await {
+            if let Err(e) = writer.send_packet_to(packet, &dest).await {
                 log::warn!("writer.send {e:?}")
             }
         }
@@ -222,8 +222,9 @@ async fn process_myself(payload: &[u8], device: &Arc<AsyncDevice>) -> Result<()>
     if let Some(ip_packet) = pnet_packet::ipv4::Ipv4Packet::new(payload) {
         match ip_packet.get_next_level_protocol() {
             IpNextHeaderProtocols::Icmp => {
-                let icmp_pkt = pnet_packet::icmp::IcmpPacket::new(ip_packet.payload())
-                    .ok_or(std::io::Error::other("invalid icmp packet"))?;
+                let icmp_pkt = pnet_packet::icmp::IcmpPacket::new(ip_packet.payload()).ok_or(
+                    std::io::Error::new(std::io::ErrorKind::Other, "invalid icmp packet"),
+                )?;
                 if IcmpTypes::EchoRequest == icmp_pkt.get_icmp_type() {
                     let mut v = ip_packet.payload().to_owned();
                     let mut icmp_new =

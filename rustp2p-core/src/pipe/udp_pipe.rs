@@ -110,7 +110,7 @@ pub struct SocketLayer {
     pipe_line_sender: tokio::sync::mpsc::UnboundedSender<UdpPipeLine>,
     sub_udp_num: usize,
     default_interface: Option<LocalInterface>,
-    sender_map: DashMap<usize, Sender<(BytesMut, SocketAddr)>>,
+    sender_map: DashMap<Index, Sender<(BytesMut, SocketAddr)>>,
 }
 
 impl SocketLayer {
@@ -252,7 +252,15 @@ impl SocketLayer {
         let key = self.generate_route_key_from_addr(index, addr)?;
         self.send_to(buf, &key).await
     }
-
+    async fn send_buf_to_addr_via_index(
+        &self,
+        buf: BytesMut,
+        addr: SocketAddr,
+        index: usize,
+    ) -> crate::error::Result<()> {
+        let key = self.generate_route_key_from_addr(index, addr)?;
+        self.send_buf_to(buf, &key).await
+    }
     #[inline]
     fn try_send_to_addr_via_index(
         &self,
@@ -304,12 +312,12 @@ impl SocketLayer {
         }
         Ok(ports)
     }
-    pub async fn send_to_buf(
+    pub async fn send_buf_to(
         &self,
         buf: BytesMut,
         route_key: &RouteKey,
     ) -> crate::error::Result<()> {
-        let sender = if let Some(sender) = self.sender_map.get(&route_key.index_usize()) {
+        let sender = if let Some(sender) = self.sender_map.get(&route_key.index()) {
             sender.value().clone()
         } else {
             return Err(crate::error::Error::RouteNotFound("".into()));
@@ -369,6 +377,13 @@ impl SocketLayer {
         addr: A,
     ) -> crate::error::Result<()> {
         self.send_to_addr_via_index(buf, addr.into(), 0).await
+    }
+    pub async fn send_buf_to_addr<A: Into<SocketAddr>>(
+        &self,
+        buf: BytesMut,
+        addr: A,
+    ) -> crate::error::Result<()> {
+        self.send_buf_to_addr_via_index(buf, addr.into(), 0).await
     }
     /// Try to write `buf` to the target denoted by SocketAddr
     pub fn try_send_to_addr<A: Into<SocketAddr>>(
@@ -447,13 +462,40 @@ impl UdpPipe {
             .context("UdpPipe close")?;
         line.active = true;
         let (s, mut r) = tokio::sync::mpsc::channel(32);
-        self.socket_layer
-            .sender_map
-            .insert(line.index.index(), s.clone());
+        self.socket_layer.sender_map.insert(line.index, s.clone());
+
         line.sender.replace(s);
         let udp = line.udp.clone().unwrap();
         tokio::spawn(async move {
+            #[cfg(unix)]
+            let mut vec_buf = Vec::with_capacity(16);
+            #[cfg(unix)]
+            use std::os::fd::AsRawFd;
+
             while let Some((buf, addr)) = r.recv().await {
+                #[cfg(unix)]
+                if let Ok((buf_, addr_)) = r.try_recv() {
+                    vec_buf.push((buf, addr));
+                    vec_buf.push((buf_, addr_));
+                    while let Ok(buf) = r.try_recv() {
+                        vec_buf.push(buf);
+                        if vec_buf.len() == 16 {
+                            break;
+                        }
+                    }
+                    let mut vec = Vec::with_capacity(vec_buf.len());
+                    for (buf, addr) in &vec_buf {
+                        vec.push((buf.as_ref(), addr));
+                    }
+                    if let Err(e) = sendmmsg(udp.as_raw_fd(), &vec) {
+                        log::error!("{e:?}");
+                    }
+                } else {
+                    if let Err(e) = udp.send_to(&buf, addr).await {
+                        log::debug!("{addr:?},{e:?}")
+                    }
+                }
+                #[cfg(windows)]
                 if let Err(e) = udp.send_to(&buf, addr).await {
                     log::debug!("{addr:?},{e:?}")
                 }
@@ -482,6 +524,76 @@ impl UdpPipe {
             socket_layer: &self.socket_layer,
         }
     }
+}
+#[cfg(unix)]
+fn sendmmsg(fd: std::os::fd::RawFd, buf: &[(&[u8], &SocketAddr)]) -> io::Result<()> {
+    const MAX_MESSAGES: usize = 16;
+    let mut iov: [libc::iovec; MAX_MESSAGES] = unsafe { std::mem::zeroed() };
+    let mut msgs: [libc::mmsghdr; MAX_MESSAGES] = unsafe { std::mem::zeroed() };
+    for (i, (buf, addr)) in buf.iter().enumerate() {
+        iov[i].iov_base = buf.as_ptr() as *mut libc::c_void;
+        iov[i].iov_len = buf.len();
+        msgs[i].msg_hdr.msg_iov = &mut iov[i];
+        msgs[i].msg_hdr.msg_iovlen = 1;
+        let mut storage = socket_addr_to_sockaddr(addr);
+
+        msgs[i].msg_hdr.msg_name = &mut storage as *const _ as *mut libc::c_void;
+        msgs[i].msg_hdr.msg_namelen =
+            std::mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
+    }
+    unsafe {
+        let res = libc::sendmmsg(fd, msgs.as_mut_ptr(), buf.len() as _, 0);
+        if res == -1 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+}
+#[cfg(unix)]
+fn socket_addr_to_sockaddr(addr: &SocketAddr) -> libc::sockaddr_storage {
+    let mut storage: libc::sockaddr_storage = unsafe { std::mem::zeroed() }; // 初始化为 0
+
+    match addr {
+        SocketAddr::V4(v4_addr) => {
+            let sin = libc::sockaddr_in {
+                sin_family: libc::AF_INET as u16, // 地址族 IPv4
+                sin_port: v4_addr.port().to_be(), // 端口号，网络字节序
+                sin_addr: libc::in_addr {
+                    s_addr: u32::from_ne_bytes(v4_addr.ip().octets()), // IP 地址
+                },
+                sin_zero: [0; 8], // 保留字段，置 0
+            };
+
+            // 将 sockaddr_in 转换为 sockaddr_storage
+            unsafe {
+                let sin_ptr = &sin as *const libc::sockaddr_in as *const libc::sockaddr;
+                let storage_ptr =
+                    &mut storage as *mut libc::sockaddr_storage as *mut libc::sockaddr;
+                std::ptr::copy_nonoverlapping(sin_ptr, storage_ptr, 1);
+            }
+        }
+        SocketAddr::V6(v6_addr) => {
+            let sin6 = libc::sockaddr_in6 {
+                sin6_family: libc::AF_INET6 as u16, // 地址族 IPv6
+                sin6_port: v6_addr.port().to_be(),  // 端口号，网络字节序
+                sin6_flowinfo: v6_addr.flowinfo(),  // 流信息
+                sin6_addr: libc::in6_addr {
+                    s6_addr: v6_addr.ip().octets(), // IPv6 地址
+                },
+                sin6_scope_id: v6_addr.scope_id(), // 作用域 ID
+            };
+
+            // 将 sockaddr_in6 转换为 sockaddr_storage
+            unsafe {
+                let sin6_ptr = &sin6 as *const libc::sockaddr_in6 as *const libc::sockaddr;
+                let storage_ptr =
+                    &mut storage as *mut libc::sockaddr_storage as *mut libc::sockaddr;
+                std::ptr::copy_nonoverlapping(sin6_ptr, storage_ptr, 1);
+            }
+        }
+    }
+
+    storage
 }
 
 #[derive(Clone)]
@@ -629,6 +741,22 @@ impl UdpPipeLine {
             if len == 0 {
                 return Err(crate::error::Error::Io(std::io::Error::from(
                     std::io::ErrorKind::WriteZero,
+                )));
+            }
+            Ok(())
+        } else {
+            Err(crate::error::Error::RouteNotFound("miss".into()))
+        }
+    }
+    pub async fn send_buf_to(
+        &self,
+        buf: BytesMut,
+        route_key: &RouteKey,
+    ) -> crate::error::Result<()> {
+        if let Some(s) = &self.sender {
+            if let Err(_e) = s.send((buf, route_key.addr())).await {
+                return Err(crate::error::Error::Io(std::io::Error::from(
+                    io::ErrorKind::WriteZero,
                 )));
             }
             Ok(())

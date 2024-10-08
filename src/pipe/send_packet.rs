@@ -6,6 +6,7 @@ use crate::protocol::node_id::{GroupCode, NodeID};
 use crate::protocol::protocol_type::ProtocolType;
 use crate::protocol::{NetPacket, HEAD_LEN};
 
+#[derive(Clone)]
 pub struct SendPacket {
     buf: BytesMut,
 }
@@ -84,5 +85,8 @@ impl SendPacket {
     }
     pub(crate) fn buf_mut(&mut self) -> &mut [u8] {
         &mut self.buf
+    }
+    pub(crate) fn into_buf(self) -> BytesMut {
+        self.buf
     }
 }
