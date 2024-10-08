@@ -252,7 +252,7 @@ impl WriteHalfCollect {
 
                     if let Some(recycle_buf) = recycle_buf.as_ref() {
                         while let Some(buf) = vec_buf.pop() {
-                            let _ = recycle_buf.push(buf);
+                            recycle_buf.push(buf);
                         }
                     } else {
                         vec_buf.clear()
@@ -264,7 +264,7 @@ impl WriteHalfCollect {
                 } else {
                     let rs = decoder.encode(&mut writer, &v).await;
                     if let Some(recycle_buf) = recycle_buf.as_ref() {
-                        let _ = recycle_buf.push(v);
+                        recycle_buf.push(v);
                     }
                     if let Err(e) = rs {
                         log::debug!("{route_key:?},{e:?}");

@@ -503,7 +503,7 @@ impl UdpPipe {
                     };
                     if let Some(recycle_buf) = recycle_buf.as_ref() {
                         while let Some((buf, _)) = vec_buf.pop() {
-                            let _ = recycle_buf.push(buf);
+                            recycle_buf.push(buf);
                         }
                     } else {
                         vec_buf.clear()
@@ -514,17 +514,17 @@ impl UdpPipe {
                 } else {
                     let rs = udp.send_to(&buf, addr).await;
                     if let Some(recycle_buf) = recycle_buf.as_ref() {
-                        let _ = recycle_buf.push(buf);
+                        recycle_buf.push(buf);
                     }
                     if let Err(e) = rs {
                         log::debug!("{addr:?},{e:?}")
                     }
                 }
-                #[cfg(windows)]
+                #[cfg(not(target_os = "linux"))]
                 {
                     let rs = udp.send_to(&buf, addr).await;
                     if let Some(recycle_buf) = recycle_buf.as_ref() {
-                        let _ = recycle_buf.push(buf);
+                        recycle_buf.push(buf);
                     }
                     if let Err(e) = rs {
                         log::debug!("{addr:?},{e:?}")
