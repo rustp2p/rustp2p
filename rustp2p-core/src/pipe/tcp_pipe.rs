@@ -1,11 +1,11 @@
 use crate::pipe::config::TcpPipeConfig;
+use crate::pipe::recycle::RecycleBuf;
 use crate::route::{Index, RouteKey};
 use crate::socket::{connect_tcp, create_tcp_listener, LocalInterface};
 use anyhow::Context;
 use async_lock::Mutex;
 use async_trait::async_trait;
 use bytes::BytesMut;
-use crossbeam_queue::ArrayQueue;
 use dashmap::DashMap;
 use rand::Rng;
 use std::io;
@@ -43,7 +43,8 @@ impl TcpPipe {
         let local_addr = tcp_listener.local_addr()?;
         let tcp_listener = TcpListener::from_std(tcp_listener)?;
         let (connect_sender, connect_receiver) = tokio::sync::mpsc::channel(64);
-        let write_half_collect = WriteHalfCollect::new(config.tcp_multiplexing_limit, config.queue);
+        let write_half_collect =
+            WriteHalfCollect::new(config.tcp_multiplexing_limit, config.recycle_buf);
         let init_codec = Arc::new(config.init_codec);
         let tcp_pipe_writer = TcpPipeWriter {
             socket_layer: Arc::new(SocketLayer::new(
@@ -165,16 +166,16 @@ pub struct WriteHalfCollect {
     tcp_multiplexing_limit: usize,
     addr_mapping: Arc<DashMap<SocketAddr, Vec<usize>>>,
     write_half_map: Arc<DashMap<usize, Sender<BytesMut>>>,
-    queue: Option<Arc<ArrayQueue<BytesMut>>>,
+    recycle_buf: Option<RecycleBuf>,
 }
 
 impl WriteHalfCollect {
-    fn new(tcp_multiplexing_limit: usize, queue: Option<Arc<ArrayQueue<BytesMut>>>) -> Self {
+    fn new(tcp_multiplexing_limit: usize, recycle_buf: Option<RecycleBuf>) -> Self {
         Self {
             tcp_multiplexing_limit,
             addr_mapping: Default::default(),
             write_half_map: Default::default(),
-            queue,
+            recycle_buf,
         }
     }
 }
@@ -215,7 +216,7 @@ impl WriteHalfCollect {
         let (s, mut r) = tokio::sync::mpsc::channel(32);
         self.write_half_map.insert(index, s.clone());
         let collect = self.clone();
-        let queue = self.queue.clone();
+        let recycle_buf = self.recycle_buf.clone();
         tokio::spawn(async move {
             let mut vec_buf = Vec::with_capacity(16);
             const IO_SLICE_CAPACITY: usize = 16;
@@ -249,9 +250,9 @@ impl WriteHalfCollect {
                         rs
                     };
 
-                    if let Some(queue) = queue.as_ref() {
+                    if let Some(recycle_buf) = recycle_buf.as_ref() {
                         while let Some(buf) = vec_buf.pop() {
-                            let _ = queue.push(buf);
+                            let _ = recycle_buf.push(buf);
                         }
                     } else {
                         vec_buf.clear()
@@ -262,8 +263,8 @@ impl WriteHalfCollect {
                     }
                 } else {
                     let rs = decoder.encode(&mut writer, &v).await;
-                    if let Some(queue) = queue.as_ref() {
-                        let _ = queue.push(v);
+                    if let Some(recycle_buf) = recycle_buf.as_ref() {
+                        let _ = recycle_buf.push(v);
                     }
                     if let Err(e) = rs {
                         log::debug!("{route_key:?},{e:?}");

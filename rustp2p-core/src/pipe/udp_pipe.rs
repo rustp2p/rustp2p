@@ -6,13 +6,13 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, Context};
 use bytes::BytesMut;
-use crossbeam_queue::ArrayQueue;
 use dashmap::DashMap;
 use parking_lot::{Mutex, RwLock};
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc::Sender;
 
 use crate::pipe::config::UdpPipeConfig;
+use crate::pipe::recycle::RecycleBuf;
 use crate::pipe::{DEFAULT_ADDRESS_V4, DEFAULT_ADDRESS_V6};
 use crate::route::{Index, RouteKey};
 use crate::socket::{bind_udp, LocalInterface};
@@ -97,7 +97,7 @@ pub(crate) fn udp_pipe(config: UdpPipeConfig) -> anyhow::Result<UdpPipe> {
     let udp_pipe = UdpPipe {
         pipe_line_receiver,
         socket_layer,
-        queue: config.queue,
+        recycle_buf: config.recycle_buf,
     };
     udp_pipe.init()?;
     udp_pipe.socket_layer.switch_model(config.model)?;
@@ -426,7 +426,7 @@ impl SocketLayer {
 pub struct UdpPipe {
     pipe_line_receiver: tokio::sync::mpsc::UnboundedReceiver<UdpPipeLine>,
     socket_layer: Arc<SocketLayer>,
-    queue: Option<Arc<ArrayQueue<BytesMut>>>,
+    recycle_buf: Option<RecycleBuf>,
 }
 impl UdpPipe {
     pub(crate) fn init(&self) -> anyhow::Result<()> {
@@ -469,7 +469,7 @@ impl UdpPipe {
 
         line.sender.replace(s);
         let udp = line.udp.clone().unwrap();
-        let queue = self.queue.clone();
+        let recycle_buf = self.recycle_buf.clone();
         tokio::spawn(async move {
             #[cfg(target_os = "linux")]
             let mut vec_buf = Vec::with_capacity(16);
@@ -501,9 +501,9 @@ impl UdpPipe {
                         vec.clear();
                         rs
                     };
-                    if let Some(queue) = queue.as_ref() {
+                    if let Some(recycle_buf) = recycle_buf.as_ref() {
                         while let Some((buf, _)) = vec_buf.pop() {
-                            let _ = queue.push(buf);
+                            let _ = recycle_buf.push(buf);
                         }
                     } else {
                         vec_buf.clear()
@@ -513,8 +513,8 @@ impl UdpPipe {
                     }
                 } else {
                     let rs = udp.send_to(&buf, addr).await;
-                    if let Some(queue) = queue.as_ref() {
-                        let _ = queue.push(buf);
+                    if let Some(recycle_buf) = recycle_buf.as_ref() {
+                        let _ = recycle_buf.push(buf);
                     }
                     if let Err(e) = rs {
                         log::debug!("{addr:?},{e:?}")
@@ -523,8 +523,8 @@ impl UdpPipe {
                 #[cfg(windows)]
                 {
                     let rs = udp.send_to(&buf, addr).await;
-                    if let Some(queue) = queue.as_ref() {
-                        let _ = queue.push(buf);
+                    if let Some(recycle_buf) = recycle_buf.as_ref() {
+                        let _ = recycle_buf.push(buf);
                     }
                     if let Err(e) = rs {
                         log::debug!("{addr:?},{e:?}")

@@ -16,6 +16,7 @@ use crate::route::{ConnectProtocol, RouteKey};
 
 pub mod config;
 pub mod extensible_pipe;
+pub mod recycle;
 pub mod tcp_pipe;
 pub mod udp_pipe;
 pub const DEFAULT_ADDRESS_V4: SocketAddr =

@@ -1,7 +1,6 @@
 use std::io;
 use std::io::IoSlice;
 use std::net::SocketAddr;
-use std::sync::Arc;
 use std::time::Duration;
 
 use crate::pipe::{NodeAddress, PeerNodeAddress};
@@ -9,7 +8,7 @@ use crate::protocol::node_id::{GroupCode, NodeID};
 use crate::protocol::{NetPacket, HEAD_LEN};
 use async_trait::async_trait;
 use bytes::{Buf, BytesMut};
-use crossbeam_queue::ArrayQueue;
+use rust_p2p_core::pipe::recycle::RecycleBuf;
 use rust_p2p_core::pipe::tcp_pipe::{Decoder, Encoder, InitCodec};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
@@ -55,7 +54,7 @@ pub struct PipeConfig {
     pub udp_stun_servers: Option<Vec<String>>,
     pub mapping_addrs: Option<Vec<NodeAddress>>,
     pub dns: Option<Vec<String>>,
-    pub queue: Option<Arc<ArrayQueue<BytesMut>>>,
+    pub recycle_buf: Option<RecycleBuf>,
 }
 
 impl Default for PipeConfig {
@@ -89,7 +88,7 @@ impl Default for PipeConfig {
             ]),
             mapping_addrs: None,
             dns: None,
-            queue: None,
+            recycle_buf: None,
         }
     }
 }
@@ -171,8 +170,8 @@ impl PipeConfig {
         self.dns.replace(dns);
         self
     }
-    pub fn set_queue(mut self, queue: Arc<ArrayQueue<BytesMut>>) -> Self {
-        self.queue.replace(queue);
+    pub fn set_queue(mut self, recycle_buf: RecycleBuf) -> Self {
+        self.recycle_buf.replace(recycle_buf);
         self
     }
 }
@@ -287,12 +286,12 @@ impl From<PipeConfig> for rust_p2p_core::pipe::config::PipeConfig {
     fn from(value: PipeConfig) -> Self {
         let udp_pipe_config = value.udp_pipe_config.map(|v| {
             let mut config: rust_p2p_core::pipe::config::UdpPipeConfig = v.into();
-            config.queue = value.queue.clone();
+            config.recycle_buf = value.recycle_buf.clone();
             config
         });
         let tcp_pipe_config = value.tcp_pipe_config.map(|v| {
             let mut config: rust_p2p_core::pipe::config::TcpPipeConfig = v.into();
-            config.queue = value.queue.clone();
+            config.recycle_buf = value.recycle_buf.clone();
             config
         });
         rust_p2p_core::pipe::config::PipeConfig {
@@ -315,7 +314,7 @@ impl From<UdpPipeConfig> for rust_p2p_core::pipe::config::UdpPipeConfig {
             default_interface: value.default_interface.map(|v| v.into()),
             udp_ports: value.udp_ports,
             use_v6: value.use_v6,
-            queue: None,
+            recycle_buf: None,
         }
     }
 }
@@ -329,7 +328,7 @@ impl From<TcpPipeConfig> for rust_p2p_core::pipe::config::TcpPipeConfig {
             tcp_port: value.tcp_port,
             use_v6: value.use_v6,
             init_codec: Box::new(LengthPrefixedInitCodec),
-            queue: None,
+            recycle_buf: None,
         }
     }
 }
