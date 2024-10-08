@@ -471,13 +471,16 @@ impl UdpPipe {
         let udp = line.udp.clone().unwrap();
         let queue = self.queue.clone();
         tokio::spawn(async move {
-            #[cfg(unix)]
+            #[cfg(target_os = "linux")]
             let mut vec_buf = Vec::with_capacity(16);
-            #[cfg(unix)]
+            #[cfg(target_os = "linux")]
+            let vec: Vec<(&[u8], &SocketAddr)> = Vec::with_capacity(16);
+
+            #[cfg(target_os = "linux")]
             use std::os::fd::AsRawFd;
 
             while let Some((buf, addr)) = r.recv().await {
-                #[cfg(unix)]
+                #[cfg(target_os = "linux")]
                 if let Ok((buf_, addr_)) = r.try_recv() {
                     vec_buf.push((buf, addr));
                     vec_buf.push((buf_, addr_));
@@ -487,11 +490,12 @@ impl UdpPipe {
                             break;
                         }
                     }
-                    let mut vec = Vec::with_capacity(vec_buf.len());
+                    let vec = unsafe { &mut *(vec.as_ptr() as *mut Vec<(&[u8], &SocketAddr)>) };
                     for (buf, addr) in &vec_buf {
                         vec.push((buf.as_ref(), addr));
                     }
                     let rs = sendmmsg(udp.as_raw_fd(), &vec);
+                    vec.clear();
                     if let Some(queue) = queue.as_ref() {
                         while let Some((buf, _)) = vec_buf.pop() {
                             let _ = queue.push(buf);
@@ -547,7 +551,7 @@ impl UdpPipe {
         }
     }
 }
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn sendmmsg(fd: std::os::fd::RawFd, buf: &[(&[u8], &SocketAddr)]) -> io::Result<()> {
     const MAX_MESSAGES: usize = 16;
     assert!(buf.len() < MAX_MESSAGES);
@@ -572,7 +576,7 @@ fn sendmmsg(fd: std::os::fd::RawFd, buf: &[(&[u8], &SocketAddr)]) -> io::Result<
         Ok(())
     }
 }
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn socket_addr_to_sockaddr(addr: &SocketAddr) -> libc::sockaddr_storage {
     let mut storage: libc::sockaddr_storage = unsafe { std::mem::zeroed() }; // 初始化为 0
 
