@@ -18,7 +18,6 @@ use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::mpsc::{Receiver, Sender};
 
 pub struct TcpPipe {
@@ -483,11 +482,8 @@ impl TcpPipeWriter {
                 let write_half = self.write_half_collect.get(&index).ok_or_else(|| {
                     crate::error::Error::RouteNotFound(format!("not found {route_key:?}"))
                 })?;
-                if let Err(e) = write_half.try_send(buf) {
-                    match e {
-                        TrySendError::Full(_) => Err(crate::error::Error::PacketLoss),
-                        TrySendError::Closed(_) => Err(io::Error::from(io::ErrorKind::WriteZero))?,
-                    }
+                if let Err(_e) = write_half.send(buf).await {
+                    Err(io::Error::from(io::ErrorKind::WriteZero))?
                 } else {
                     Ok(())
                 }
