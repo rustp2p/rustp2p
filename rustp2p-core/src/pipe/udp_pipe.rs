@@ -494,7 +494,7 @@ impl UdpPipe {
                     for (buf, addr) in &vec_buf {
                         vec.push((buf.as_ref(), addr));
                     }
-                    let rs = sendmmsg(udp.as_raw_fd(), &vec);
+                    let rs = sendmmsg(udp.as_raw_fd(), vec);
                     vec.clear();
                     if let Some(queue) = queue.as_ref() {
                         while let Some((buf, _)) = vec_buf.pop() {
