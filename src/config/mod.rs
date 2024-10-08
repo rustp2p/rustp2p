@@ -1,6 +1,7 @@
 use std::io;
 use std::io::IoSlice;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::pipe::{NodeAddress, PeerNodeAddress};
@@ -8,6 +9,7 @@ use crate::protocol::node_id::{GroupCode, NodeID};
 use crate::protocol::{NetPacket, HEAD_LEN};
 use async_trait::async_trait;
 use bytes::{Buf, BytesMut};
+use crossbeam_queue::ArrayQueue;
 use rust_p2p_core::pipe::tcp_pipe::{Decoder, Encoder, InitCodec};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
@@ -175,6 +177,7 @@ pub struct TcpPipeConfig {
     pub default_interface: Option<LocalInterface>,
     pub tcp_port: u16,
     pub use_v6: bool,
+    pub queue: Option<Arc<ArrayQueue<BytesMut>>>,
 }
 
 impl Default for TcpPipeConfig {
@@ -185,6 +188,7 @@ impl Default for TcpPipeConfig {
             default_interface: None,
             tcp_port: 0,
             use_v6: true,
+            queue: None,
         }
     }
 }
@@ -220,6 +224,7 @@ pub struct UdpPipeConfig {
     pub default_interface: Option<LocalInterface>,
     pub udp_ports: Vec<u16>,
     pub use_v6: bool,
+    pub queue: Option<Arc<ArrayQueue<BytesMut>>>,
 }
 
 impl Default for UdpPipeConfig {
@@ -231,6 +236,7 @@ impl Default for UdpPipeConfig {
             default_interface: None,
             udp_ports: vec![0, 0],
             use_v6: true,
+            queue: None,
         }
     }
 }
@@ -297,6 +303,7 @@ impl From<UdpPipeConfig> for rust_p2p_core::pipe::config::UdpPipeConfig {
             default_interface: value.default_interface.map(|v| v.into()),
             udp_ports: value.udp_ports,
             use_v6: value.use_v6,
+            queue: value.queue,
         }
     }
 }
@@ -310,6 +317,7 @@ impl From<TcpPipeConfig> for rust_p2p_core::pipe::config::TcpPipeConfig {
             tcp_port: value.tcp_port,
             use_v6: value.use_v6,
             init_codec: Box::new(LengthPrefixedInitCodec),
+            queue: value.queue,
         }
     }
 }

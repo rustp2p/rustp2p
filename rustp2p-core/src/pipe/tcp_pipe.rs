@@ -5,6 +5,7 @@ use anyhow::Context;
 use async_lock::Mutex;
 use async_trait::async_trait;
 use bytes::BytesMut;
+use crossbeam_queue::ArrayQueue;
 use dashmap::DashMap;
 use rand::Rng;
 use std::io;
@@ -43,7 +44,7 @@ impl TcpPipe {
         let local_addr = tcp_listener.local_addr()?;
         let tcp_listener = TcpListener::from_std(tcp_listener)?;
         let (connect_sender, connect_receiver) = tokio::sync::mpsc::channel(64);
-        let write_half_collect = WriteHalfCollect::new(config.tcp_multiplexing_limit);
+        let write_half_collect = WriteHalfCollect::new(config.tcp_multiplexing_limit, config.queue);
         let init_codec = Arc::new(config.init_codec);
         let tcp_pipe_writer = TcpPipeWriter {
             socket_layer: Arc::new(SocketLayer::new(
@@ -165,14 +166,16 @@ pub struct WriteHalfCollect {
     tcp_multiplexing_limit: usize,
     addr_mapping: Arc<DashMap<SocketAddr, Vec<usize>>>,
     write_half_map: Arc<DashMap<usize, Sender<BytesMut>>>,
+    queue: Option<Arc<ArrayQueue<BytesMut>>>,
 }
 
 impl WriteHalfCollect {
-    fn new(tcp_multiplexing_limit: usize) -> Self {
+    fn new(tcp_multiplexing_limit: usize, queue: Option<Arc<ArrayQueue<BytesMut>>>) -> Self {
         Self {
             tcp_multiplexing_limit,
             addr_mapping: Default::default(),
             write_half_map: Default::default(),
+            queue,
         }
     }
 }
@@ -213,6 +216,7 @@ impl WriteHalfCollect {
         let (s, mut r) = tokio::sync::mpsc::channel(32);
         self.write_half_map.insert(index, s.clone());
         let collect = self.clone();
+        let queue = self.queue.clone();
         tokio::spawn(async move {
             let mut vec_buf = Vec::with_capacity(16);
 
@@ -230,13 +234,24 @@ impl WriteHalfCollect {
                     for x in &vec_buf {
                         vec.push(IoSlice::new(x));
                     }
-                    if let Err(e) = decoder.encode_multiple(&mut writer, &vec).await {
+                    let rs = decoder.encode_multiple(&mut writer, &vec).await;
+                    if let Some(queue) = queue.as_ref() {
+                        while let Some(buf) = vec_buf.pop() {
+                            let _ = queue.push(buf);
+                        }
+                    } else {
+                        vec_buf.clear()
+                    }
+                    if let Err(e) = rs {
                         log::debug!("{route_key:?},{e:?}");
                         break;
                     }
-                    vec_buf.clear();
                 } else {
-                    if let Err(e) = decoder.encode(&mut writer, &v).await {
+                    let rs = decoder.encode(&mut writer, &v).await;
+                    if let Some(queue) = queue.as_ref() {
+                        let _ = queue.push(v);
+                    }
+                    if let Err(e) = rs {
                         log::debug!("{route_key:?},{e:?}");
                         break;
                     }

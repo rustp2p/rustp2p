@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, Context};
 use bytes::BytesMut;
+use crossbeam_queue::ArrayQueue;
 use dashmap::DashMap;
 use parking_lot::{Mutex, RwLock};
 use tokio::net::UdpSocket;
@@ -96,6 +97,7 @@ pub(crate) fn udp_pipe(config: UdpPipeConfig) -> anyhow::Result<UdpPipe> {
     let udp_pipe = UdpPipe {
         pipe_line_receiver,
         socket_layer,
+        queue: config.queue,
     };
     udp_pipe.init()?;
     udp_pipe.socket_layer.switch_model(config.model)?;
@@ -424,6 +426,7 @@ impl SocketLayer {
 pub struct UdpPipe {
     pipe_line_receiver: tokio::sync::mpsc::UnboundedReceiver<UdpPipeLine>,
     socket_layer: Arc<SocketLayer>,
+    queue: Option<Arc<ArrayQueue<BytesMut>>>,
 }
 impl UdpPipe {
     pub(crate) fn init(&self) -> anyhow::Result<()> {
@@ -466,6 +469,7 @@ impl UdpPipe {
 
         line.sender.replace(s);
         let udp = line.udp.clone().unwrap();
+        let queue = self.queue.clone();
         tokio::spawn(async move {
             #[cfg(unix)]
             let mut vec_buf = Vec::with_capacity(16);
@@ -487,17 +491,35 @@ impl UdpPipe {
                     for (buf, addr) in &vec_buf {
                         vec.push((buf.as_ref(), addr));
                     }
-                    if let Err(e) = sendmmsg(udp.as_raw_fd(), &vec) {
+                    let rs = sendmmsg(udp.as_raw_fd(), &vec);
+                    if let Some(queue) = queue.as_ref() {
+                        while let Some((buf, _)) = vec_buf.pop() {
+                            let _ = queue.push(buf);
+                        }
+                    } else {
+                        vec_buf.clear()
+                    }
+                    if let Err(e) = rs {
                         log::error!("{e:?}");
                     }
                 } else {
-                    if let Err(e) = udp.send_to(&buf, addr).await {
+                    let rs = udp.send_to(&buf, addr).await;
+                    if let Some(queue) = queue.as_ref() {
+                        let _ = queue.push(buf);
+                    }
+                    if let Err(e) = rs {
                         log::debug!("{addr:?},{e:?}")
                     }
                 }
                 #[cfg(windows)]
-                if let Err(e) = udp.send_to(&buf, addr).await {
-                    log::debug!("{addr:?},{e:?}")
+                {
+                    let rs = udp.send_to(&buf, addr).await;
+                    if let Some(queue) = queue.as_ref() {
+                        let _ = queue.push(buf);
+                    }
+                    if let Err(e) = rs {
+                        log::debug!("{addr:?},{e:?}")
+                    }
                 }
             }
         });
@@ -528,6 +550,7 @@ impl UdpPipe {
 #[cfg(unix)]
 fn sendmmsg(fd: std::os::fd::RawFd, buf: &[(&[u8], &SocketAddr)]) -> io::Result<()> {
     const MAX_MESSAGES: usize = 16;
+    assert!(buf.len() < MAX_MESSAGES);
     let mut iov: [libc::iovec; MAX_MESSAGES] = unsafe { std::mem::zeroed() };
     let mut msgs: [libc::mmsghdr; MAX_MESSAGES] = unsafe { std::mem::zeroed() };
     for (i, (buf, addr)) in buf.iter().enumerate() {
