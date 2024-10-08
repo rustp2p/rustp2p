@@ -219,7 +219,7 @@ impl WriteHalfCollect {
         let queue = self.queue.clone();
         tokio::spawn(async move {
             let mut vec_buf = Vec::with_capacity(16);
-            let vec: Vec<IoSlice> = Vec::with_capacity(16);
+            let mut vec: Vec<IoSlice> = Vec::with_capacity(16);
             while let Some(v) = r.recv().await {
                 if let Ok(buf) = r.try_recv() {
                     vec_buf.push(v);
@@ -230,13 +230,21 @@ impl WriteHalfCollect {
                             break;
                         }
                     }
-                    let vec = unsafe { &mut *(vec.as_ptr() as *mut Vec<IoSlice>) };
 
-                    for x in &vec_buf {
-                        vec.push(IoSlice::new(x));
-                    }
-                    let rs = decoder.encode_multiple(&mut writer, &vec).await;
-                    vec.clear();
+					// Safe
+					// Guarantees that vec_buf is not otherwise borrowed during this time
+					// so the inner &[u8] cannot be invalid
+					// the saved &[u8] will be clean from `vec` when exiting this block
+					let rs = {
+						for x in &vec_buf {
+							let u8_slice = unsafe{std::slice::from_raw_parts(x.as_ptr(), x.len())};
+							vec.push(IoSlice::new(u8_slice));
+						}
+						let rs = decoder.encode_multiple(&mut writer, &vec).await;
+						vec.clear();
+						rs
+					};
+
                     if let Some(queue) = queue.as_ref() {
                         while let Some(buf) = vec_buf.pop() {
                             let _ = queue.push(buf);
