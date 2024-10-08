@@ -464,10 +464,14 @@ impl UdpPipe {
             .await
             .context("UdpPipe close")?;
         line.active = true;
+        if line.socket_layer.is_some() {
+            return Ok(line);
+        }
         let (s, mut r) = tokio::sync::mpsc::channel(32);
-        self.socket_layer.sender_map.insert(line.index, s.clone());
-
-        line.sender.replace(s);
+        let index = line.index;
+        self.socket_layer.sender_map.insert(index, s);
+        line.socket_layer.replace(self.socket_layer.clone());
+        let socket_layer = self.socket_layer.clone();
         let udp = line.udp.clone().unwrap();
         let recycle_buf = self.recycle_buf.clone();
         tokio::spawn(async move {
@@ -531,6 +535,7 @@ impl UdpPipe {
                     }
                 }
             }
+            socket_layer.sender_map.remove(&index);
         });
         Ok(line)
     }
@@ -686,11 +691,14 @@ pub struct UdpPipeLine {
     udp: Option<Arc<UdpSocket>>,
     close_notify: Option<tokio::sync::broadcast::Receiver<()>>,
     re_sender: Option<tokio::sync::mpsc::UnboundedSender<UdpPipeLine>>,
-    sender: Option<Sender<(BytesMut, SocketAddr)>>,
+    socket_layer: Option<Arc<SocketLayer>>,
 }
 impl Drop for UdpPipeLine {
     fn drop(&mut self) {
         if self.udp.is_none() || !self.active {
+            if let Some(socket_layer) = self.socket_layer.take() {
+                socket_layer.sender_map.remove(&self.index);
+            }
             return;
         }
         if let Some(re_sender) = &self.re_sender {
@@ -700,7 +708,7 @@ impl Drop for UdpPipeLine {
                 udp: self.udp.take(),
                 close_notify: self.close_notify.take(),
                 re_sender: self.re_sender.clone(),
-                sender: None,
+                socket_layer: self.socket_layer.take(),
             });
         }
     }
@@ -718,7 +726,7 @@ impl UdpPipeLine {
             udp: Some(udp),
             close_notify: Some(close_notify),
             re_sender: None,
-            sender: None,
+            socket_layer: None,
         }
     }
     pub(crate) fn main_new(
@@ -732,7 +740,7 @@ impl UdpPipeLine {
             udp: Some(udp),
             close_notify: None,
             re_sender: Some(re_sender),
-            sender: None,
+            socket_layer: None,
         }
     }
     pub(crate) fn done(&mut self) {
@@ -785,25 +793,16 @@ impl UdpPipeLine {
         buf: BytesMut,
         route_key: &RouteKey,
     ) -> crate::error::Result<()> {
-        if let Some(s) = &self.sender {
-            if let Err(_e) = s.send((buf, route_key.addr())).await {
-                return Err(crate::error::Error::Io(std::io::Error::from(
-                    io::ErrorKind::WriteZero,
-                )));
-            }
-            Ok(())
+        if self.index != route_key.index() {
+            Err(crate::error::Error::RouteNotFound("mismatch".into()))?
+        }
+        if let Some(s) = &self.socket_layer {
+            s.send_buf_to(buf, route_key).await
         } else {
             Err(crate::error::Error::RouteNotFound("miss".into()))
         }
     }
-    pub async fn readable(&self) -> crate::error::Result<()> {
-        if let Some(udp) = &self.udp {
-            udp.readable().await?;
-            Ok(())
-        } else {
-            Err(crate::error::Error::RouteNotFound("miss".into()))
-        }
-    }
+
     /// Receving buf from this PipeLine
     /// `usize` in the `Ok` branch indicates how many bytes are received
     /// `RouteKey` in the `Ok` branch denotes the source where these bytes are received from
