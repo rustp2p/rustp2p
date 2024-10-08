@@ -417,6 +417,8 @@ impl PipeLine {
                 Ok(handle_result) => {
                     if let Some(rs) = handle_result {
                         return Ok(Ok(HandleResult {
+                            _start: rs.start,
+                            _end: rs.end,
                             _src_id: rs.src_id,
                             _dest_id: rs.dest_id,
                             _route_key: rs.route_key,
@@ -803,6 +805,7 @@ impl PipeLine {
         Ok(())
     }
 }
+
 async fn id_route_reply(
     pipe_writer: PipeWriter,
     other_route_table: Arc<DashMap<GroupCode, RouteTable<NodeID>>>,
@@ -880,6 +883,8 @@ struct HandleResultInner {
 
 #[derive(Debug)]
 pub struct HandleResult<'a> {
+    _start: usize,
+    _end: usize,
     _payload: &'a [u8],
     _ttl: u8,
     _max_ttl: u8,
@@ -909,6 +914,12 @@ impl<'a> HandleResult<'a> {
     }
     pub fn is_relay(&self) -> bool {
         (self._max_ttl - self._ttl) != 0
+    }
+    pub fn start_index(&self) -> usize {
+        self._start
+    }
+    pub fn end_index(&self) -> usize {
+        self._end
     }
 }
 
