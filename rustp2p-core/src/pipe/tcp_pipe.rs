@@ -235,7 +235,7 @@ impl WriteHalfCollect {
                     for x in &vec_buf {
                         vec.push(IoSlice::new(x));
                     }
-                    let rs = decoder.encode_multiple(&mut writer, &vec).await;
+                    let rs = decoder.encode_multiple(&mut writer, vec).await;
                     vec.clear();
                     if let Some(queue) = queue.as_ref() {
                         while let Some(buf) = vec_buf.pop() {
