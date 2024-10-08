@@ -474,7 +474,7 @@ impl UdpPipe {
             #[cfg(target_os = "linux")]
             let mut vec_buf = Vec::with_capacity(16);
             #[cfg(target_os = "linux")]
-            let vec: Vec<(&[u8], &SocketAddr)> = Vec::with_capacity(16);
+            let mut vec: Vec<(&[u8], SocketAddr)> = Vec::with_capacity(16);
 
             #[cfg(target_os = "linux")]
             use std::os::fd::AsRawFd;
@@ -490,12 +490,17 @@ impl UdpPipe {
                             break;
                         }
                     }
-                    let vec = unsafe { &mut *(vec.as_ptr() as *mut Vec<(&[u8], &SocketAddr)>) };
-                    for (buf, addr) in &vec_buf {
-                        vec.push((buf.as_ref(), addr));
-                    }
-                    let rs = sendmmsg(udp.as_raw_fd(), vec);
-                    vec.clear();
+                    let rs = {
+                        for (buf, addr) in &vec_buf {
+                            let u8_slice =
+                                unsafe { std::slice::from_raw_parts(buf.as_ptr(), buf.len()) };
+                            vec.push((u8_slice, *addr));
+                        }
+
+                        let rs = sendmmsg(udp.as_raw_fd(), &vec);
+                        vec.clear();
+                        rs
+                    };
                     if let Some(queue) = queue.as_ref() {
                         while let Some((buf, _)) = vec_buf.pop() {
                             let _ = queue.push(buf);
@@ -552,7 +557,7 @@ impl UdpPipe {
     }
 }
 #[cfg(target_os = "linux")]
-fn sendmmsg(fd: std::os::fd::RawFd, buf: &[(&[u8], &SocketAddr)]) -> io::Result<()> {
+fn sendmmsg(fd: std::os::fd::RawFd, buf: &[(&[u8], SocketAddr)]) -> io::Result<()> {
     const MAX_MESSAGES: usize = 16;
     assert!(buf.len() < MAX_MESSAGES);
     let mut iov: [libc::iovec; MAX_MESSAGES] = unsafe { std::mem::zeroed() };
