@@ -17,6 +17,11 @@ impl From<&[u8]> for SendPacket {
         packet
     }
 }
+impl From<BytesMut> for SendPacket {
+    fn from(value: BytesMut) -> Self {
+        Self { buf: value }
+    }
+}
 impl SendPacket {
     pub fn with_capacity(capacity: usize) -> Self {
         assert!(capacity < u16::MAX as _);
@@ -48,6 +53,11 @@ impl SendPacket {
         self.buf.set_len(HEAD_LEN + payload_len);
         let mut packet = NetPacket::unchecked(self.buf_mut());
         packet.reset_data_len();
+    }
+    pub fn clear(&mut self) {
+        unsafe {
+            self.set_payload_len(0);
+        }
     }
     pub fn set_ttl(&mut self, ttl: u8) {
         let ttl = ttl & 0xF;
