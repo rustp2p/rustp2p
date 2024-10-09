@@ -600,46 +600,56 @@ fn sendmmsg(fd: std::os::fd::RawFd, buf: &[(&[u8], SocketAddr)]) -> io::Result<(
         Ok(())
     }
 }
-#[cfg(target_os = "linux")]
+//#[cfg(target_os = "linux")]
 fn socket_addr_to_sockaddr(addr: &SocketAddr) -> libc::sockaddr_storage {
     let mut storage: libc::sockaddr_storage = unsafe { std::mem::zeroed() }; // 初始化为 0
 
     match addr {
         SocketAddr::V4(v4_addr) => {
             let sin = libc::sockaddr_in {
-                sin_family: libc::AF_INET as u16, // 地址族 IPv4
+                sin_family: libc::AF_INET as _,   // 地址族 IPv4
                 sin_port: v4_addr.port().to_be(), // 端口号，网络字节序
                 sin_addr: libc::in_addr {
                     s_addr: u32::from_ne_bytes(v4_addr.ip().octets()), // IP 地址
                 },
                 sin_zero: [0; 8], // 保留字段，置 0
+                #[cfg(target_os = "macos")]
+                sin_len: 0,
             };
 
             // 将 sockaddr_in 转换为 sockaddr_storage
             unsafe {
-                let sin_ptr = &sin as *const libc::sockaddr_in as *const libc::sockaddr;
-                let storage_ptr =
-                    &mut storage as *mut libc::sockaddr_storage as *mut libc::sockaddr;
-                std::ptr::copy_nonoverlapping(sin_ptr, storage_ptr, 1);
+                let sin_ptr = &sin as *const libc::sockaddr_in as *const u8;
+                let storage_ptr = &mut storage as *mut libc::sockaddr_storage as *mut u8;
+                std::ptr::copy_nonoverlapping(
+                    sin_ptr,
+                    storage_ptr,
+                    std::mem::size_of::<libc::sockaddr>(),
+                );
             }
         }
         SocketAddr::V6(v6_addr) => {
             let sin6 = libc::sockaddr_in6 {
-                sin6_family: libc::AF_INET6 as u16, // 地址族 IPv6
-                sin6_port: v6_addr.port().to_be(),  // 端口号，网络字节序
-                sin6_flowinfo: v6_addr.flowinfo(),  // 流信息
+                sin6_family: libc::AF_INET6 as _,  // 地址族 IPv6
+                sin6_port: v6_addr.port().to_be(), // 端口号，网络字节序
+                sin6_flowinfo: v6_addr.flowinfo(), // 流信息
                 sin6_addr: libc::in6_addr {
                     s6_addr: v6_addr.ip().octets(), // IPv6 地址
                 },
                 sin6_scope_id: v6_addr.scope_id(), // 作用域 ID
+                #[cfg(target_os = "macos")]
+                sin6_len: 0,
             };
 
             // 将 sockaddr_in6 转换为 sockaddr_storage
             unsafe {
-                let sin6_ptr = &sin6 as *const libc::sockaddr_in6 as *const libc::sockaddr;
-                let storage_ptr =
-                    &mut storage as *mut libc::sockaddr_storage as *mut libc::sockaddr;
-                std::ptr::copy_nonoverlapping(sin6_ptr, storage_ptr, 1);
+                let sin6_ptr = &sin6 as *const libc::sockaddr_in6 as *const u8;
+                let storage_ptr = &mut storage as *mut libc::sockaddr_storage as *mut u8;
+                std::ptr::copy_nonoverlapping(
+                    sin6_ptr,
+                    storage_ptr,
+                    std::mem::size_of::<libc::sockaddr>(),
+                );
             }
         }
     }
