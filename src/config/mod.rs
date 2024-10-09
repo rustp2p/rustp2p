@@ -55,7 +55,7 @@ pub struct PipeConfig {
     pub udp_stun_servers: Option<Vec<String>>,
     pub mapping_addrs: Option<Vec<NodeAddress>>,
     pub dns: Option<Vec<String>>,
-    pub recycle_buf: Option<RecycleBuf>,
+    pub recycle_buf_cap: usize,
 }
 
 impl Default for PipeConfig {
@@ -90,7 +90,7 @@ impl Default for PipeConfig {
             ]),
             mapping_addrs: None,
             dns: None,
-            recycle_buf: None,
+            recycle_buf_cap: 64,
         }
     }
 }
@@ -176,8 +176,8 @@ impl PipeConfig {
         self.dns.replace(dns);
         self
     }
-    pub fn set_recycle_buf(mut self, recycle_buf: RecycleBuf) -> Self {
-        self.recycle_buf.replace(recycle_buf);
+    pub fn set_recycle_buf_cap(mut self, recycle_buf_cap: usize) -> Self {
+        self.recycle_buf_cap = recycle_buf_cap;
         self
     }
 }
@@ -290,14 +290,22 @@ impl From<LocalInterface> for rust_p2p_core::socket::LocalInterface {
 
 impl From<PipeConfig> for rust_p2p_core::pipe::config::PipeConfig {
     fn from(value: PipeConfig) -> Self {
+        let recycle_buf = if value.recycle_buf_cap > 0 {
+            Some(RecycleBuf::new(
+                value.recycle_buf_cap,
+                value.send_buffer_size..value.send_buffer_size + 1,
+            ))
+        } else {
+            None
+        };
         let udp_pipe_config = value.udp_pipe_config.map(|v| {
             let mut config: rust_p2p_core::pipe::config::UdpPipeConfig = v.into();
-            config.recycle_buf = value.recycle_buf.clone();
+            config.recycle_buf = recycle_buf.clone();
             config
         });
         let tcp_pipe_config = value.tcp_pipe_config.map(|v| {
             let mut config: rust_p2p_core::pipe::config::TcpPipeConfig = v.into();
-            config.recycle_buf = value.recycle_buf.clone();
+            config.recycle_buf = recycle_buf;
             config
         });
         rust_p2p_core::pipe::config::PipeConfig {

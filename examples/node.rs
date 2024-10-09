@@ -8,7 +8,6 @@ use mimalloc_rust::GlobalMiMalloc;
 use pnet_packet::icmp::IcmpTypes;
 use pnet_packet::ip::IpNextHeaderProtocols;
 use pnet_packet::Packet;
-use rust_p2p_core::pipe::recycle::RecycleBuf;
 use rustp2p::config::{PipeConfig, TcpPipeConfig, UdpPipeConfig};
 use rustp2p::error::*;
 use rustp2p::pipe::{PeerNodeAddress, Pipe, PipeLine, PipeWriter, RecvUserData};
@@ -84,14 +83,12 @@ pub async fn main() -> Result<()> {
     let port = port.unwrap_or(23333);
     let udp_config = UdpPipeConfig::default().set_udp_ports(vec![port]);
     let tcp_config = TcpPipeConfig::default().set_tcp_port(port);
-    let recycle_buf = RecycleBuf::new(32, 2048..2049);
     let config = PipeConfig::empty()
         .set_udp_pipe_config(udp_config)
         .set_tcp_pipe_config(tcp_config)
         .set_direct_addrs(addrs)
         .set_group_code(string_to_group_code(&group_code))
-        .set_node_id(self_id.into())
-        .set_recycle_buf(recycle_buf);
+        .set_node_id(self_id.into());
 
     let mut pipe = Pipe::new(config).await?;
     let writer = pipe.writer();

@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 use std::time::UNIX_EPOCH;
 
@@ -34,18 +35,20 @@ mod send_packet;
 
 pub struct Pipe {
     send_buffer_size: usize,
+    recv_buffer_size: usize,
     pipe_context: PipeContext,
     pipe: rust_p2p_core::pipe::Pipe<NodeID>,
     shutdown_manager: ShutdownManager<()>,
     active_punch_sender: Sender<(NodeID, PunchConsultInfo)>,
     passive_punch_sender: Sender<(NodeID, PunchConsultInfo)>,
-    buffer_pool: BufferPool<BytesMut>,
+    buffer_pool: Option<BufferPool<BytesMut>>,
     recycle_buf: Option<RecycleBuf>,
 }
 
 impl Pipe {
     pub async fn new(mut config: PipeConfig) -> Result<Pipe> {
         let send_buffer_size = config.send_buffer_size;
+        let recv_buffer_size = config.recv_buffer_size;
         let query_id_interval = config.query_id_interval;
         let query_id_max_num = config.query_id_max_num;
         let heartbeat_interval = config.heartbeat_interval;
@@ -60,8 +63,15 @@ impl Pipe {
         } else {
             None
         };
-        let buffer_pool = BufferPool::new(64, config.recv_buffer_size);
-        let recycle_buf = config.recycle_buf.clone();
+        let buffer_pool = if config.recycle_buf_cap > 0 {
+            Some(BufferPool::new(
+                config.recycle_buf_cap,
+                config.recv_buffer_size,
+            ))
+        } else {
+            None
+        };
+
         let mut tcp_stun_servers = config.tcp_stun_servers.take().unwrap_or_default();
         for x in tcp_stun_servers.iter_mut() {
             if !x.contains(':') {
@@ -74,8 +84,14 @@ impl Pipe {
                 x.push_str(":3478");
             }
         }
-        let (pipe, puncher, idle_route_manager) =
-            rust_p2p_core::pipe::pipe::<NodeID>(config.into())?;
+        let config: rust_p2p_core::pipe::config::PipeConfig = config.into();
+        let mut recycle_buf: Option<RecycleBuf> = None;
+        if let Some(v) = config.tcp_pipe_config.as_ref() {
+            recycle_buf = v.recycle_buf.clone();
+        } else if let Some(v) = config.udp_pipe_config.as_ref() {
+            recycle_buf = v.recycle_buf.clone();
+        };
+        let (pipe, puncher, idle_route_manager) = rust_p2p_core::pipe::pipe::<NodeID>(config)?;
         let writer_ref = pipe.writer_ref();
         let local_tcp_port = if let Some(v) = writer_ref.tcp_pipe_writer_ref() {
             v.local_addr().port()
@@ -139,6 +155,7 @@ impl Pipe {
         });
         Ok(Self {
             send_buffer_size,
+            recv_buffer_size,
             pipe_context,
             pipe,
             shutdown_manager,
@@ -173,6 +190,7 @@ impl Pipe {
             active_punch_sender: self.active_punch_sender.clone(),
             passive_punch_sender: self.passive_punch_sender.clone(),
             buffer_pool: self.buffer_pool.clone(),
+            recv_buffer_size: self.recv_buffer_size,
         })
     }
 }
@@ -393,14 +411,19 @@ pub struct PipeLine {
     route_table: RouteTable<NodeID>,
     active_punch_sender: Sender<(NodeID, PunchConsultInfo)>,
     passive_punch_sender: Sender<(NodeID, PunchConsultInfo)>,
-    buffer_pool: BufferPool<BytesMut>,
+    buffer_pool: Option<BufferPool<BytesMut>>,
+    recv_buffer_size: usize,
 }
 
 impl PipeLine {
     pub async fn next(
         &mut self,
     ) -> core::result::Result<core::result::Result<RecvUserData, HandleError>, RecvError> {
-        let mut block = self.buffer_pool.alloc();
+        let mut block = if let Some(buffer_pool) = self.buffer_pool.as_ref() {
+            Data::Recyclable(buffer_pool.alloc())
+        } else {
+            Data::Temporary(BytesMut::with_capacity(self.recv_buffer_size))
+        };
         loop {
             unsafe {
                 let capacity = block.capacity();
@@ -901,12 +924,34 @@ struct HandleResultInner {
 pub struct RecvUserData {
     _start: usize,
     _end: usize,
-    _data: Block<BytesMut>,
+    _data: Data,
     _ttl: u8,
     _max_ttl: u8,
     _src_id: NodeID,
     _dest_id: NodeID,
     _route_key: RouteKey,
+}
+pub enum Data {
+    Recyclable(Block<BytesMut>),
+    Temporary(BytesMut),
+}
+impl Deref for Data {
+    type Target = BytesMut;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Data::Recyclable(data) => data,
+            Data::Temporary(data) => data,
+        }
+    }
+}
+impl DerefMut for Data {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        match self {
+            Data::Recyclable(data) => data,
+            Data::Temporary(data) => data,
+        }
+    }
 }
 
 impl RecvUserData {
