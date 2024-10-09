@@ -1,7 +1,6 @@
+use bytes::BytesMut;
 use std::hash::Hash;
-use std::io::IoSlice;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
-
 use tcp_pipe::TcpPipeWriterRef;
 
 use crate::idle::IdleRouteManager;
@@ -17,6 +16,7 @@ use crate::route::{ConnectProtocol, RouteKey};
 
 pub mod config;
 pub mod extensible_pipe;
+pub mod recycle;
 pub mod tcp_pipe;
 pub mod udp_pipe;
 pub const DEFAULT_ADDRESS_V4: SocketAddr =
@@ -192,11 +192,11 @@ impl<PeerID> PipeWriter<PeerID> {
 
 impl<PeerID> PipeWriter<PeerID> {
     /// Writing `buf` to the target denoted by `route_key`
-    pub async fn send_to(&self, buf: &[u8], route_key: &RouteKey) -> crate::error::Result<()> {
+    pub async fn send_to(&self, buf: BytesMut, route_key: &RouteKey) -> crate::error::Result<()> {
         match route_key.protocol() {
             ConnectProtocol::UDP => {
                 if let Some(w) = self.udp_pipe_writer.as_ref() {
-                    return w.send_to(buf, route_key).await;
+                    return w.send_buf_to(buf, route_key).await;
                 }
             }
             ConnectProtocol::TCP => {
@@ -212,41 +212,18 @@ impl<PeerID> PipeWriter<PeerID> {
         }
         Err(crate::error::Error::InvalidProtocol)
     }
-    pub async fn send_multiple_to(
-        &self,
-        bufs: &[IoSlice<'_>],
-        route_key: &RouteKey,
-    ) -> crate::error::Result<()> {
-        match route_key.protocol() {
-            ConnectProtocol::UDP => {
-                if let Some(w) = self.udp_pipe_writer.as_ref() {
-                    return w.send_multiple_to(bufs, route_key).await;
-                }
-            }
-            ConnectProtocol::TCP => {
-                if let Some(w) = self.tcp_pipe_writer.as_ref() {
-                    return w.send_multiple_to(bufs, route_key).await;
-                }
-            }
-            ConnectProtocol::Extend => {
-                if let Some(w) = self.extensible_pipe_writer.as_ref() {
-                    return w.send_multiple_to(bufs, route_key).await;
-                }
-            }
-        }
-        Err(crate::error::Error::InvalidProtocol)
-    }
+
     /// Writing `buf` to the target denoted by SocketAddr with the specified protocol
     pub async fn send_to_addr<A: Into<SocketAddr>>(
         &self,
         connect_protocol: ConnectProtocol,
-        buf: &[u8],
+        buf: BytesMut,
         addr: A,
     ) -> crate::error::Result<()> {
         match connect_protocol {
             ConnectProtocol::UDP => {
                 if let Some(w) = self.udp_pipe_writer.as_ref() {
-                    return w.send_to_addr(buf, addr).await;
+                    return w.send_buf_to_addr(buf, addr).await;
                 }
             }
             ConnectProtocol::TCP => {
@@ -259,20 +236,11 @@ impl<PeerID> PipeWriter<PeerID> {
         Err(crate::error::Error::InvalidProtocol)
     }
 }
-
 impl<PeerID: Hash + Eq> PipeWriter<PeerID> {
     /// Writing `buf` to the target named by `peer_id`
-    pub async fn send_to_id(&self, buf: &[u8], peer_id: &PeerID) -> crate::error::Result<()> {
+    pub async fn send_to_id(&self, buf: BytesMut, peer_id: &PeerID) -> crate::error::Result<()> {
         let route = self.route_table.get_route_by_id(peer_id)?;
         self.send_to(buf, &route.route_key()).await
-    }
-    pub async fn send_multiple_to_id(
-        &self,
-        bufs: &[IoSlice<'_>],
-        peer_id: &PeerID,
-    ) -> crate::error::Result<()> {
-        let route = self.route_table.get_route_by_id(peer_id)?;
-        self.send_multiple_to(bufs, &route.route_key()).await
     }
 }
 
@@ -293,9 +261,9 @@ impl PipeLine {
 
     /// Send 'buf' to 'route_key' using the current 'line'.
     /// If 'route_key' does not belong to the current 'line', an Err will be returned.
-    pub async fn send_to(&self, buf: &[u8], route_key: &RouteKey) -> crate::error::Result<()> {
+    pub async fn send_to(&self, buf: BytesMut, route_key: &RouteKey) -> crate::error::Result<()> {
         match self {
-            PipeLine::Udp(line) => line.send_to(buf, route_key).await,
+            PipeLine::Udp(line) => line.send_buf_to(buf, route_key).await,
             PipeLine::Tcp(line) => line.send_to(buf, route_key).await,
             PipeLine::Extend(line) => line.send_to(buf, route_key).await,
         }

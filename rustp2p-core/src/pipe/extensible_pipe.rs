@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, Context};
 use async_trait::async_trait;
+use bytes::BytesMut;
 use crossbeam_utils::atomic::AtomicCell;
 use dashmap::DashMap;
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -54,7 +55,7 @@ impl ExtensibleWriter {
 }
 
 pub struct ExtensiblePipe {
-    connect_receiver: Receiver<(RouteKey, ExtensibleReader, ExtensibleWriter)>,
+    connect_receiver: Receiver<(RouteKey, ExtensibleReader, Sender<BytesMut>)>,
     write_half_collect: Arc<WriteHalfCollect>,
     extensible_pipe_writer: ExtensiblePipeWriter,
 }
@@ -99,7 +100,7 @@ impl ExtensiblePipe {
 
 pub struct ExtensiblePipeLine {
     r: ExtensibleReader,
-    w: ExtensibleWriter,
+    w: Sender<BytesMut>,
     line_owned: LineOwned,
 }
 
@@ -113,7 +114,7 @@ impl ExtensiblePipeLine {
     pub(crate) fn new(
         route_key: RouteKey,
         r: ExtensibleReader,
-        w: ExtensibleWriter,
+        w: Sender<BytesMut>,
         write_half_collect: Arc<WriteHalfCollect>,
     ) -> ExtensiblePipeLine {
         let line_owned = LineOwned {
@@ -132,11 +133,13 @@ impl ExtensiblePipeLine {
             Err(e) => Err(e),
         }
     }
-    pub async fn send_to(&self, buf: &[u8], route_key: &RouteKey) -> crate::error::Result<()> {
+    pub async fn send_to(&self, buf: BytesMut, route_key: &RouteKey) -> crate::error::Result<()> {
         if &self.line_owned.route_key != route_key {
             Err(crate::error::Error::RouteNotFound("mismatch".into()))?
         }
-        self.w.write_all(buf).await?;
+        if let Err(_e) = self.w.send(buf).await {
+            Err(io::Error::from(io::ErrorKind::WriteZero))?
+        }
         Ok(())
     }
 }
@@ -147,7 +150,7 @@ struct LineOwned {
 }
 
 pub struct WriteHalfCollect {
-    write_half_map: DashMap<RouteKey, ExtensibleWriter>,
+    write_half_map: DashMap<RouteKey, Sender<BytesMut>>,
 }
 
 impl Default for WriteHalfCollect {
@@ -162,10 +165,13 @@ impl WriteHalfCollect {
     pub fn remove(&self, route_key: &RouteKey) {
         self.write_half_map.remove(route_key);
     }
+    pub fn insert(&self, route_key: RouteKey, sender: Sender<BytesMut>) {
+        self.write_half_map.insert(route_key, sender);
+    }
 }
 
 impl WriteHalfCollect {
-    pub fn get(&self, route_key: &RouteKey) -> Option<ExtensibleWriter> {
+    pub fn get(&self, route_key: &RouteKey) -> Option<Sender<BytesMut>> {
         self.write_half_map
             .get(route_key)
             .map(|v| v.value().clone())
@@ -174,7 +180,7 @@ impl WriteHalfCollect {
 
 pub struct ExtensiblePipeWriter {
     id: Arc<AtomicCell<usize>>,
-    connect_sender: Sender<(RouteKey, ExtensibleReader, ExtensibleWriter)>,
+    connect_sender: Sender<(RouteKey, ExtensibleReader, Sender<BytesMut>)>,
     write_half_collect: Arc<WriteHalfCollect>,
 }
 
@@ -190,7 +196,7 @@ impl Clone for ExtensiblePipeWriter {
 
 impl ExtensiblePipeWriter {
     pub(crate) fn new(
-        connect_sender: Sender<(RouteKey, ExtensibleReader, ExtensibleWriter)>,
+        connect_sender: Sender<(RouteKey, ExtensibleReader, Sender<BytesMut>)>,
         write_half_collect: Arc<WriteHalfCollect>,
     ) -> Self {
         Self {
@@ -202,8 +208,8 @@ impl ExtensiblePipeWriter {
     pub async fn add_pipe(
         &self,
         addr: SocketAddr,
-        r: ExtensibleReader,
-        w: ExtensibleWriter,
+        r: Box<dyn ExtendRead>,
+        mut w: Box<dyn ExtendWrite>,
     ) -> anyhow::Result<()> {
         let id = self.id.load();
         if id == 0 {
@@ -211,33 +217,35 @@ impl ExtensiblePipeWriter {
         }
         let index = self.id.fetch_add(1);
         let route_key = RouteKey::new(Index::Extend(index), addr);
-        if let Err(e) = self.connect_sender.send((route_key, r, w.clone())).await {
+        let reader = ExtensibleReader { read: r };
+        let (sender, mut receiver) = tokio::sync::mpsc::channel::<BytesMut>(32);
+        let collect = self.write_half_collect.clone();
+        collect.insert(route_key, sender.clone());
+        tokio::spawn(async move {
+            while let Some(data) = receiver.recv().await {
+                if let Err(e) = w.write_all(&data).await {
+                    log::debug!("ExtendWrite {route_key:?},{e:?}");
+                    break;
+                }
+            }
+            collect.remove(&route_key);
+        });
+        if let Err(e) = self.connect_sender.send((route_key, reader, sender)).await {
             Err(anyhow!("{e}"))?
         }
-        self.write_half_collect.write_half_map.insert(route_key, w);
         Ok(())
     }
 }
 
 impl ExtensiblePipeWriter {
-    pub async fn send_to(&self, buf: &[u8], route_key: &RouteKey) -> crate::error::Result<()> {
+    pub async fn send_to(&self, buf: BytesMut, route_key: &RouteKey) -> crate::error::Result<()> {
         let w = self
             .write_half_collect
             .get(route_key)
             .ok_or(crate::error::Error::RouteNotFound("".into()))?;
-        w.write_all(buf).await?;
-        Ok(())
-    }
-    pub async fn send_multiple_to(
-        &self,
-        bufs: &[IoSlice<'_>],
-        route_key: &RouteKey,
-    ) -> crate::error::Result<()> {
-        let w = self
-            .write_half_collect
-            .get(route_key)
-            .ok_or(crate::error::Error::RouteNotFound("".into()))?;
-        w.write_all_vectored(bufs).await?;
+        if let Err(_e) = w.send(buf).await {
+            Err(io::Error::from(io::ErrorKind::WriteZero))?
+        }
         Ok(())
     }
 }

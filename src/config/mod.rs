@@ -8,6 +8,7 @@ use crate::protocol::node_id::{GroupCode, NodeID};
 use crate::protocol::{NetPacket, HEAD_LEN};
 use async_trait::async_trait;
 use bytes::{Buf, BytesMut};
+use rust_p2p_core::pipe::recycle::RecycleBuf;
 use rust_p2p_core::pipe::tcp_pipe::{Decoder, Encoder, InitCodec};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
@@ -46,6 +47,7 @@ pub struct PipeConfig {
     pub self_id: Option<NodeID>,
     pub direct_addrs: Option<Vec<PeerNodeAddress>>,
     pub send_buffer_size: usize,
+    pub recv_buffer_size: usize,
     pub query_id_interval: Duration,
     pub query_id_max_num: usize,
     pub heartbeat_interval: Duration,
@@ -53,6 +55,7 @@ pub struct PipeConfig {
     pub udp_stun_servers: Option<Vec<String>>,
     pub mapping_addrs: Option<Vec<NodeAddress>>,
     pub dns: Option<Vec<String>>,
+    pub recycle_buf_cap: usize,
 }
 
 impl Default for PipeConfig {
@@ -68,6 +71,7 @@ impl Default for PipeConfig {
             self_id: None,
             direct_addrs: None,
             send_buffer_size: 2048,
+            recv_buffer_size: 2048,
             query_id_interval: Duration::from_secs(17),
             query_id_max_num: 3,
             heartbeat_interval: Duration::from_secs(5),
@@ -86,6 +90,7 @@ impl Default for PipeConfig {
             ]),
             mapping_addrs: None,
             dns: None,
+            recycle_buf_cap: 64,
         }
     }
 }
@@ -139,6 +144,10 @@ impl PipeConfig {
         self.send_buffer_size = send_buffer_size;
         self
     }
+    pub fn set_recv_buffer_size(mut self, recv_buffer_size: usize) -> Self {
+        self.recv_buffer_size = recv_buffer_size;
+        self
+    }
     pub fn set_query_id_interval(mut self, query_id_interval: Duration) -> Self {
         self.query_id_interval = query_id_interval;
         self
@@ -165,6 +174,10 @@ impl PipeConfig {
     }
     pub fn set_dns(mut self, dns: Vec<String>) -> Self {
         self.dns.replace(dns);
+        self
+    }
+    pub fn set_recycle_buf_cap(mut self, recycle_buf_cap: usize) -> Self {
+        self.recycle_buf_cap = recycle_buf_cap;
         self
     }
 }
@@ -277,12 +290,30 @@ impl From<LocalInterface> for rust_p2p_core::socket::LocalInterface {
 
 impl From<PipeConfig> for rust_p2p_core::pipe::config::PipeConfig {
     fn from(value: PipeConfig) -> Self {
+        let recycle_buf = if value.recycle_buf_cap > 0 {
+            Some(RecycleBuf::new(
+                value.recycle_buf_cap,
+                value.send_buffer_size..value.send_buffer_size + 1,
+            ))
+        } else {
+            None
+        };
+        let udp_pipe_config = value.udp_pipe_config.map(|v| {
+            let mut config: rust_p2p_core::pipe::config::UdpPipeConfig = v.into();
+            config.recycle_buf = recycle_buf.clone();
+            config
+        });
+        let tcp_pipe_config = value.tcp_pipe_config.map(|v| {
+            let mut config: rust_p2p_core::pipe::config::TcpPipeConfig = v.into();
+            config.recycle_buf = recycle_buf;
+            config
+        });
         rust_p2p_core::pipe::config::PipeConfig {
             first_latency: value.first_latency,
             multi_pipeline: value.multi_pipeline,
             route_idle_time: value.route_idle_time,
-            udp_pipe_config: value.udp_pipe_config.map(|v| v.into()),
-            tcp_pipe_config: value.tcp_pipe_config.map(|v| v.into()),
+            udp_pipe_config,
+            tcp_pipe_config,
             enable_extend: value.enable_extend,
         }
     }
@@ -297,6 +328,7 @@ impl From<UdpPipeConfig> for rust_p2p_core::pipe::config::UdpPipeConfig {
             default_interface: value.default_interface.map(|v| v.into()),
             udp_ports: value.udp_ports,
             use_v6: value.use_v6,
+            recycle_buf: None,
         }
     }
 }
@@ -310,6 +342,7 @@ impl From<TcpPipeConfig> for rust_p2p_core::pipe::config::TcpPipeConfig {
             tcp_port: value.tcp_port,
             use_v6: value.use_v6,
             init_codec: Box::new(LengthPrefixedInitCodec),
+            recycle_buf: None,
         }
     }
 }

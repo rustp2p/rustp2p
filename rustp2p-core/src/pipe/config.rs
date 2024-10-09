@@ -1,10 +1,10 @@
 use std::time::Duration;
 
-use anyhow::{anyhow, Context};
-
+use crate::pipe::recycle::RecycleBuf;
 use crate::pipe::tcp_pipe::{BytesInitCodec, InitCodec};
 use crate::pipe::udp_pipe::Model;
 use crate::socket::LocalInterface;
+use anyhow::{anyhow, Context};
 
 pub(crate) const MAX_SYMMETRIC_PIPELINE_NUM: usize = 200;
 pub(crate) const MAX_MAIN_PIPELINE_NUM: usize = 10;
@@ -103,6 +103,7 @@ pub struct TcpPipeConfig {
     pub tcp_port: u16,
     pub use_v6: bool,
     pub init_codec: Box<dyn InitCodec>,
+    pub recycle_buf: Option<RecycleBuf>,
 }
 
 impl Default for TcpPipeConfig {
@@ -114,6 +115,7 @@ impl Default for TcpPipeConfig {
             tcp_port: 0,
             use_v6: true,
             init_codec: Box::new(BytesInitCodec),
+            recycle_buf: None,
         }
     }
 }
@@ -127,6 +129,7 @@ impl TcpPipeConfig {
             tcp_port: 0,
             use_v6: true,
             init_codec,
+            recycle_buf: None,
         }
     }
     pub fn check(&self) -> anyhow::Result<()> {
@@ -172,6 +175,7 @@ pub struct UdpPipeConfig {
     pub default_interface: Option<LocalInterface>,
     pub udp_ports: Vec<u16>,
     pub use_v6: bool,
+    pub recycle_buf: Option<RecycleBuf>,
 }
 
 impl Default for UdpPipeConfig {
@@ -183,6 +187,7 @@ impl Default for UdpPipeConfig {
             default_interface: None,
             udp_ports: vec![0, 0],
             use_v6: true,
+            recycle_buf: None,
         }
     }
 }

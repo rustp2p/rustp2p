@@ -6,6 +6,7 @@ use crate::protocol::node_id::{GroupCode, NodeID};
 use crate::protocol::protocol_type::ProtocolType;
 use crate::protocol::{NetPacket, HEAD_LEN};
 
+#[derive(Clone)]
 pub struct SendPacket {
     buf: BytesMut,
 }
@@ -16,16 +17,23 @@ impl From<&[u8]> for SendPacket {
         packet
     }
 }
+
 impl SendPacket {
     pub fn with_capacity(capacity: usize) -> Self {
         assert!(capacity < u16::MAX as _);
-        let mut buf = BytesMut::with_capacity(HEAD_LEN + capacity);
+        let buf = BytesMut::with_capacity(HEAD_LEN + capacity);
+        Self::with_bytes_mut(buf)
+    }
+    pub fn with_bytes_mut(mut buf: BytesMut) -> Self {
         buf.resize(HEAD_LEN, 0);
         let mut send_packet = Self { buf };
         let mut packet = NetPacket::unchecked(send_packet.buf_mut());
         packet.set_protocol(ProtocolType::UserData);
         packet.set_ttl(15);
         send_packet
+    }
+    pub fn reserve(&mut self, additional: usize) {
+        self.buf.reserve(additional);
     }
     /// Copies all elements from src into self, using a memcpy.
     /// The length of src must be the same as self.
@@ -47,6 +55,16 @@ impl SendPacket {
         self.buf.set_len(HEAD_LEN + payload_len);
         let mut packet = NetPacket::unchecked(self.buf_mut());
         packet.reset_data_len();
+    }
+    pub fn clear(&mut self) {
+        unsafe {
+            self.set_payload_len(0);
+            self.buf.fill(0);
+
+            let mut packet = NetPacket::unchecked(self.buf_mut());
+            packet.set_protocol(ProtocolType::UserData);
+            packet.set_ttl(15);
+        }
     }
     pub fn set_ttl(&mut self, ttl: u8) {
         let ttl = ttl & 0xF;
@@ -84,5 +102,8 @@ impl SendPacket {
     }
     pub(crate) fn buf_mut(&mut self) -> &mut [u8] {
         &mut self.buf
+    }
+    pub(crate) fn into_buf(self) -> BytesMut {
+        self.buf
     }
 }

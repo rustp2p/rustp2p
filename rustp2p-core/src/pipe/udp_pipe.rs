@@ -1,15 +1,23 @@
+use std::io;
 use std::io::IoSlice;
 use std::net::SocketAddr;
 use std::ops::Deref;
 use std::sync::Arc;
 
+use anyhow::{anyhow, Context};
+use bytes::BytesMut;
+use dashmap::DashMap;
+use parking_lot::{Mutex, RwLock};
+use tokio::net::UdpSocket;
+use tokio::sync::mpsc::Sender;
+
 use crate::pipe::config::UdpPipeConfig;
+use crate::pipe::recycle::RecycleBuf;
 use crate::pipe::{DEFAULT_ADDRESS_V4, DEFAULT_ADDRESS_V6};
 use crate::route::{Index, RouteKey};
 use crate::socket::{bind_udp, LocalInterface};
-use anyhow::{anyhow, Context};
-use parking_lot::{Mutex, RwLock};
-use tokio::net::UdpSocket;
+#[cfg(target_os = "linux")]
+const MAX_MESSAGES: usize = 16;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Default)]
 pub enum Model {
@@ -86,10 +94,12 @@ pub(crate) fn udp_pipe(config: UdpPipeConfig) -> anyhow::Result<UdpPipe> {
         pipe_line_sender,
         sub_udp_num: config.sub_pipeline_num,
         default_interface: config.default_interface,
+        sender_map: Default::default(),
     });
     let udp_pipe = UdpPipe {
         pipe_line_receiver,
         socket_layer,
+        recycle_buf: config.recycle_buf,
     };
     udp_pipe.init()?;
     udp_pipe.socket_layer.switch_model(config.model)?;
@@ -104,6 +114,7 @@ pub struct SocketLayer {
     pipe_line_sender: tokio::sync::mpsc::UnboundedSender<UdpPipeLine>,
     sub_udp_num: usize,
     default_interface: Option<LocalInterface>,
+    sender_map: DashMap<Index, Sender<(BytesMut, SocketAddr)>>,
 }
 
 impl SocketLayer {
@@ -245,7 +256,15 @@ impl SocketLayer {
         let key = self.generate_route_key_from_addr(index, addr)?;
         self.send_to(buf, &key).await
     }
-
+    async fn send_buf_to_addr_via_index(
+        &self,
+        buf: BytesMut,
+        addr: SocketAddr,
+        index: usize,
+    ) -> crate::error::Result<()> {
+        let key = self.generate_route_key_from_addr(index, addr)?;
+        self.send_buf_to(buf, &key).await
+    }
     #[inline]
     fn try_send_to_addr_via_index(
         &self,
@@ -297,6 +316,22 @@ impl SocketLayer {
         }
         Ok(ports)
     }
+    pub async fn send_buf_to(
+        &self,
+        buf: BytesMut,
+        route_key: &RouteKey,
+    ) -> crate::error::Result<()> {
+        let sender = if let Some(sender) = self.sender_map.get(&route_key.index()) {
+            sender.value().clone()
+        } else {
+            return Err(crate::error::Error::RouteNotFound("".into()));
+        };
+        if let Err(_e) = sender.send((buf, route_key.addr())).await {
+            Err(io::Error::from(io::ErrorKind::WriteZero))?
+        } else {
+            Ok(())
+        }
+    }
     /// Writing `buf` to the target denoted by `route_key`
     pub async fn send_to(&self, buf: &[u8], route_key: &RouteKey) -> crate::error::Result<()> {
         let len = self
@@ -347,6 +382,13 @@ impl SocketLayer {
     ) -> crate::error::Result<()> {
         self.send_to_addr_via_index(buf, addr.into(), 0).await
     }
+    pub async fn send_buf_to_addr<A: Into<SocketAddr>>(
+        &self,
+        buf: BytesMut,
+        addr: A,
+    ) -> crate::error::Result<()> {
+        self.send_buf_to_addr_via_index(buf, addr.into(), 0).await
+    }
     /// Try to write `buf` to the target denoted by SocketAddr
     pub fn try_send_to_addr<A: Into<SocketAddr>>(
         &self,
@@ -386,6 +428,7 @@ impl SocketLayer {
 pub struct UdpPipe {
     pipe_line_receiver: tokio::sync::mpsc::UnboundedReceiver<UdpPipeLine>,
     socket_layer: Arc<SocketLayer>,
+    recycle_buf: Option<RecycleBuf>,
 }
 impl UdpPipe {
     pub(crate) fn init(&self) -> anyhow::Result<()> {
@@ -423,6 +466,93 @@ impl UdpPipe {
             .await
             .context("UdpPipe close")?;
         line.active = true;
+        if line.socket_layer.is_some() {
+            return Ok(line);
+        }
+        let (s, mut r) = tokio::sync::mpsc::channel(32);
+        let index = line.index;
+        self.socket_layer.sender_map.insert(index, s);
+        line.socket_layer.replace(self.socket_layer.clone());
+        let socket_layer = self.socket_layer.clone();
+        let udp = line.udp.clone().unwrap();
+        let recycle_buf = self.recycle_buf.clone();
+        tokio::spawn(async move {
+            #[cfg(target_os = "linux")]
+            let mut vec_buf = Vec::with_capacity(16);
+            #[cfg(target_os = "linux")]
+            let mut vec: Vec<(&mut [u8], SocketAddr)> = Vec::with_capacity(16);
+
+            #[cfg(target_os = "linux")]
+            use std::os::fd::AsRawFd;
+
+            while let Some((buf, addr)) = r.recv().await {
+                #[cfg(target_os = "linux")]
+                if let Ok((buf_, addr_)) = r.try_recv() {
+                    vec_buf.push((buf, addr));
+                    vec_buf.push((buf_, addr_));
+                    while let Ok(buf) = r.try_recv() {
+                        vec_buf.push(buf);
+                        if vec_buf.len() == MAX_MESSAGES {
+                            break;
+                        }
+                    }
+                    let rs = {
+                        for (buf, addr) in &mut vec_buf {
+                            let u8_slice = unsafe {
+                                std::slice::from_raw_parts_mut(buf.as_mut_ptr(), buf.len())
+                            };
+                            vec.push((u8_slice, *addr));
+                        }
+                        let rs = loop {
+                            break match sendmmsg(udp.as_raw_fd(), &mut vec) {
+                                Ok(_) => Ok(()),
+                                Err(e) => {
+                                    if e.kind() == io::ErrorKind::WouldBlock {
+                                        if let Err(e) = udp.readable().await {
+                                            break Err(e);
+                                        }
+                                        continue;
+                                    } else {
+                                        Err(e)
+                                    }
+                                }
+                            };
+                        };
+                        vec.clear();
+                        rs
+                    };
+                    if let Err(e) = rs {
+                        log::debug!("sendmmsg {e:?}");
+                    }
+                    if let Some(recycle_buf) = recycle_buf.as_ref() {
+                        while let Some((buf, _)) = vec_buf.pop() {
+                            recycle_buf.push(buf);
+                        }
+                    } else {
+                        vec_buf.clear()
+                    }
+                } else {
+                    let rs = udp.send_to(&buf, addr).await;
+                    if let Some(recycle_buf) = recycle_buf.as_ref() {
+                        recycle_buf.push(buf);
+                    }
+                    if let Err(e) = rs {
+                        log::debug!("{addr:?},{e:?}")
+                    }
+                }
+                #[cfg(not(target_os = "linux"))]
+                {
+                    let rs = udp.send_to(&buf, addr).await;
+                    if let Some(recycle_buf) = recycle_buf.as_ref() {
+                        recycle_buf.push(buf);
+                    }
+                    if let Err(e) = rs {
+                        log::debug!("{addr:?},{e:?}")
+                    }
+                }
+            }
+            socket_layer.sender_map.remove(&index);
+        });
         Ok(line)
     }
     /// The number of pipelines established by main `UDP` sockets(IPv4)
@@ -446,6 +576,83 @@ impl UdpPipe {
             socket_layer: &self.socket_layer,
         }
     }
+}
+#[cfg(target_os = "linux")]
+fn sendmmsg(fd: std::os::fd::RawFd, buf: &mut [(&mut [u8], SocketAddr)]) -> io::Result<()> {
+    assert!(buf.len() <= MAX_MESSAGES);
+    let mut iov: [libc::iovec; MAX_MESSAGES] = unsafe { std::mem::zeroed() };
+    let mut msgs: [libc::mmsghdr; MAX_MESSAGES] = unsafe { std::mem::zeroed() };
+    let mut addrs: [libc::sockaddr_storage; MAX_MESSAGES] = unsafe { std::mem::zeroed() };
+    for (i, (buf, addr)) in buf.iter_mut().enumerate() {
+        addrs[i] = socket_addr_to_sockaddr(addr);
+        iov[i].iov_base = buf.as_mut_ptr() as *mut libc::c_void;
+        iov[i].iov_len = buf.len();
+        msgs[i].msg_hdr.msg_iov = &mut iov[i];
+        msgs[i].msg_hdr.msg_iovlen = 1;
+
+        msgs[i].msg_hdr.msg_name = &mut addrs[i] as *mut _ as *mut libc::c_void;
+        msgs[i].msg_hdr.msg_namelen =
+            std::mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
+    }
+
+    unsafe {
+        let res = libc::sendmmsg(fd, msgs.as_mut_ptr(), buf.len() as _, 0);
+        if res == -1 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+}
+#[cfg(target_os = "linux")]
+fn socket_addr_to_sockaddr(addr: &SocketAddr) -> libc::sockaddr_storage {
+    let mut storage: libc::sockaddr_storage = unsafe { std::mem::zeroed() }; // 初始化为 0
+
+    match addr {
+        SocketAddr::V4(v4_addr) => {
+            let sin = libc::sockaddr_in {
+                sin_family: libc::AF_INET as _,   // 地址族 IPv4
+                sin_port: v4_addr.port().to_be(), // 端口号，网络字节序
+                sin_addr: libc::in_addr {
+                    s_addr: u32::from_ne_bytes(v4_addr.ip().octets()), // IP 地址
+                },
+                sin_zero: [0; 8], // 保留字段，置 0
+            };
+
+            // 将 sockaddr_in 转换为 sockaddr_storage
+            unsafe {
+                let sin_ptr = &sin as *const libc::sockaddr_in as *const u8;
+                let storage_ptr = &mut storage as *mut libc::sockaddr_storage as *mut u8;
+                std::ptr::copy_nonoverlapping(
+                    sin_ptr,
+                    storage_ptr,
+                    std::mem::size_of::<libc::sockaddr>(),
+                );
+            }
+        }
+        SocketAddr::V6(v6_addr) => {
+            let sin6 = libc::sockaddr_in6 {
+                sin6_family: libc::AF_INET6 as _,  // 地址族 IPv6
+                sin6_port: v6_addr.port().to_be(), // 端口号，网络字节序
+                sin6_flowinfo: v6_addr.flowinfo(), // 流信息
+                sin6_addr: libc::in6_addr {
+                    s6_addr: v6_addr.ip().octets(), // IPv6 地址
+                },
+                sin6_scope_id: v6_addr.scope_id(), // 作用域 ID
+            };
+
+            // 将 sockaddr_in6 转换为 sockaddr_storage
+            unsafe {
+                let sin6_ptr = &sin6 as *const libc::sockaddr_in6 as *const u8;
+                let storage_ptr = &mut storage as *mut libc::sockaddr_storage as *mut u8;
+                std::ptr::copy_nonoverlapping(
+                    sin6_ptr,
+                    storage_ptr,
+                    std::mem::size_of::<libc::sockaddr>(),
+                );
+            }
+        }
+    }
+    storage
 }
 
 #[derive(Clone)]
@@ -506,10 +713,14 @@ pub struct UdpPipeLine {
     udp: Option<Arc<UdpSocket>>,
     close_notify: Option<tokio::sync::broadcast::Receiver<()>>,
     re_sender: Option<tokio::sync::mpsc::UnboundedSender<UdpPipeLine>>,
+    socket_layer: Option<Arc<SocketLayer>>,
 }
 impl Drop for UdpPipeLine {
     fn drop(&mut self) {
         if self.udp.is_none() || !self.active {
+            if let Some(socket_layer) = self.socket_layer.take() {
+                socket_layer.sender_map.remove(&self.index);
+            }
             return;
         }
         if let Some(re_sender) = &self.re_sender {
@@ -519,6 +730,7 @@ impl Drop for UdpPipeLine {
                 udp: self.udp.take(),
                 close_notify: self.close_notify.take(),
                 re_sender: self.re_sender.clone(),
+                socket_layer: self.socket_layer.take(),
             });
         }
     }
@@ -536,6 +748,7 @@ impl UdpPipeLine {
             udp: Some(udp),
             close_notify: Some(close_notify),
             re_sender: None,
+            socket_layer: None,
         }
     }
     pub(crate) fn main_new(
@@ -549,6 +762,7 @@ impl UdpPipeLine {
             udp: Some(udp),
             close_notify: None,
             re_sender: Some(re_sender),
+            socket_layer: None,
         }
     }
     pub(crate) fn done(&mut self) {
@@ -596,14 +810,21 @@ impl UdpPipeLine {
             Err(crate::error::Error::RouteNotFound("miss".into()))
         }
     }
-    pub async fn readable(&self) -> crate::error::Result<()> {
-        if let Some(udp) = &self.udp {
-            udp.readable().await?;
-            Ok(())
+    pub async fn send_buf_to(
+        &self,
+        buf: BytesMut,
+        route_key: &RouteKey,
+    ) -> crate::error::Result<()> {
+        if self.index != route_key.index() {
+            Err(crate::error::Error::RouteNotFound("mismatch".into()))?
+        }
+        if let Some(s) = &self.socket_layer {
+            s.send_buf_to(buf, route_key).await
         } else {
             Err(crate::error::Error::RouteNotFound("miss".into()))
         }
     }
+
     /// Receving buf from this PipeLine
     /// `usize` in the `Ok` branch indicates how many bytes are received
     /// `RouteKey` in the `Ok` branch denotes the source where these bytes are received from

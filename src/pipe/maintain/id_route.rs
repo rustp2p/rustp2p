@@ -64,7 +64,7 @@ async fn poll_direct_peer_node(
             NodeAddress::Tcp(addr) => match pipe_writer.pipe_writer.tcp_pipe_writer() {
                 None => {}
                 Some(tcp) => {
-                    if let Err(e) = tcp.send_to_addr(packet.buffer(), addr).await {
+                    if let Err(e) = tcp.send_to_addr(packet.buffer().into(), addr).await {
                         log::warn!("poll_direct_peer_node tcp, e={e:?},addr={addr:?}");
                     }
                 }

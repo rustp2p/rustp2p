@@ -80,7 +80,7 @@ async fn direct_heartbeat_request(
             NodeAddress::Tcp(addr) => match pipe_writer.pipe_writer.tcp_pipe_writer() {
                 None => {}
                 Some(tcp) => {
-                    if let Err(e) = tcp.send_to_addr(buf, addr).await {
+                    if let Err(e) = tcp.send_to_addr(buf.into(), addr).await {
                         log::warn!("direct_heartbeat_request tcp, e={e:?},addr={addr:?}");
                     }
                 }
