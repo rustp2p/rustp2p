@@ -16,6 +16,8 @@ use crate::pipe::recycle::RecycleBuf;
 use crate::pipe::{DEFAULT_ADDRESS_V4, DEFAULT_ADDRESS_V6};
 use crate::route::{Index, RouteKey};
 use crate::socket::{bind_udp, LocalInterface};
+#[cfg(target_os = "linux")]
+const MAX_MESSAGES: usize = 16;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Default)]
 pub enum Model {
@@ -490,7 +492,7 @@ impl UdpPipe {
                     vec_buf.push((buf_, addr_));
                     while let Ok(buf) = r.try_recv() {
                         vec_buf.push(buf);
-                        if vec_buf.len() == 16 {
+                        if vec_buf.len() == MAX_MESSAGES {
                             break;
                         }
                     }
@@ -500,20 +502,33 @@ impl UdpPipe {
                                 unsafe { std::slice::from_raw_parts(buf.as_ptr(), buf.len()) };
                             vec.push((u8_slice, *addr));
                         }
-
-                        let rs = sendmmsg(udp.as_raw_fd(), &vec);
+                        let rs = loop {
+                            break match sendmmsg(udp.as_raw_fd(), &vec) {
+                                Ok(_) => Ok(()),
+                                Err(e) => {
+                                    if e.kind() == io::ErrorKind::WouldBlock {
+                                        if let Err(e) = udp.readable().await {
+                                            break Err(e);
+                                        }
+                                        continue;
+                                    } else {
+                                        Err(e)
+                                    }
+                                }
+                            };
+                        };
                         vec.clear();
                         rs
                     };
+                    if let Err(e) = rs {
+                        log::debug!("sendmmsg {e:?}");
+                    }
                     if let Some(recycle_buf) = recycle_buf.as_ref() {
                         while let Some((buf, _)) = vec_buf.pop() {
                             recycle_buf.push(buf);
                         }
                     } else {
                         vec_buf.clear()
-                    }
-                    if let Err(e) = rs {
-                        log::error!("{e:?}");
                     }
                 } else {
                     let rs = udp.send_to(&buf, addr).await;
@@ -563,8 +578,7 @@ impl UdpPipe {
 }
 #[cfg(target_os = "linux")]
 fn sendmmsg(fd: std::os::fd::RawFd, buf: &[(&[u8], SocketAddr)]) -> io::Result<()> {
-    const MAX_MESSAGES: usize = 16;
-    assert!(buf.len() < MAX_MESSAGES);
+    assert!(buf.len() <= MAX_MESSAGES);
     let mut iov: [libc::iovec; MAX_MESSAGES] = unsafe { std::mem::zeroed() };
     let mut msgs: [libc::mmsghdr; MAX_MESSAGES] = unsafe { std::mem::zeroed() };
     for (i, (buf, addr)) in buf.iter().enumerate() {
@@ -572,8 +586,8 @@ fn sendmmsg(fd: std::os::fd::RawFd, buf: &[(&[u8], SocketAddr)]) -> io::Result<(
         iov[i].iov_len = buf.len();
         msgs[i].msg_hdr.msg_iov = &mut iov[i];
         msgs[i].msg_hdr.msg_iovlen = 1;
-        let mut storage = socket_addr_to_sockaddr(addr);
 
+        let mut storage = socket_addr_to_sockaddr(addr);
         msgs[i].msg_hdr.msg_name = &mut storage as *const _ as *mut libc::c_void;
         msgs[i].msg_hdr.msg_namelen =
             std::mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
@@ -629,7 +643,6 @@ fn socket_addr_to_sockaddr(addr: &SocketAddr) -> libc::sockaddr_storage {
             }
         }
     }
-
     storage
 }
 
