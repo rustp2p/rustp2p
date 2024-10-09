@@ -414,8 +414,8 @@ impl PipeLine {
             unsafe {
                 block.set_len(len);
             }
-            if rust_p2p_core::stun::is_stun_response(&block[..len]) {
-                if let Some(pub_addr) = rust_p2p_core::stun::recv_stun_response(&block[..len]) {
+            if rust_p2p_core::stun::is_stun_response(&block) {
+                if let Some(pub_addr) = rust_p2p_core::stun::recv_stun_response(&block) {
                     self.pipe_context
                         .update_public_addr(route_key.index(), pub_addr);
                 } else {
@@ -423,10 +423,7 @@ impl PipeLine {
                 }
                 continue;
             }
-            return match self
-                .handle(RecvResult::new(&mut block[..len], route_key))
-                .await
-            {
+            return match self.handle(RecvResult::new(&mut block, route_key)).await {
                 Ok(handle_result) => {
                     if let Some(rs) = handle_result {
                         return Ok(Ok(RecvUserData {
