@@ -581,17 +581,19 @@ fn sendmmsg(fd: std::os::fd::RawFd, buf: &[(&[u8], SocketAddr)]) -> io::Result<(
     assert!(buf.len() <= MAX_MESSAGES);
     let mut iov: [libc::iovec; MAX_MESSAGES] = unsafe { std::mem::zeroed() };
     let mut msgs: [libc::mmsghdr; MAX_MESSAGES] = unsafe { std::mem::zeroed() };
+    let mut addrs: [libc::sockaddr_storage; MAX_MESSAGES] = unsafe { std::mem::zeroed() };
     for (i, (buf, addr)) in buf.iter().enumerate() {
+        addrs[i] = socket_addr_to_sockaddr(addr);
         iov[i].iov_base = buf.as_ptr() as *mut libc::c_void;
         iov[i].iov_len = buf.len();
         msgs[i].msg_hdr.msg_iov = &mut iov[i];
         msgs[i].msg_hdr.msg_iovlen = 1;
 
-        let mut storage = socket_addr_to_sockaddr(addr);
-        msgs[i].msg_hdr.msg_name = &mut storage as *mut _ as *mut libc::c_void;
+        msgs[i].msg_hdr.msg_name = &mut addrs[i] as *mut _ as *mut libc::c_void;
         msgs[i].msg_hdr.msg_namelen =
             std::mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
     }
+
     unsafe {
         let res = libc::sendmmsg(fd, msgs.as_mut_ptr(), buf.len() as _, 0);
         if res == -1 {
@@ -600,7 +602,7 @@ fn sendmmsg(fd: std::os::fd::RawFd, buf: &[(&[u8], SocketAddr)]) -> io::Result<(
         Ok(())
     }
 }
-//#[cfg(target_os = "linux")]
+#[cfg(target_os = "linux")]
 fn socket_addr_to_sockaddr(addr: &SocketAddr) -> libc::sockaddr_storage {
     let mut storage: libc::sockaddr_storage = unsafe { std::mem::zeroed() }; // 初始化为 0
 
@@ -613,8 +615,6 @@ fn socket_addr_to_sockaddr(addr: &SocketAddr) -> libc::sockaddr_storage {
                     s_addr: u32::from_ne_bytes(v4_addr.ip().octets()), // IP 地址
                 },
                 sin_zero: [0; 8], // 保留字段，置 0
-                #[cfg(target_os = "macos")]
-                sin_len: 0,
             };
 
             // 将 sockaddr_in 转换为 sockaddr_storage
@@ -637,8 +637,6 @@ fn socket_addr_to_sockaddr(addr: &SocketAddr) -> libc::sockaddr_storage {
                     s6_addr: v6_addr.ip().octets(), // IPv6 地址
                 },
                 sin6_scope_id: v6_addr.scope_id(), // 作用域 ID
-                #[cfg(target_os = "macos")]
-                sin6_len: 0,
             };
 
             // 将 sockaddr_in6 转换为 sockaddr_storage
