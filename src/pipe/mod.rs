@@ -18,6 +18,7 @@ pub use send_packet::SendPacket;
 
 use crate::config::PipeConfig;
 use crate::error::{Error, Result};
+use crate::extend::byte_pool::{Block, BufferPool};
 use crate::pipe::pipe_context::PipeContext;
 use crate::protocol::broadcast::RangeBroadcastPacket;
 use crate::protocol::id_route::IDRouteReplyPacket;
@@ -37,6 +38,7 @@ pub struct Pipe {
     shutdown_manager: ShutdownManager<()>,
     active_punch_sender: Sender<(NodeID, PunchConsultInfo)>,
     passive_punch_sender: Sender<(NodeID, PunchConsultInfo)>,
+    buffer_pool: BufferPool<BytesMut>,
 }
 
 impl Pipe {
@@ -56,6 +58,7 @@ impl Pipe {
         } else {
             None
         };
+        let buffer_pool = BufferPool::new(64, config.recv_buffer_size);
         let mut tcp_stun_servers = config.tcp_stun_servers.take().unwrap_or_default();
         for x in tcp_stun_servers.iter_mut() {
             if !x.contains(':') {
@@ -137,6 +140,7 @@ impl Pipe {
             shutdown_manager,
             active_punch_sender,
             passive_punch_sender,
+            buffer_pool,
         })
     }
     pub fn writer(&self) -> PipeWriter {
@@ -162,6 +166,7 @@ impl Pipe {
             route_table: self.pipe.route_table().clone(),
             active_punch_sender: self.active_punch_sender.clone(),
             passive_punch_sender: self.passive_punch_sender.clone(),
+            buffer_pool: self.buffer_pool.clone(),
         })
     }
 }
@@ -381,15 +386,20 @@ pub struct PipeLine {
     route_table: RouteTable<NodeID>,
     active_punch_sender: Sender<(NodeID, PunchConsultInfo)>,
     passive_punch_sender: Sender<(NodeID, PunchConsultInfo)>,
+    buffer_pool: BufferPool<BytesMut>,
 }
 
 impl PipeLine {
-    pub async fn recv_from<'a>(
+    pub async fn next(
         &mut self,
-        buf: &'a mut [u8],
-    ) -> core::result::Result<core::result::Result<HandleResult<'a>, HandleError>, RecvError> {
+    ) -> core::result::Result<core::result::Result<RecvUserData, HandleError>, RecvError> {
+        let mut block = self.buffer_pool.alloc();
         loop {
-            let (len, route_key) = match self.pipe_line.recv_from(buf).await {
+            unsafe {
+                let capacity = block.capacity();
+                block.set_len(capacity);
+            }
+            let (len, route_key) = match self.pipe_line.recv_from(&mut block).await {
                 None => return Err(RecvError::Done),
                 Some(recv_rs) => match recv_rs {
                     Ok(rs) => rs,
@@ -401,8 +411,11 @@ impl PipeLine {
                     std::io::ErrorKind::UnexpectedEof,
                 )));
             }
-            if rust_p2p_core::stun::is_stun_response(&buf[..len]) {
-                if let Some(pub_addr) = rust_p2p_core::stun::recv_stun_response(&buf[..len]) {
+            unsafe {
+                block.set_len(len);
+            }
+            if rust_p2p_core::stun::is_stun_response(&block[..len]) {
+                if let Some(pub_addr) = rust_p2p_core::stun::recv_stun_response(&block[..len]) {
                     self.pipe_context
                         .update_public_addr(route_key.index(), pub_addr);
                 } else {
@@ -411,18 +424,18 @@ impl PipeLine {
                 continue;
             }
             return match self
-                .handle(RecvResult::new(&mut buf[..len], route_key))
+                .handle(RecvResult::new(&mut block[..len], route_key))
                 .await
             {
                 Ok(handle_result) => {
                     if let Some(rs) = handle_result {
-                        return Ok(Ok(HandleResult {
+                        return Ok(Ok(RecvUserData {
                             _start: rs.start,
                             _end: rs.end,
                             _src_id: rs.src_id,
                             _dest_id: rs.dest_id,
                             _route_key: rs.route_key,
-                            _payload: &buf[rs.start..rs.end],
+                            _data: block,
                             _ttl: rs.ttl,
                             _max_ttl: rs.max_ttl,
                         }));
@@ -881,11 +894,10 @@ struct HandleResultInner {
     pub(crate) max_ttl: u8,
 }
 
-#[derive(Debug)]
-pub struct HandleResult<'a> {
+pub struct RecvUserData {
     _start: usize,
     _end: usize,
-    _payload: &'a [u8],
+    _data: Block<BytesMut>,
     _ttl: u8,
     _max_ttl: u8,
     _src_id: NodeID,
@@ -893,7 +905,7 @@ pub struct HandleResult<'a> {
     _route_key: RouteKey,
 }
 
-impl<'a> HandleResult<'a> {
+impl RecvUserData {
     pub fn ttl(&self) -> u8 {
         self._ttl
     }
@@ -901,7 +913,7 @@ impl<'a> HandleResult<'a> {
         self._max_ttl
     }
     pub fn payload(&self) -> &[u8] {
-        self._payload
+        &self._data[self._start..self._end]
     }
     pub fn src_id(&self) -> NodeID {
         self._src_id
@@ -914,12 +926,6 @@ impl<'a> HandleResult<'a> {
     }
     pub fn is_relay(&self) -> bool {
         (self._max_ttl - self._ttl) != 0
-    }
-    pub fn start_index(&self) -> usize {
-        self._start
-    }
-    pub fn end_index(&self) -> usize {
-        self._end
     }
 }
 

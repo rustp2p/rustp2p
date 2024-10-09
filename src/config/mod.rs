@@ -47,6 +47,7 @@ pub struct PipeConfig {
     pub self_id: Option<NodeID>,
     pub direct_addrs: Option<Vec<PeerNodeAddress>>,
     pub send_buffer_size: usize,
+    pub recv_buffer_size: usize,
     pub query_id_interval: Duration,
     pub query_id_max_num: usize,
     pub heartbeat_interval: Duration,
@@ -70,6 +71,7 @@ impl Default for PipeConfig {
             self_id: None,
             direct_addrs: None,
             send_buffer_size: 2048,
+            recv_buffer_size: 2048,
             query_id_interval: Duration::from_secs(17),
             query_id_max_num: 3,
             heartbeat_interval: Duration::from_secs(5),
@@ -140,6 +142,10 @@ impl PipeConfig {
     }
     pub fn set_send_buffer_size(mut self, send_buffer_size: usize) -> Self {
         self.send_buffer_size = send_buffer_size;
+        self
+    }
+    pub fn set_recv_buffer_size(mut self, recv_buffer_size: usize) -> Self {
+        self.recv_buffer_size = recv_buffer_size;
         self
     }
     pub fn set_query_id_interval(mut self, query_id_interval: Duration) -> Self {

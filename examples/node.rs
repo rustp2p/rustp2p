@@ -11,7 +11,7 @@ use pnet_packet::Packet;
 use rust_p2p_core::pipe::recycle::RecycleBuf;
 use rustp2p::config::{PipeConfig, TcpPipeConfig, UdpPipeConfig};
 use rustp2p::error::*;
-use rustp2p::pipe::{PeerNodeAddress, Pipe, PipeLine, PipeWriter, SendPacket};
+use rustp2p::pipe::{PeerNodeAddress, Pipe, PipeLine, PipeWriter, RecvUserData, SendPacket};
 use rustp2p::protocol::node_id::{GroupCode, NodeID};
 use tokio::sync::mpsc::{channel, Sender};
 use tun_rs::AsyncDevice;
@@ -97,7 +97,7 @@ pub async fn main() -> Result<()> {
     let writer = pipe.writer();
     let shutdown_writer = writer.clone();
     let device_r = device.clone();
-    let (sender1, mut receiver1) = channel::<Vec<u8>>(128);
+    let (sender1, mut receiver1) = channel::<RecvUserData>(128);
     let (sender2, mut receiver2) = channel(128);
     tokio::spawn(async move {
         tun_recv(sender2, writer, device_r, self_id, recycle_buf)
@@ -113,8 +113,8 @@ pub async fn main() -> Result<()> {
         }
     });
     tokio::spawn(async move {
-        while let Some(buf) = receiver1.recv().await {
-            if let Err(e) = device.send(&buf).await {
+        while let Some(data) = receiver1.recv().await {
+            if let Err(e) = device.send(data.payload()).await {
                 log::warn!("device.send {e:?}")
             }
         }
@@ -143,10 +143,9 @@ fn string_to_group_code(input: &str) -> GroupCode {
     array[..len].copy_from_slice(&bytes[..len]);
     array.into()
 }
-async fn recv(mut line: PipeLine, sender: Sender<Vec<u8>>, mut _pipe_wirter: PipeWriter) {
-    let mut buf = [0u8; 2048];
+async fn recv(mut line: PipeLine, sender: Sender<RecvUserData>, mut _pipe_wirter: PipeWriter) {
     loop {
-        let rs = match line.recv_from(&mut buf).await {
+        let rs = match line.next().await {
             Ok(rs) => rs,
             Err(e) => {
                 log::warn!("recv_from {e:?}");
@@ -160,14 +159,14 @@ async fn recv(mut line: PipeLine, sender: Sender<Vec<u8>>, mut _pipe_wirter: Pip
                 continue;
             }
         };
-        log::info!(
-            "recv from peer from addr: {:?}, {:?} ->{:?} is_relay:{}\n{:?}",
-            handle_rs.route_key().addr(),
-            handle_rs.src_id(),
-            handle_rs.dest_id(),
-            handle_rs.is_relay(),
-            pnet_packet::ipv4::Ipv4Packet::new(handle_rs.payload())
-        );
+        // log::info!(
+        //     "recv from peer from addr: {:?}, {:?} ->{:?} is_relay:{}\n{:?}",
+        //     handle_rs.route_key().addr(),
+        //     handle_rs.src_id(),
+        //     handle_rs.dest_id(),
+        //     handle_rs.is_relay(),
+        //     pnet_packet::ipv4::Ipv4Packet::new(handle_rs.payload())
+        // );
 
         // if is_icmp_request(payload).await {
         //     if let Err(err) = process_icmp(payload, &mut _pipe_wirter).await {
@@ -175,8 +174,8 @@ async fn recv(mut line: PipeLine, sender: Sender<Vec<u8>>, mut _pipe_wirter: Pip
         //     }
         //     continue;
         // }
-        if let Err(e) = sender.send(handle_rs.payload().to_vec()).await {
-            log::warn!("UserData {e:?},{handle_rs:?}")
+        if let Err(e) = sender.send(handle_rs).await {
+            log::warn!("UserData {e:?}")
         }
     }
 }
