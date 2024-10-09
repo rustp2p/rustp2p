@@ -11,8 +11,8 @@ use pnet_packet::Packet;
 use rust_p2p_core::pipe::recycle::RecycleBuf;
 use rustp2p::config::{PipeConfig, TcpPipeConfig, UdpPipeConfig};
 use rustp2p::error::*;
-use rustp2p::pipe::{PeerNodeAddress, Pipe, PipeLine, PipeWriter, RecvUserData, SendPacket};
-use rustp2p::protocol::node_id::{GroupCode, NodeID};
+use rustp2p::pipe::{PeerNodeAddress, Pipe, PipeLine, PipeWriter, RecvUserData};
+use rustp2p::protocol::node_id::GroupCode;
 use tokio::sync::mpsc::{channel, Sender};
 use tun_rs::AsyncDevice;
 
@@ -91,27 +91,17 @@ pub async fn main() -> Result<()> {
         .set_direct_addrs(addrs)
         .set_group_code(string_to_group_code(&group_code))
         .set_node_id(self_id.into())
-        .set_recycle_buf(recycle_buf.clone());
+        .set_recycle_buf(recycle_buf);
 
     let mut pipe = Pipe::new(config).await?;
     let writer = pipe.writer();
     let shutdown_writer = writer.clone();
     let device_r = device.clone();
     let (sender1, mut receiver1) = channel::<RecvUserData>(128);
-    let (sender2, mut receiver2) = channel(128);
     tokio::spawn(async move {
-        tun_recv(sender2, writer, device_r, self_id, recycle_buf)
-            .await
-            .unwrap();
+        tun_recv(writer, device_r, self_id).await.unwrap();
     });
-    let writer = pipe.writer();
-    tokio::spawn(async move {
-        while let Some((packet, dest)) = receiver2.recv().await {
-            if let Err(e) = writer.send_packet_to(packet, &dest).await {
-                log::warn!("writer.send {e:?}")
-            }
-        }
-    });
+
     tokio::spawn(async move {
         while let Some(data) = receiver1.recv().await {
             if let Err(e) = device.send(data.payload()).await {
@@ -180,11 +170,9 @@ async fn recv(mut line: PipeLine, sender: Sender<RecvUserData>, mut _pipe_wirter
     }
 }
 async fn tun_recv(
-    sender: Sender<(SendPacket, NodeID)>,
-    _pipe_writer: PipeWriter,
+    pipe_writer: PipeWriter,
     device: Arc<AsyncDevice>,
     _self_id: Ipv4Addr,
-    recycle_buf: RecycleBuf,
 ) -> Result<()> {
     let mut buf = [0; 2048];
     loop {
@@ -213,9 +201,13 @@ async fn tun_recv(
         //     "read tun pkt: {:?}",
         //     pnet_packet::ipv4::Ipv4Packet::new(&buf[..payload_len])
         // );
-        let mut send_packet = SendPacket::with_bytes_mut(recycle_buf.alloc(2048));
+        let mut send_packet = pipe_writer.allocate_send_packet();
         send_packet.set_payload(&buf[..payload_len]);
-        if let Err(e) = sender.send((send_packet, dest_ip.into())).await {
+
+        if let Err(e) = pipe_writer
+            .send_packet_to(send_packet, &dest_ip.into())
+            .await
+        {
             log::warn!("{e:?},{dest_ip:?}")
         }
     }

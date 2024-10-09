@@ -13,6 +13,7 @@ use tokio::sync::mpsc::Sender;
 
 pub use pipe_context::NodeAddress;
 pub use pipe_context::PeerNodeAddress;
+use rust_p2p_core::pipe::recycle::RecycleBuf;
 use rust_p2p_core::punch::PunchConsultInfo;
 pub use send_packet::SendPacket;
 
@@ -39,6 +40,7 @@ pub struct Pipe {
     active_punch_sender: Sender<(NodeID, PunchConsultInfo)>,
     passive_punch_sender: Sender<(NodeID, PunchConsultInfo)>,
     buffer_pool: BufferPool<BytesMut>,
+    recycle_buf: Option<RecycleBuf>,
 }
 
 impl Pipe {
@@ -59,6 +61,7 @@ impl Pipe {
             None
         };
         let buffer_pool = BufferPool::new(64, config.recv_buffer_size);
+        let recycle_buf = config.recycle_buf.clone();
         let mut tcp_stun_servers = config.tcp_stun_servers.take().unwrap_or_default();
         for x in tcp_stun_servers.iter_mut() {
             if !x.contains(':') {
@@ -109,6 +112,7 @@ impl Pipe {
             pipe_context: pipe_context.clone(),
             pipe_writer: pipe.writer_ref().to_owned(),
             shutdown_manager: shutdown_manager.clone(),
+            recycle_buf: recycle_buf.clone(),
         };
         let (active_punch_sender, active_punch_receiver) = tokio::sync::mpsc::channel(3);
         let (passive_punch_sender, passive_punch_receiver) = tokio::sync::mpsc::channel(3);
@@ -141,6 +145,7 @@ impl Pipe {
             active_punch_sender,
             passive_punch_sender,
             buffer_pool,
+            recycle_buf,
         })
     }
     pub fn writer(&self) -> PipeWriter {
@@ -149,6 +154,7 @@ impl Pipe {
             pipe_context: self.pipe_context.clone(),
             pipe_writer: self.pipe.writer_ref().to_owned(),
             shutdown_manager: self.shutdown_manager.clone(),
+            recycle_buf: self.recycle_buf.clone(),
         }
     }
 }
@@ -177,6 +183,7 @@ pub struct PipeWriter {
     pipe_context: PipeContext,
     pipe_writer: rust_p2p_core::pipe::PipeWriter<NodeID>,
     shutdown_manager: ShutdownManager<()>,
+    recycle_buf: Option<RecycleBuf>,
 }
 
 impl PipeWriter {
@@ -338,13 +345,13 @@ impl PipeWriter {
         }
     }
 
-    pub fn allocate_send_packet(&self) -> Result<SendPacket> {
-        let mut packet =
-            self.allocate_send_packet_proto(ProtocolType::UserData, self.send_buffer_size)?;
-        unsafe {
-            packet.set_payload_len(HEAD_LEN);
-        }
-        Ok(packet)
+    pub fn allocate_send_packet(&self) -> SendPacket {
+        let buf = if let Some(recycle_buf) = self.recycle_buf.as_ref() {
+            recycle_buf.alloc(self.send_buffer_size)
+        } else {
+            BytesMut::with_capacity(self.send_buffer_size)
+        };
+        SendPacket::with_bytes_mut(buf)
     }
     pub(crate) fn allocate_send_packet_proto(
         &self,
