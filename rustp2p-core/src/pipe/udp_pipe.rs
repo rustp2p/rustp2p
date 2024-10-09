@@ -588,7 +588,7 @@ fn sendmmsg(fd: std::os::fd::RawFd, buf: &[(&[u8], SocketAddr)]) -> io::Result<(
         msgs[i].msg_hdr.msg_iovlen = 1;
 
         let mut storage = socket_addr_to_sockaddr(addr);
-        msgs[i].msg_hdr.msg_name = &mut storage as *const _ as *mut libc::c_void;
+        msgs[i].msg_hdr.msg_name = &mut storage as *mut _ as *mut libc::c_void;
         msgs[i].msg_hdr.msg_namelen =
             std::mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
     }
