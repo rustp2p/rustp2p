@@ -480,7 +480,7 @@ impl UdpPipe {
             #[cfg(target_os = "linux")]
             let mut vec_buf = Vec::with_capacity(16);
             #[cfg(target_os = "linux")]
-            let mut vec: Vec<(&[u8], SocketAddr)> = Vec::with_capacity(16);
+            let mut vec: Vec<(&mut [u8], SocketAddr)> = Vec::with_capacity(16);
 
             #[cfg(target_os = "linux")]
             use std::os::fd::AsRawFd;
@@ -497,13 +497,14 @@ impl UdpPipe {
                         }
                     }
                     let rs = {
-                        for (buf, addr) in &vec_buf {
-                            let u8_slice =
-                                unsafe { std::slice::from_raw_parts(buf.as_ptr(), buf.len()) };
+                        for (buf, addr) in &mut vec_buf {
+                            let u8_slice = unsafe {
+                                std::slice::from_raw_parts_mut(buf.as_mut_ptr(), buf.len())
+                            };
                             vec.push((u8_slice, *addr));
                         }
                         let rs = loop {
-                            break match sendmmsg(udp.as_raw_fd(), &vec) {
+                            break match sendmmsg(udp.as_raw_fd(), &mut vec) {
                                 Ok(_) => Ok(()),
                                 Err(e) => {
                                     if e.kind() == io::ErrorKind::WouldBlock {
@@ -577,14 +578,14 @@ impl UdpPipe {
     }
 }
 #[cfg(target_os = "linux")]
-fn sendmmsg(fd: std::os::fd::RawFd, buf: &[(&[u8], SocketAddr)]) -> io::Result<()> {
+fn sendmmsg(fd: std::os::fd::RawFd, buf: &mut [(&mut [u8], SocketAddr)]) -> io::Result<()> {
     assert!(buf.len() <= MAX_MESSAGES);
     let mut iov: [libc::iovec; MAX_MESSAGES] = unsafe { std::mem::zeroed() };
     let mut msgs: [libc::mmsghdr; MAX_MESSAGES] = unsafe { std::mem::zeroed() };
     let mut addrs: [libc::sockaddr_storage; MAX_MESSAGES] = unsafe { std::mem::zeroed() };
-    for (i, (buf, addr)) in buf.iter().enumerate() {
+    for (i, (buf, addr)) in buf.iter_mut().enumerate() {
         addrs[i] = socket_addr_to_sockaddr(addr);
-        iov[i].iov_base = buf.as_ptr() as *mut libc::c_void;
+        iov[i].iov_base = buf.as_mut_ptr() as *mut libc::c_void;
         iov[i].iov_len = buf.len();
         msgs[i].msg_hdr.msg_iov = &mut iov[i];
         msgs[i].msg_hdr.msg_iovlen = 1;
