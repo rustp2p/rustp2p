@@ -16,7 +16,7 @@ use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 pub(crate) mod punch_info;
 
 pub use rust_p2p_core::pipe::udp_pipe::Model;
-use rust_p2p_core::socket::LocalInterface;
+pub use rust_p2p_core::socket::LocalInterface;
 
 pub(crate) const ROUTE_IDLE_TIME: Duration = Duration::from_secs(10);
 
