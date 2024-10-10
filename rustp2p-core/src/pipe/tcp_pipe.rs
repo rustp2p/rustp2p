@@ -134,11 +134,8 @@ impl Drop for TcpPipeLine {
 
 impl TcpPipeLine {
     /// Writing `buf` to the target denoted by `route_key` via this pipeline
-    pub async fn send_to(&self, buf: BytesMut, route_key: &RouteKey) -> crate::error::Result<()> {
-        if &self.route_key != route_key {
-            Err(crate::error::Error::RouteNotFound("mismatch".into()))?
-        }
-        if let Err(_e) = self.write_half_collect.send_to(buf, route_key).await {
+    pub async fn send(&self, buf: BytesMut) -> crate::error::Result<()> {
+        if let Err(_e) = self.write_half_collect.send_to(buf, &self.route_key).await {
             Err(crate::error::Error::PacketLoss)
         } else {
             Ok(())

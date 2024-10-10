@@ -258,16 +258,6 @@ impl PipeLine {
             PipeLine::Extend(line) => Some(line.recv_from(buf).await),
         }
     }
-
-    /// Send 'buf' to 'route_key' using the current 'line'.
-    /// If 'route_key' does not belong to the current 'line', an Err will be returned.
-    pub async fn send_to(&self, buf: BytesMut, route_key: &RouteKey) -> crate::error::Result<()> {
-        match self {
-            PipeLine::Udp(line) => line.send_buf_to(buf, route_key).await,
-            PipeLine::Tcp(line) => line.send_to(buf, route_key).await,
-            PipeLine::Extend(line) => line.send_to(buf, route_key).await,
-        }
-    }
 }
 
 impl PipeLine {

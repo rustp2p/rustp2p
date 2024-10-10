@@ -793,23 +793,7 @@ impl UdpPipeLine {
             Err(anyhow!("closed"))
         }
     }
-    /// Writing `buf` to the target denoted by `route_key` via this pipeline
-    pub async fn send_to(&self, buf: &[u8], route_key: &RouteKey) -> crate::error::Result<()> {
-        if self.index != route_key.index() {
-            Err(crate::error::Error::RouteNotFound("mismatch".into()))?
-        }
-        if let Some(udp) = &self.udp {
-            let len = udp.send_to(buf, route_key.addr()).await?;
-            if len == 0 {
-                return Err(crate::error::Error::Io(std::io::Error::from(
-                    std::io::ErrorKind::WriteZero,
-                )));
-            }
-            Ok(())
-        } else {
-            Err(crate::error::Error::RouteNotFound("miss".into()))
-        }
-    }
+
     pub async fn send_buf_to(
         &self,
         buf: BytesMut,
