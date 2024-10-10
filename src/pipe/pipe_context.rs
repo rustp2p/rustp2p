@@ -37,7 +37,7 @@ impl PipeContext {
     pub(crate) fn new(
         local_udp_ports: Vec<u16>,
         local_tcp_port: u16,
-        default_interface: Option<crate::config::LocalInterface>,
+        default_interface: Option<LocalInterface>,
         dns: Option<Vec<String>>,
     ) -> Self {
         let punch_info = NodePunchInfo::new(local_udp_ports, local_tcp_port);
@@ -48,7 +48,7 @@ impl PipeContext {
             direct_node_id_map: Arc::new(Default::default()),
             reachable_nodes: Arc::new(Default::default()),
             punch_info: Arc::new(RwLock::new(punch_info)),
-            default_interface: default_interface.map(|v| v.into()),
+            default_interface,
             dns: dns.unwrap_or_default(),
             other_route_table: Arc::new(Default::default()),
         }

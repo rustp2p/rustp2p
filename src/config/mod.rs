@@ -16,23 +16,7 @@ use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 pub(crate) mod punch_info;
 
 pub use rust_p2p_core::pipe::udp_pipe::Model;
-
-#[derive(Clone, Debug, Default)]
-pub struct LocalInterface {
-    pub index: u32,
-    #[cfg(unix)]
-    pub name: Option<String>,
-}
-
-impl LocalInterface {
-    pub fn new(index: u32, #[cfg(unix)] name: Option<String>) -> Self {
-        Self {
-            index,
-            #[cfg(unix)]
-            name,
-        }
-    }
-}
+use rust_p2p_core::socket::LocalInterface;
 
 pub(crate) const ROUTE_IDLE_TIME: Duration = Duration::from_secs(10);
 
@@ -279,15 +263,6 @@ impl UdpPipeConfig {
     }
 }
 
-impl From<LocalInterface> for rust_p2p_core::socket::LocalInterface {
-    fn from(value: LocalInterface) -> Self {
-        #[cfg(unix)]
-        return rust_p2p_core::socket::LocalInterface::new(value.index, value.name);
-        #[cfg(not(unix))]
-        rust_p2p_core::socket::LocalInterface::new(value.index)
-    }
-}
-
 impl From<PipeConfig> for rust_p2p_core::pipe::config::PipeConfig {
     fn from(value: PipeConfig) -> Self {
         let recycle_buf = if value.recycle_buf_cap > 0 {
@@ -325,7 +300,7 @@ impl From<UdpPipeConfig> for rust_p2p_core::pipe::config::UdpPipeConfig {
             main_pipeline_num: value.main_pipeline_num,
             sub_pipeline_num: value.sub_pipeline_num,
             model: value.model,
-            default_interface: value.default_interface.map(|v| v.into()),
+            default_interface: value.default_interface,
             udp_ports: value.udp_ports,
             use_v6: value.use_v6,
             recycle_buf: None,
@@ -338,7 +313,7 @@ impl From<TcpPipeConfig> for rust_p2p_core::pipe::config::TcpPipeConfig {
         rust_p2p_core::pipe::config::TcpPipeConfig {
             route_idle_time: value.route_idle_time,
             tcp_multiplexing_limit: value.tcp_multiplexing_limit,
-            default_interface: value.default_interface.map(|v| v.into()),
+            default_interface: value.default_interface,
             tcp_port: value.tcp_port,
             use_v6: value.use_v6,
             init_codec: Box::new(LengthPrefixedInitCodec),

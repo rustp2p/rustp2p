@@ -14,9 +14,6 @@ use crate::socket::{LocalInterface, VntSocketTrait};
 impl VntSocketTrait for socket2::Socket {
     fn set_ip_unicast_if(&self, interface: &LocalInterface) -> crate::error::Result<()> {
         let index = interface.index;
-        if index == 0 {
-            return Ok(());
-        }
         let raw_socket = self.as_raw_socket();
         let result = unsafe {
             let best_interface = htonl(index);

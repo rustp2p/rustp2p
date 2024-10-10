@@ -1,9 +1,9 @@
 use tokio::task::JoinSet;
 
-use crate::config::LocalInterface;
 use crate::pipe::PipeWriter;
 use crate::protocol::node_id::NodeID;
 use rust_p2p_core::punch::{PunchConsultInfo, Puncher};
+use rust_p2p_core::socket::LocalInterface;
 use std::time::Duration;
 use tokio::sync::mpsc::Receiver;
 
@@ -47,7 +47,7 @@ pub(crate) fn start_task(
     join_set.spawn(nat_query::nat_test_loop(
         pipe_writer.clone(),
         udp_stun_servers.clone(),
-        default_interface.map(|v| v.into()),
+        default_interface,
     ));
     join_set.spawn(query_public_addr::query_public_addr_loop(
         pipe_writer.clone(),

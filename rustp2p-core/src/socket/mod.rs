@@ -1,7 +1,9 @@
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
 use anyhow::{anyhow, Context};
 use network_interface::{NetworkInterface, NetworkInterfaceConfig};
 use socket2::Protocol;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
 #[cfg(unix)]
 pub use unix::*;
 #[cfg(windows)]
@@ -20,19 +22,23 @@ pub(crate) trait VntSocketTrait {
 
 #[derive(Clone, Debug, Default)]
 pub struct LocalInterface {
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
     pub index: u32,
-    #[cfg(unix)]
-    pub name: Option<String>,
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    pub name: String,
 }
+
 impl LocalInterface {
-    pub fn new(index: u32, #[cfg(unix)] name: Option<String>) -> Self {
-        Self {
-            index,
-            #[cfg(unix)]
-            name,
-        }
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    pub fn new(index: u32) -> Self {
+        Self { index }
+    }
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    pub fn new(name: String) -> Self {
+        Self { name }
     }
 }
+
 #[allow(dead_code)]
 pub(crate) async fn connect_tcp(
     addr: SocketAddr,
@@ -43,6 +49,7 @@ pub(crate) async fn connect_tcp(
     let socket = create_tcp0(addr.is_ipv4(), bind_port, default_interface, ttl)?;
     Ok(socket.connect(addr).await?)
 }
+
 #[allow(dead_code)]
 pub(crate) fn create_tcp(
     v4: bool,
@@ -50,6 +57,7 @@ pub(crate) fn create_tcp(
 ) -> crate::error::Result<tokio::net::TcpSocket> {
     create_tcp0(v4, 0, default_interface, None)
 }
+
 pub(crate) fn create_tcp0(
     v4: bool,
     bind_port: u16,
@@ -92,6 +100,7 @@ pub(crate) fn create_tcp0(
     socket.set_nodelay(true)?;
     Ok(tokio::net::TcpSocket::from_std_stream(socket.into()))
 }
+
 pub(crate) fn create_tcp_listener(addr: SocketAddr) -> anyhow::Result<std::net::TcpListener> {
     let socket = if addr.is_ipv6() {
         let socket = socket2::Socket::new(socket2::Domain::IPV6, socket2::Type::STREAM, None)?;
@@ -115,6 +124,7 @@ pub(crate) fn create_tcp_listener(addr: SocketAddr) -> anyhow::Result<std::net::
     socket.set_nodelay(true)?;
     Ok(socket.into())
 }
+
 pub(crate) fn bind_udp_ops(
     addr: SocketAddr,
     only_v6: bool,
@@ -149,6 +159,7 @@ pub(crate) fn bind_udp_ops(
     socket.bind(&addr.into())?;
     Ok(socket)
 }
+
 pub fn bind_udp(
     addr: SocketAddr,
     default_interface: Option<&LocalInterface>,
@@ -164,9 +175,10 @@ pub fn get_interface(dest_ip: Ipv4Addr) -> anyhow::Result<LocalInterface> {
             if let IpAddr::V4(ip) = addr.ip() {
                 if ip == dest_ip {
                     return Ok(LocalInterface {
+                        #[cfg(not(any(target_os = "linux", target_os = "android")))]
                         index: iface.index,
-                        #[cfg(unix)]
-                        name: Some(iface.name),
+                        #[cfg(any(target_os = "linux", target_os = "android"))]
+                        name: iface.name,
                     });
                 }
             }
