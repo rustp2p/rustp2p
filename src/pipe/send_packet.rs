@@ -56,6 +56,9 @@ impl SendPacket {
         let mut packet = NetPacket::unchecked(self.buf_mut());
         packet.reset_data_len();
     }
+    pub unsafe fn set_payload_len_raw(&mut self, payload_len: usize) {
+        self.buf.set_len(HEAD_LEN + payload_len);
+    }
     pub fn clear(&mut self) {
         unsafe {
             self.set_payload_len(0);
