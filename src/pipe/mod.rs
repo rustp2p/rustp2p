@@ -1,23 +1,19 @@
+use anyhow::anyhow;
+use async_shutdown::ShutdownManager;
+use bytes::BytesMut;
+use dashmap::DashMap;
+use rand::RngCore;
+use rust_p2p_core::nat::NatType;
+use rust_p2p_core::route::route_table::RouteTable;
+use rust_p2p_core::route::{Route, RouteKey};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 use std::time::UNIX_EPOCH;
-
-use async_shutdown::ShutdownManager;
-use bytes::BytesMut;
-use dashmap::DashMap;
-use rust_p2p_core::nat::NatType;
-use rust_p2p_core::route::route_table::RouteTable;
-use rust_p2p_core::route::{Route, RouteKey};
 use tokio::sync::mpsc::Sender;
 
-pub use pipe_context::NodeAddress;
-pub use pipe_context::PeerNodeAddress;
-use rust_p2p_core::pipe::recycle::RecycleBuf;
-use rust_p2p_core::punch::PunchConsultInfo;
-pub use send_packet::SendPacket;
-
+use crate::cipher::aes_gcm::{cipher, AES_GCM_ENCRYPTION_RESERVED};
 use crate::config::PipeConfig;
 use crate::error::{Error, Result};
 use crate::extend::byte_pool::{Block, BufferPool};
@@ -27,6 +23,11 @@ use crate::protocol::id_route::IDRouteReplyPacket;
 use crate::protocol::node_id::{GroupCode, NodeID};
 use crate::protocol::protocol_type::ProtocolType;
 use crate::protocol::{broadcast, NetPacket, HEAD_LEN};
+pub use pipe_context::NodeAddress;
+pub use pipe_context::PeerNodeAddress;
+use rust_p2p_core::pipe::recycle::RecycleBuf;
+use rust_p2p_core::punch::PunchConsultInfo;
+pub use send_packet::SendPacket;
 
 mod maintain;
 mod pipe_context;
@@ -84,6 +85,12 @@ impl Pipe {
                 x.push_str(":3478");
             }
         }
+        let cipher = if let Some(encryption) = config.encryption.clone() {
+            Some(cipher(encryption))
+        } else {
+            None
+        };
+
         let config: rust_p2p_core::pipe::config::PipeConfig = config.into();
         let mut recycle_buf: Option<RecycleBuf> = None;
         if let Some(v) = config.tcp_pipe_config.as_ref() {
@@ -108,6 +115,7 @@ impl Pipe {
             local_tcp_port,
             default_interface.clone(),
             dns,
+            cipher,
         );
         if let Some(group_code) = group_code {
             pipe_context.store_group_code(group_code)?;
@@ -356,6 +364,16 @@ impl PipeWriter {
             packet.set_group_code(&group_code);
             packet.set_src_id(&src_id);
             packet.set_dest_id(dest_id);
+
+            if let Some(cipher) = self.pipe_context.aes_gcm_cipher.as_ref() {
+                let data_len = packet.len();
+                packet.resize(data_len + AES_GCM_ENCRYPTION_RESERVED, 0);
+                let mut nonce = [0u8; 12];
+                rand::thread_rng().fill_bytes(&mut nonce);
+
+                cipher.encrypt(nonce, &mut packet)?;
+                packet.set_encrypt_flag(true);
+            }
             self.send_to0(packet.into_buf(), &group_code, &src_id, dest_id)
                 .await
         } else {
@@ -456,9 +474,26 @@ impl PipeLine {
             return match self.handle(RecvResult::new(&mut block, route_key)).await {
                 Ok(handle_result) => {
                     if let Some(rs) = handle_result {
+                        if rs.is_encrypt != self.pipe_context.aes_gcm_cipher.is_some() {
+                            return Ok(Err(HandleError::new(
+                                route_key,
+                                Error::Any(anyhow!("Inconsistent encryption status")),
+                            )));
+                        }
+                        let end_index =
+                            if let Some(cipher) = self.pipe_context.aes_gcm_cipher.as_ref() {
+                                match cipher.decrypt(&mut block[rs.start..rs.end]) {
+                                    Ok(_len) => rs.end - AES_GCM_ENCRYPTION_RESERVED,
+                                    Err(e) => {
+                                        return Ok(Err(HandleError::new(route_key, Error::Any(e))))
+                                    }
+                                }
+                            } else {
+                                rs.end
+                            };
                         return Ok(Ok(RecvUserData {
                             _start: rs.start,
-                            _end: rs.end,
+                            _end: end_index,
                             _src_id: rs.src_id,
                             _dest_id: rs.dest_id,
                             _route_key: rs.route_key,
@@ -685,6 +720,7 @@ impl PipeLine {
                     route_key,
                     ttl: packet.ttl(),
                     max_ttl: packet.max_ttl(),
+                    is_encrypt: packet.is_encrypt(),
                 }))
             }
             ProtocolType::RangeBroadcast => {
@@ -712,6 +748,7 @@ impl PipeLine {
                         route_key,
                         ttl: packet.ttl(),
                         max_ttl: packet.max_ttl(),
+                        is_encrypt: packet.is_encrypt(),
                     }));
                 }
             }
@@ -919,6 +956,7 @@ struct HandleResultInner {
     pub(crate) route_key: RouteKey,
     pub(crate) ttl: u8,
     pub(crate) max_ttl: u8,
+    pub(crate) is_encrypt: bool,
 }
 
 pub struct RecvUserData {

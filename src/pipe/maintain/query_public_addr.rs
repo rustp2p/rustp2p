@@ -71,11 +71,15 @@ pub(crate) async fn query_public_addr_loop(
                     Ok(rs) => {
                         if rs.is_err() {
                             log::debug!("is_err {rs:?},server={stun:?}",);
-                            tcp_stream_owner.take();
+                            if let Some(mut tcp) = tcp_stream_owner.take() {
+                                let _ = tcp.shutdown().await;
+                            }
                         }
                     }
                     Err(_) => {
-                        tcp_stream_owner.take();
+                        if let Some(mut tcp) = tcp_stream_owner.take() {
+                            let _ = tcp.shutdown().await;
+                        }
                     }
                 }
             }
@@ -86,7 +90,9 @@ pub(crate) async fn query_public_addr_loop(
                     }
                     Err(e) => {
                         log::debug!("stun_tcp_read {e:?},server={stun:?}",);
-                        tcp_stream_owner.take();
+                        if let Some(mut tcp) = tcp_stream_owner.take() {
+                            let _ = tcp.shutdown().await;
+                        }
                     }
                 }
             }

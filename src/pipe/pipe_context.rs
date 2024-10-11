@@ -4,6 +4,11 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::cipher::aes_gcm::AesGcmCipher;
+use crate::config::punch_info::NodePunchInfo;
+use crate::error::Error;
+use crate::extend::dns_query::{dns_query_all, dns_query_txt};
+use crate::protocol::node_id::{GroupCode, NodeID};
 use anyhow::Context;
 use crossbeam_utils::atomic::AtomicCell;
 use dashmap::DashMap;
@@ -13,11 +18,6 @@ use rust_p2p_core::punch::{PunchConsultInfo, PunchModelBox};
 use rust_p2p_core::route::route_table::RouteTable;
 use rust_p2p_core::route::Index;
 use rust_p2p_core::socket::LocalInterface;
-
-use crate::config::punch_info::NodePunchInfo;
-use crate::error::Error;
-use crate::extend::dns_query::{dns_query_all, dns_query_txt};
-use crate::protocol::node_id::{GroupCode, NodeID};
 
 #[derive(Clone)]
 pub struct PipeContext {
@@ -31,6 +31,7 @@ pub struct PipeContext {
     default_interface: Option<LocalInterface>,
     dns: Vec<String>,
     pub(crate) other_route_table: Arc<DashMap<GroupCode, RouteTable<NodeID>>>,
+    pub(crate) aes_gcm_cipher: Option<AesGcmCipher>,
 }
 pub type DirectNodes = Vec<(NodeAddress, u16, Option<(GroupCode, NodeID)>)>;
 impl PipeContext {
@@ -39,6 +40,7 @@ impl PipeContext {
         local_tcp_port: u16,
         default_interface: Option<LocalInterface>,
         dns: Option<Vec<String>>,
+        aes_gcm_cipher: Option<AesGcmCipher>,
     ) -> Self {
         let punch_info = NodePunchInfo::new(local_udp_ports, local_tcp_port);
         Self {
@@ -51,6 +53,7 @@ impl PipeContext {
             default_interface,
             dns: dns.unwrap_or_default(),
             other_route_table: Arc::new(Default::default()),
+            aes_gcm_cipher,
         }
     }
     pub fn store_self_id(&self, node_id: NodeID) -> crate::error::Result<()> {

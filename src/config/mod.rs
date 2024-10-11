@@ -40,6 +40,7 @@ pub struct PipeConfig {
     pub mapping_addrs: Option<Vec<NodeAddress>>,
     pub dns: Option<Vec<String>>,
     pub recycle_buf_cap: usize,
+    pub encryption: Option<String>,
 }
 
 impl Default for PipeConfig {
@@ -75,6 +76,7 @@ impl Default for PipeConfig {
             mapping_addrs: None,
             dns: None,
             recycle_buf_cap: 64,
+            encryption: None,
         }
     }
 }
@@ -162,6 +164,10 @@ impl PipeConfig {
     }
     pub fn set_recycle_buf_cap(mut self, recycle_buf_cap: usize) -> Self {
         self.recycle_buf_cap = recycle_buf_cap;
+        self
+    }
+    pub fn set_encryption(mut self, encryption: String) -> Self {
+        self.encryption.replace(encryption);
         self
     }
 }

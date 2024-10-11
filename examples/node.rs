@@ -88,6 +88,7 @@ pub async fn main() -> Result<()> {
         .set_tcp_pipe_config(tcp_config)
         .set_direct_addrs(addrs)
         .set_group_code(string_to_group_code(&group_code))
+        .set_encryption("password".to_string())
         .set_node_id(self_id.into());
 
     let mut pipe = Pipe::new(config).await?;

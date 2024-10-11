@@ -4,7 +4,7 @@
   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
   |1|   protocol(7)       |                 data len(16)               |max ttl(4) |curr ttl(4) |
   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-  |                                         reserve(32)                                         |
+  |e|                                        reserve(31)                                         |
   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
   |                                        group code(128)                                      |
   |                                                                                             |
@@ -70,6 +70,10 @@ impl<B: AsRef<[u8]>> NetPacket<B> {
     pub fn ttl(&self) -> u8 {
         self.buffer.as_ref()[3] & 0xF
     }
+    pub fn is_encrypt(&self) -> bool {
+        self.buffer.as_ref()[5] & 0x80 == 0x80
+    }
+
     pub fn group_code(&self) -> &[u8] {
         &self.buffer.as_ref()[8..24]
     }
@@ -84,6 +88,9 @@ impl<B: AsRef<[u8]>> NetPacket<B> {
     }
     pub fn buffer(&self) -> &[u8] {
         self.buffer.as_ref()
+    }
+    pub fn into_buffer(self) -> B {
+        self.buffer
     }
 }
 impl<B: AsRef<[u8]> + AsMut<[u8]>> NetPacket<B> {
@@ -110,6 +117,13 @@ impl<B: AsRef<[u8]> + AsMut<[u8]>> NetPacket<B> {
         let len = self.buffer().len();
         self.buffer.as_mut()[1] = (len >> 8) as u8;
         self.buffer.as_mut()[2] = len as u8;
+    }
+    pub fn set_encrypt_flag(&mut self, is_encrypt: bool) {
+        if is_encrypt {
+            self.buffer.as_mut()[5] = self.buffer.as_ref()[5] | 0x80
+        } else {
+            self.buffer.as_mut()[5] = self.buffer.as_ref()[5] & 0x7F
+        };
     }
     pub fn set_group_code(&mut self, group_code: &GroupCode) {
         self.buffer.as_mut()[8..24].copy_from_slice(group_code.as_ref());

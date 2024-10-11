@@ -59,6 +59,12 @@ impl SendPacket {
     pub unsafe fn set_payload_len_raw(&mut self, payload_len: usize) {
         self.buf.set_len(HEAD_LEN + payload_len);
     }
+    pub fn resize(&mut self, payload_len: usize, value: u8) {
+        assert!(payload_len < u16::MAX as _);
+        self.buf.resize(HEAD_LEN + payload_len, value);
+        let mut packet = NetPacket::unchecked(self.buf_mut());
+        packet.reset_data_len();
+    }
     pub fn clear(&mut self) {
         unsafe {
             self.set_payload_len(0);
@@ -84,6 +90,10 @@ impl SendPacket {
     pub fn set_dest_id(&mut self, id: &NodeID) {
         let mut packet = NetPacket::unchecked(self.buf_mut());
         packet.set_dest_id(id);
+    }
+    pub fn set_encrypt_flag(&mut self, flag: bool) {
+        let mut packet = NetPacket::unchecked(self.buf_mut());
+        packet.set_encrypt_flag(flag);
     }
 }
 
