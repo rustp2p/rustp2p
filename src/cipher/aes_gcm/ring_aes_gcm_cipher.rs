@@ -61,7 +61,7 @@ impl AesGcmCipher {
         if let Err(e) = rs {
             return Err(anyhow!("Decryption failed:{:?}", e));
         }
-        return Ok(data_len - AES_GCM_ENCRYPTION_RESERVED);
+        Ok(data_len - AES_GCM_ENCRYPTION_RESERVED)
     }
     /// payload Sufficient length must be reserved
     pub fn encrypt(&self, extra_info: [u8; 12], payload: &mut [u8]) -> anyhow::Result<()> {

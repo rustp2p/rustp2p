@@ -56,6 +56,11 @@ impl SendPacket {
         let mut packet = NetPacket::unchecked(self.buf_mut());
         packet.reset_data_len();
     }
+
+    /// # Safety
+    /// Sets the length of the buffer.
+    /// This will explicitly set the size of the buffer without actually modifying the data,
+    /// so it is up to the caller to ensure that the data has been initialized.
     pub unsafe fn set_payload_len_raw(&mut self, payload_len: usize) {
         self.buf.set_len(HEAD_LEN + payload_len);
     }

@@ -84,11 +84,7 @@ impl Pipe {
                 x.push_str(":3478");
             }
         }
-        let cipher = if let Some(encryption) = config.encryption.clone() {
-            Some(cipher(encryption))
-        } else {
-            None
-        };
+        let cipher = config.encryption.clone().map(cipher);
 
         let config: rust_p2p_core::pipe::config::PipeConfig = config.into();
         let mut recycle_buf: Option<RecycleBuf> = None;
