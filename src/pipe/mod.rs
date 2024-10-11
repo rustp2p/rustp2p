@@ -2,7 +2,6 @@ use anyhow::anyhow;
 use async_shutdown::ShutdownManager;
 use bytes::BytesMut;
 use dashmap::DashMap;
-use rand::RngCore;
 use rust_p2p_core::nat::NatType;
 use rust_p2p_core::route::route_table::RouteTable;
 use rust_p2p_core::route::{Route, RouteKey};
@@ -368,10 +367,8 @@ impl PipeWriter {
             if let Some(cipher) = self.pipe_context.aes_gcm_cipher.as_ref() {
                 let data_len = packet.len();
                 packet.resize(data_len + AES_GCM_ENCRYPTION_RESERVED, 0);
-                let mut nonce = [0u8; 12];
-                rand::thread_rng().fill_bytes(&mut nonce);
 
-                cipher.encrypt(nonce, &mut packet)?;
+                cipher.encrypt(tag(&src_id, dest_id), &mut packet)?;
                 packet.set_encrypt_flag(true);
             }
             self.send_to0(packet.into_buf(), &group_code, &src_id, dest_id)
@@ -480,17 +477,20 @@ impl PipeLine {
                                 Error::Any(anyhow!("Inconsistent encryption status")),
                             )));
                         }
-                        let end_index =
-                            if let Some(cipher) = self.pipe_context.aes_gcm_cipher.as_ref() {
-                                match cipher.decrypt(&mut block[rs.start..rs.end]) {
-                                    Ok(_len) => rs.end - AES_GCM_ENCRYPTION_RESERVED,
-                                    Err(e) => {
-                                        return Ok(Err(HandleError::new(route_key, Error::Any(e))))
-                                    }
+                        let end_index = if let Some(cipher) =
+                            self.pipe_context.aes_gcm_cipher.as_ref()
+                        {
+                            match cipher
+                                .decrypt(tag(&rs.src_id, &rs.dest_id), &mut block[rs.start..rs.end])
+                            {
+                                Ok(_len) => rs.end - AES_GCM_ENCRYPTION_RESERVED,
+                                Err(e) => {
+                                    return Ok(Err(HandleError::new(route_key, Error::Any(e))))
                                 }
-                            } else {
-                                rs.end
-                            };
+                            }
+                        } else {
+                            rs.end
+                        };
                         return Ok(Ok(RecvUserData {
                             _start: rs.start,
                             _end: end_index,
@@ -969,10 +969,12 @@ pub struct RecvUserData {
     _dest_id: NodeID,
     _route_key: RouteKey,
 }
+
 pub enum Data {
     Recyclable(Block<BytesMut>),
     Temporary(BytesMut),
 }
+
 impl Deref for Data {
     type Target = BytesMut;
 
@@ -983,6 +985,7 @@ impl Deref for Data {
         }
     }
 }
+
 impl DerefMut for Data {
     fn deref_mut(&mut self) -> &mut Self::Target {
         match self {
@@ -1041,4 +1044,11 @@ impl HandleError {
     pub fn err(&self) -> &Error {
         &self.err
     }
+}
+
+fn tag(src_id: &NodeID, dest_id: &NodeID) -> [u8; 12] {
+    let mut tmp = [0; 12];
+    tmp[..4].copy_from_slice(src_id.as_ref());
+    tmp[4..8].copy_from_slice(dest_id.as_ref());
+    tmp
 }

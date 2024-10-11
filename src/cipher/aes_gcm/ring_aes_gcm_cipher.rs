@@ -1,5 +1,6 @@
 use crate::cipher::aes_gcm::AES_GCM_ENCRYPTION_RESERVED;
 use anyhow::anyhow;
+use rand::RngCore;
 use ring::aead;
 use ring::aead::{LessSafeKey, UnboundKey};
 
@@ -34,7 +35,7 @@ impl AesGcmCipher {
         let cipher = LessSafeKey::new(UnboundKey::new(&aead::AES_256_GCM, &key).unwrap());
         AesGcmCipher::AesGCM256(cipher, key)
     }
-    pub fn decrypt(&self, payload: &mut [u8]) -> anyhow::Result<usize> {
+    pub fn decrypt(&self, extra_info: [u8; 12], payload: &mut [u8]) -> anyhow::Result<usize> {
         let data_len = payload.len();
         if data_len < AES_GCM_ENCRYPTION_RESERVED {
             log::error!(
@@ -43,8 +44,10 @@ impl AesGcmCipher {
             );
             return Err(anyhow!("data err"));
         }
-        let nonce_raw = payload[data_len - 12..].try_into().unwrap();
-
+        let mut nonce_raw: [u8; 12] = payload[data_len - 12..].try_into().unwrap();
+        for (i, b) in nonce_raw.iter_mut().enumerate() {
+            *b ^= extra_info[i];
+        }
         let nonce = aead::Nonce::assume_unique_for_key(nonce_raw);
 
         let rs = match &self {
@@ -61,7 +64,13 @@ impl AesGcmCipher {
         return Ok(data_len - AES_GCM_ENCRYPTION_RESERVED);
     }
     /// payload Sufficient length must be reserved
-    pub fn encrypt(&self, nonce_raw: [u8; 12], payload: &mut [u8]) -> anyhow::Result<()> {
+    pub fn encrypt(&self, extra_info: [u8; 12], payload: &mut [u8]) -> anyhow::Result<()> {
+        let mut random = [0u8; 12];
+        rand::thread_rng().fill_bytes(&mut random);
+        let mut nonce_raw = random;
+        for (i, b) in nonce_raw.iter_mut().enumerate() {
+            *b ^= extra_info[i];
+        }
         let nonce = aead::Nonce::assume_unique_for_key(nonce_raw);
         let data_len = payload.len();
         if data_len < AES_GCM_ENCRYPTION_RESERVED {
@@ -88,7 +97,7 @@ impl AesGcmCipher {
                 payload[data_len - AES_GCM_ENCRYPTION_RESERVED
                     ..data_len - AES_GCM_ENCRYPTION_RESERVED + 16]
                     .copy_from_slice(tag);
-                payload[data_len - 12..].copy_from_slice(&nonce_raw);
+                payload[data_len - 12..].copy_from_slice(&random);
                 Ok(())
             }
             Err(e) => Err(anyhow!("Encryption failed:{:?}", e)),
@@ -103,6 +112,6 @@ fn test_aes_gcm() {
     let mut data = src;
     d.encrypt([0; 12], &mut data).unwrap();
     println!("{:?}", data);
-    let len = d.decrypt(&mut data).unwrap();
+    let len = d.decrypt([0; 12], &mut data).unwrap();
     assert_eq!(&data[..len], &src[..len]);
 }
