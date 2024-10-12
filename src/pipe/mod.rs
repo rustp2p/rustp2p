@@ -477,7 +477,11 @@ impl PipeLine {
                             if rs.is_encrypt != self.pipe_context.aes_gcm_cipher.is_some() {
                                 return Ok(Err(HandleError::new(
                                     route_key,
-                                    Error::Any(anyhow::anyhow!("Inconsistent encryption status")),
+                                    Error::Any(anyhow::anyhow!(
+                                        "Inconsistent encryption status: data tag-{} current tag-{}",
+                                        rs.is_encrypt,
+                                        self.pipe_context.aes_gcm_cipher.is_some()
+                                    )),
                                 )));
                             }
                             if let Some(cipher) = self.pipe_context.aes_gcm_cipher.as_ref() {
