@@ -35,6 +35,9 @@ impl SendPacket {
     pub fn reserve(&mut self, additional: usize) {
         self.buf.reserve(additional);
     }
+    pub fn capacity(&self) -> usize {
+        self.buf.capacity() - HEAD_LEN
+    }
     /// Copies all elements from src into self, using a memcpy.
     /// The length of src must be the same as self.
     /// # Panics
