@@ -4,26 +4,10 @@ use rand::RngCore;
 use ring::aead;
 use ring::aead::{LessSafeKey, UnboundKey};
 
+#[derive(Clone)]
 pub enum AesGcmCipher {
     AesGCM128(LessSafeKey, [u8; 16]),
     AesGCM256(LessSafeKey, [u8; 32]),
-}
-
-impl Clone for AesGcmCipher {
-    fn clone(&self) -> Self {
-        match &self {
-            AesGcmCipher::AesGCM128(_, key) => {
-                let c =
-                    LessSafeKey::new(UnboundKey::new(&aead::AES_128_GCM, key.as_slice()).unwrap());
-                AesGcmCipher::AesGCM128(c, *key)
-            }
-            AesGcmCipher::AesGCM256(_, key) => {
-                let c =
-                    LessSafeKey::new(UnboundKey::new(&aead::AES_256_GCM, key.as_slice()).unwrap());
-                AesGcmCipher::AesGCM256(c, *key)
-            }
-        }
-    }
 }
 
 impl AesGcmCipher {
