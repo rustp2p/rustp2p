@@ -1,17 +1,4 @@
-use anyhow::anyhow;
-use async_shutdown::ShutdownManager;
-use bytes::BytesMut;
-use dashmap::DashMap;
-use rust_p2p_core::nat::NatType;
-use rust_p2p_core::route::route_table::RouteTable;
-use rust_p2p_core::route::{ConnectProtocol, Route, RouteKey};
-use std::collections::HashMap;
-use std::net::SocketAddr;
-use std::ops::{Deref, DerefMut};
-use std::sync::Arc;
-use std::time::UNIX_EPOCH;
-use tokio::sync::mpsc::Sender;
-
+#[cfg(feature = "aes-gcm")]
 use crate::cipher::aes_gcm::{cipher, AES_GCM_ENCRYPTION_RESERVED};
 use crate::config::PipeConfig;
 use crate::error::{Error, Result};
@@ -22,11 +9,23 @@ use crate::protocol::id_route::IDRouteReplyPacket;
 use crate::protocol::node_id::{GroupCode, NodeID};
 use crate::protocol::protocol_type::ProtocolType;
 use crate::protocol::{broadcast, NetPacket, HEAD_LEN};
+use async_shutdown::ShutdownManager;
+use bytes::BytesMut;
+use dashmap::DashMap;
 pub use pipe_context::NodeAddress;
 pub use pipe_context::PeerNodeAddress;
+use rust_p2p_core::nat::NatType;
 use rust_p2p_core::pipe::recycle::RecycleBuf;
 use rust_p2p_core::punch::PunchConsultInfo;
+use rust_p2p_core::route::route_table::RouteTable;
+use rust_p2p_core::route::{ConnectProtocol, Route, RouteKey};
 pub use send_packet::SendPacket;
+use std::collections::HashMap;
+use std::net::SocketAddr;
+use std::ops::{Deref, DerefMut};
+use std::sync::Arc;
+use std::time::UNIX_EPOCH;
+use tokio::sync::mpsc::Sender;
 
 mod maintain;
 mod pipe_context;
@@ -84,6 +83,7 @@ impl Pipe {
                 x.push_str(":3478");
             }
         }
+        #[cfg(feature = "aes-gcm")]
         let cipher = config.encryption.clone().map(cipher);
 
         let config: rust_p2p_core::pipe::config::PipeConfig = config.into();
@@ -110,6 +110,7 @@ impl Pipe {
             local_tcp_port,
             default_interface.clone(),
             dns,
+            #[cfg(feature = "aes-gcm")]
             cipher,
         );
         if let Some(group_code) = group_code {
@@ -359,6 +360,7 @@ impl PipeWriter {
             packet.set_group_code(&group_code);
             packet.set_src_id(&src_id);
             packet.set_dest_id(dest_id);
+            #[cfg(feature = "aes-gcm")]
             if packet.is_user_data() {
                 if let Some(cipher) = self.pipe_context.aes_gcm_cipher.as_ref() {
                     let data_len = packet.len();
@@ -468,29 +470,32 @@ impl PipeLine {
             return match self.handle(RecvResult::new(&mut block, route_key)).await {
                 Ok(handle_result) => {
                     if let Some(rs) = handle_result {
-                        if rs.is_encrypt != self.pipe_context.aes_gcm_cipher.is_some() {
-                            return Ok(Err(HandleError::new(
-                                route_key,
-                                Error::Any(anyhow!("Inconsistent encryption status")),
-                            )));
-                        }
-                        let end_index = if let Some(cipher) =
-                            self.pipe_context.aes_gcm_cipher.as_ref()
+                        #[cfg(feature = "aes-gcm")]
+                        let mut rs = rs;
+                        #[cfg(feature = "aes-gcm")]
                         {
-                            match cipher
-                                .decrypt(tag(&rs.src_id, &rs.dest_id), &mut block[rs.start..rs.end])
-                            {
-                                Ok(_len) => rs.end - AES_GCM_ENCRYPTION_RESERVED,
-                                Err(e) => {
-                                    return Ok(Err(HandleError::new(route_key, Error::Any(e))))
+                            if rs.is_encrypt != self.pipe_context.aes_gcm_cipher.is_some() {
+                                return Ok(Err(HandleError::new(
+                                    route_key,
+                                    Error::Any(anyhow::anyhow!("Inconsistent encryption status")),
+                                )));
+                            }
+                            if let Some(cipher) = self.pipe_context.aes_gcm_cipher.as_ref() {
+                                match cipher.decrypt(
+                                    tag(&rs.src_id, &rs.dest_id),
+                                    &mut block[rs.start..rs.end],
+                                ) {
+                                    Ok(_len) => rs.end -= AES_GCM_ENCRYPTION_RESERVED,
+                                    Err(e) => {
+                                        return Ok(Err(HandleError::new(route_key, Error::Any(e))))
+                                    }
                                 }
                             }
-                        } else {
-                            rs.end
-                        };
+                        }
+
                         return Ok(Ok(RecvUserData {
                             _start: rs.start,
-                            _end: end_index,
+                            _end: rs.end,
                             _src_id: rs.src_id,
                             _dest_id: rs.dest_id,
                             _route_key: rs.route_key,
@@ -723,6 +728,7 @@ impl PipeLine {
                     route_key,
                     ttl: packet.ttl(),
                     max_ttl: packet.max_ttl(),
+                    #[cfg(feature = "aes-gcm")]
                     is_encrypt: packet.is_encrypt(),
                 }))
             }
@@ -751,6 +757,7 @@ impl PipeLine {
                         route_key,
                         ttl: packet.ttl(),
                         max_ttl: packet.max_ttl(),
+                        #[cfg(feature = "aes-gcm")]
                         is_encrypt: packet.is_encrypt(),
                     }));
                 }
@@ -959,6 +966,7 @@ struct HandleResultInner {
     pub(crate) route_key: RouteKey,
     pub(crate) ttl: u8,
     pub(crate) max_ttl: u8,
+    #[cfg(feature = "aes-gcm")]
     pub(crate) is_encrypt: bool,
 }
 
@@ -1049,6 +1057,7 @@ impl HandleError {
     }
 }
 
+#[cfg(feature = "aes-gcm")]
 fn tag(src_id: &NodeID, dest_id: &NodeID) -> [u8; 12] {
     let mut tmp = [0; 12];
     tmp[..4].copy_from_slice(src_id.as_ref());

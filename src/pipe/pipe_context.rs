@@ -1,9 +1,5 @@
 #![allow(clippy::type_complexity)]
-use std::net::SocketAddr;
-use std::str::FromStr;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
-
+#[cfg(feature = "aes-gcm")]
 use crate::cipher::aes_gcm::AesGcmCipher;
 use crate::config::punch_info::NodePunchInfo;
 use crate::error::Error;
@@ -18,6 +14,10 @@ use rust_p2p_core::punch::{PunchConsultInfo, PunchModelBox};
 use rust_p2p_core::route::route_table::RouteTable;
 use rust_p2p_core::route::Index;
 use rust_p2p_core::socket::LocalInterface;
+use std::net::SocketAddr;
+use std::str::FromStr;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 #[derive(Clone)]
 pub struct PipeContext {
@@ -31,6 +31,7 @@ pub struct PipeContext {
     default_interface: Option<LocalInterface>,
     dns: Vec<String>,
     pub(crate) other_route_table: Arc<DashMap<GroupCode, RouteTable<NodeID>>>,
+    #[cfg(feature = "aes-gcm")]
     pub(crate) aes_gcm_cipher: Option<AesGcmCipher>,
 }
 pub type DirectNodes = Vec<(NodeAddress, u16, Option<(GroupCode, NodeID)>)>;
@@ -40,7 +41,7 @@ impl PipeContext {
         local_tcp_port: u16,
         default_interface: Option<LocalInterface>,
         dns: Option<Vec<String>>,
-        aes_gcm_cipher: Option<AesGcmCipher>,
+        #[cfg(feature = "aes-gcm")] aes_gcm_cipher: Option<AesGcmCipher>,
     ) -> Self {
         let punch_info = NodePunchInfo::new(local_udp_ports, local_tcp_port);
         Self {
@@ -53,6 +54,7 @@ impl PipeContext {
             default_interface,
             dns: dns.unwrap_or_default(),
             other_route_table: Arc::new(Default::default()),
+            #[cfg(feature = "aes-gcm")]
             aes_gcm_cipher,
         }
     }

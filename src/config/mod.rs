@@ -40,6 +40,7 @@ pub struct PipeConfig {
     pub mapping_addrs: Option<Vec<NodeAddress>>,
     pub dns: Option<Vec<String>>,
     pub recycle_buf_cap: usize,
+    #[cfg(feature = "aes-gcm")]
     pub encryption: Option<String>,
 }
 
@@ -76,6 +77,7 @@ impl Default for PipeConfig {
             mapping_addrs: None,
             dns: None,
             recycle_buf_cap: 64,
+            #[cfg(feature = "aes-gcm")]
             encryption: None,
         }
     }
@@ -166,6 +168,7 @@ impl PipeConfig {
         self.recycle_buf_cap = recycle_buf_cap;
         self
     }
+    #[cfg(feature = "aes-gcm")]
     pub fn set_encryption(mut self, encryption: String) -> Self {
         self.encryption.replace(encryption);
         self

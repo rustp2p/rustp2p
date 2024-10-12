@@ -102,6 +102,7 @@ impl SendPacket {
     }
 }
 impl SendPacket {
+    #[cfg(feature = "aes-gcm")]
     pub(crate) fn is_user_data(&self) -> bool {
         let packet = NetPacket::unchecked(self.buf());
         if let Ok(p) = packet.protocol() {
