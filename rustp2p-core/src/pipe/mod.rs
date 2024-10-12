@@ -269,4 +269,11 @@ impl PipeLine {
             PipeLine::Extend(_) => ConnectProtocol::Extend,
         }
     }
+    pub fn remote_addr(&self) -> Option<SocketAddr> {
+        match self {
+            PipeLine::Udp(_) => None,
+            PipeLine::Tcp(tcp) => Some(tcp.route_key().addr()),
+            PipeLine::Extend(_) => None,
+        }
+    }
 }

@@ -4,7 +4,7 @@ use bytes::BytesMut;
 use dashmap::DashMap;
 use rust_p2p_core::nat::NatType;
 use rust_p2p_core::route::route_table::RouteTable;
-use rust_p2p_core::route::{Route, RouteKey};
+use rust_p2p_core::route::{ConnectProtocol, Route, RouteKey};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::ops::{Deref, DerefMut};
@@ -504,6 +504,12 @@ impl PipeLine {
                 Err(e) => Ok(Err(HandleError::new(route_key, e))),
             };
         }
+    }
+    pub fn protocol(&self) -> ConnectProtocol {
+        self.pipe_line.protocol()
+    }
+    pub fn remote_addr(&self) -> Option<SocketAddr> {
+        self.pipe_line.remote_addr()
     }
     pub(crate) async fn send_to<B: AsRef<[u8]>>(
         &self,
