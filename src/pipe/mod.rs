@@ -1016,6 +1016,9 @@ impl RecvUserData {
     pub fn payload(&self) -> &[u8] {
         &self._data[self._start..self._end]
     }
+    pub fn payload_mut(&mut self) -> &mut [u8] {
+        &mut self._data[self._start..self._end]
+    }
     pub fn src_id(&self) -> NodeID {
         self._src_id
     }
