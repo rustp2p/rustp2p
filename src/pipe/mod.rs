@@ -359,13 +359,14 @@ impl PipeWriter {
             packet.set_group_code(&group_code);
             packet.set_src_id(&src_id);
             packet.set_dest_id(dest_id);
+            if packet.is_user_data() {
+                if let Some(cipher) = self.pipe_context.aes_gcm_cipher.as_ref() {
+                    let data_len = packet.len();
+                    packet.resize(data_len + AES_GCM_ENCRYPTION_RESERVED, 0);
 
-            if let Some(cipher) = self.pipe_context.aes_gcm_cipher.as_ref() {
-                let data_len = packet.len();
-                packet.resize(data_len + AES_GCM_ENCRYPTION_RESERVED, 0);
-
-                cipher.encrypt(tag(&src_id, dest_id), &mut packet)?;
-                packet.set_encrypt_flag(true);
+                    cipher.encrypt(tag(&src_id, dest_id), &mut packet)?;
+                    packet.set_encrypt_flag(true);
+                }
             }
             self.send_to0(packet.into_buf(), &group_code, &src_id, dest_id)
                 .await

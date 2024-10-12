@@ -101,6 +101,15 @@ impl SendPacket {
         packet.set_encrypt_flag(flag);
     }
 }
+impl SendPacket {
+    pub(crate) fn is_user_data(&self) -> bool {
+        let packet = NetPacket::unchecked(self.buf());
+        if let Ok(p) = packet.protocol() {
+            return p == ProtocolType::UserData;
+        }
+        false
+    }
+}
 
 impl Deref for SendPacket {
     type Target = [u8];
