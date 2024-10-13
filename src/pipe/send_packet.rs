@@ -99,6 +99,7 @@ impl SendPacket {
         let mut packet = NetPacket::unchecked(self.buf_mut());
         packet.set_dest_id(id);
     }
+    #[cfg(feature = "aes-gcm")]
     pub(crate) fn set_encrypt_flag(&mut self, flag: bool) {
         let mut packet = NetPacket::unchecked(self.buf_mut());
         packet.set_encrypt_flag(flag);

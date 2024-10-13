@@ -89,9 +89,9 @@ impl Pipe {
         let config: rust_p2p_core::pipe::config::PipeConfig = config.into();
         let mut recycle_buf: Option<RecycleBuf> = None;
         if let Some(v) = config.tcp_pipe_config.as_ref() {
-            recycle_buf = v.recycle_buf.clone();
+            recycle_buf.clone_from(&v.recycle_buf);
         } else if let Some(v) = config.udp_pipe_config.as_ref() {
-            recycle_buf = v.recycle_buf.clone();
+            recycle_buf.clone_from(&v.recycle_buf);
         };
         let (pipe, puncher, idle_route_manager) = rust_p2p_core::pipe::pipe::<NodeID>(config)?;
         let writer_ref = pipe.writer_ref();

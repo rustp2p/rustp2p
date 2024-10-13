@@ -284,7 +284,7 @@ impl From<PipeConfig> for rust_p2p_core::pipe::config::PipeConfig {
         };
         let udp_pipe_config = value.udp_pipe_config.map(|v| {
             let mut config: rust_p2p_core::pipe::config::UdpPipeConfig = v.into();
-            config.recycle_buf = recycle_buf.clone();
+            config.recycle_buf.clone_from(&recycle_buf);
             config
         });
         let tcp_pipe_config = value.tcp_pipe_config.map(|v| {
