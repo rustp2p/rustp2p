@@ -1,13 +1,8 @@
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-
-use anyhow::{anyhow, Context};
-use network_interface::{NetworkInterface, NetworkInterfaceConfig};
-use socket2::Protocol;
-
-#[cfg(unix)]
-pub use unix::*;
 #[cfg(windows)]
-pub use windows::*;
+use crate::socket::windows::ignore_conn_reset;
+use anyhow::Context;
+use socket2::Protocol;
+use std::net::SocketAddr;
 
 #[cfg(unix)]
 mod unix;
@@ -165,24 +160,4 @@ pub fn bind_udp(
     default_interface: Option<&LocalInterface>,
 ) -> anyhow::Result<socket2::Socket> {
     bind_udp_ops(addr, true, default_interface).with_context(|| format!("bind_udp {}", addr))
-}
-
-/// Obtain network interface with the specified IP address
-pub fn get_interface(dest_ip: Ipv4Addr) -> anyhow::Result<LocalInterface> {
-    let network_interfaces = NetworkInterface::show()?;
-    for iface in network_interfaces {
-        for addr in iface.addr {
-            if let IpAddr::V4(ip) = addr.ip() {
-                if ip == dest_ip {
-                    return Ok(LocalInterface {
-                        #[cfg(not(any(target_os = "linux", target_os = "android")))]
-                        index: iface.index,
-                        #[cfg(any(target_os = "linux", target_os = "android"))]
-                        name: iface.name,
-                    });
-                }
-            }
-        }
-    }
-    Err(anyhow!("No network card with IP {} found", dest_ip))
 }

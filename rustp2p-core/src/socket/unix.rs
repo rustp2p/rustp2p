@@ -1,5 +1,4 @@
-use crate::socket::{get_interface, LocalInterface, VntSocketTrait};
-use std::net::Ipv4Addr;
+use crate::socket::{LocalInterface, VntSocketTrait};
 
 #[cfg(target_os = "freebsd")]
 impl VntSocketTrait for socket2::Socket {
@@ -22,16 +21,4 @@ impl VntSocketTrait for socket2::Socket {
         self.bind_device_by_index_v4(std::num::NonZeroU32::new(interface.index))?;
         Ok(())
     }
-}
-
-/// Obtain the optimal interface with the specified IP address
-pub fn get_best_interface(dest_ip: Ipv4Addr) -> anyhow::Result<LocalInterface> {
-    match get_interface(dest_ip) {
-        Ok(iface) => return Ok(iface),
-        Err(e) => {
-            log::warn!("not find interface e={:?},ip={}", e, dest_ip);
-        }
-    }
-    // 应该再查路由表找到默认路由的
-    Ok(LocalInterface::default())
 }
