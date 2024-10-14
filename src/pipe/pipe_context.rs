@@ -1,6 +1,6 @@
 #![allow(clippy::type_complexity)]
-#[cfg(feature = "aes-gcm")]
-use crate::cipher::aes_gcm::AesGcmCipher;
+#[cfg(any(feature = "aes-gcm", feature = "chacha20-poly1305"))]
+use crate::cipher::Cipher;
 use crate::config::punch_info::NodePunchInfo;
 use crate::error::Error;
 use crate::extend::dns_query::{dns_query_all, dns_query_txt};
@@ -31,8 +31,8 @@ pub struct PipeContext {
     default_interface: Option<LocalInterface>,
     dns: Vec<String>,
     pub(crate) other_route_table: Arc<DashMap<GroupCode, RouteTable<NodeID>>>,
-    #[cfg(feature = "aes-gcm")]
-    pub(crate) aes_gcm_cipher: Option<AesGcmCipher>,
+    #[cfg(any(feature = "aes-gcm", feature = "chacha20-poly1305"))]
+    pub(crate) cipher: Option<Cipher>,
 }
 pub type DirectNodes = Vec<(NodeAddress, u16, Option<(GroupCode, NodeID)>)>;
 impl PipeContext {
@@ -41,7 +41,7 @@ impl PipeContext {
         local_tcp_port: u16,
         default_interface: Option<LocalInterface>,
         dns: Option<Vec<String>>,
-        #[cfg(feature = "aes-gcm")] aes_gcm_cipher: Option<AesGcmCipher>,
+        #[cfg(any(feature = "aes-gcm", feature = "chacha20-poly1305"))] cipher: Option<Cipher>,
     ) -> Self {
         let punch_info = NodePunchInfo::new(local_udp_ports, local_tcp_port);
         Self {
@@ -54,8 +54,8 @@ impl PipeContext {
             default_interface,
             dns: dns.unwrap_or_default(),
             other_route_table: Arc::new(Default::default()),
-            #[cfg(feature = "aes-gcm")]
-            aes_gcm_cipher,
+            #[cfg(any(feature = "aes-gcm", feature = "chacha20-poly1305"))]
+            cipher,
         }
     }
     pub fn store_self_id(&self, node_id: NodeID) -> crate::error::Result<()> {

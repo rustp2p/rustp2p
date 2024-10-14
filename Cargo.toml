@@ -63,3 +63,4 @@ crossbeam-queue = "0.3.11"
 [features]
 default = []
 aes-gcm = ["ring"]
+chacha20-poly1305 = ["ring"]

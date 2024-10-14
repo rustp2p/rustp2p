@@ -3,20 +3,21 @@ use std::io::IoSlice;
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use crate::pipe::{NodeAddress, PeerNodeAddress};
-use crate::protocol::node_id::{GroupCode, NodeID};
-use crate::protocol::{NetPacket, HEAD_LEN};
 use async_trait::async_trait;
 use bytes::{Buf, BytesMut};
-use rust_p2p_core::pipe::recycle::RecycleBuf;
-use rust_p2p_core::pipe::tcp_pipe::{Decoder, Encoder, InitCodec};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 
-pub(crate) mod punch_info;
-
+use rust_p2p_core::pipe::recycle::RecycleBuf;
+use rust_p2p_core::pipe::tcp_pipe::{Decoder, Encoder, InitCodec};
 pub use rust_p2p_core::pipe::udp_pipe::Model;
 pub use rust_p2p_core::socket::LocalInterface;
+
+use crate::pipe::{NodeAddress, PeerNodeAddress};
+use crate::protocol::node_id::{GroupCode, NodeID};
+use crate::protocol::{NetPacket, HEAD_LEN};
+
+pub(crate) mod punch_info;
 
 pub(crate) const ROUTE_IDLE_TIME: Duration = Duration::from_secs(10);
 
@@ -40,8 +41,8 @@ pub struct PipeConfig {
     pub mapping_addrs: Option<Vec<NodeAddress>>,
     pub dns: Option<Vec<String>>,
     pub recycle_buf_cap: usize,
-    #[cfg(feature = "aes-gcm")]
-    pub encryption: Option<String>,
+    #[cfg(any(feature = "aes-gcm", feature = "chacha20-poly1305"))]
+    pub encryption: Option<crate::cipher::Algorithm>,
 }
 
 impl Default for PipeConfig {
@@ -77,7 +78,7 @@ impl Default for PipeConfig {
             mapping_addrs: None,
             dns: None,
             recycle_buf_cap: 64,
-            #[cfg(feature = "aes-gcm")]
+            #[cfg(any(feature = "aes-gcm", feature = "chacha20-poly1305"))]
             encryption: None,
         }
     }
@@ -168,8 +169,8 @@ impl PipeConfig {
         self.recycle_buf_cap = recycle_buf_cap;
         self
     }
-    #[cfg(feature = "aes-gcm")]
-    pub fn set_encryption(mut self, encryption: String) -> Self {
+    #[cfg(any(feature = "aes-gcm", feature = "chacha20-poly1305"))]
+    pub fn set_encryption(mut self, encryption: crate::cipher::Algorithm) -> Self {
         self.encryption.replace(encryption);
         self
     }

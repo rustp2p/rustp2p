@@ -8,6 +8,7 @@ use mimalloc_rust::GlobalMiMalloc;
 use pnet_packet::icmp::IcmpTypes;
 use pnet_packet::ip::IpNextHeaderProtocols;
 use pnet_packet::Packet;
+use rustp2p::cipher::Algorithm;
 use rustp2p::config::{PipeConfig, TcpPipeConfig, UdpPipeConfig};
 use rustp2p::error::*;
 use rustp2p::pipe::{PeerNodeAddress, Pipe, PipeLine, PipeWriter, RecvUserData};
@@ -88,7 +89,7 @@ pub async fn main() -> Result<()> {
         .set_tcp_pipe_config(tcp_config)
         .set_direct_addrs(addrs)
         .set_group_code(string_to_group_code(&group_code))
-        .set_encryption("password".to_string())
+        .set_encryption(Algorithm::AesGcm("password".to_string()))
         .set_node_id(self_id.into());
 
     let mut pipe = Pipe::new(config).await?;

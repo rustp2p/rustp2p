@@ -1,4 +1,4 @@
-pub const AES_GCM_ENCRYPTION_RESERVED: usize = 16 + 12;
+pub const ENCRYPTION_RESERVED: usize = 16 + 12;
 mod ring_aes_gcm_cipher;
 
 pub use ring_aes_gcm_cipher::*;

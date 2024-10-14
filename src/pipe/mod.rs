@@ -1,5 +1,3 @@
-#[cfg(feature = "aes-gcm")]
-use crate::cipher::aes_gcm::{cipher, AES_GCM_ENCRYPTION_RESERVED};
 use crate::config::PipeConfig;
 use crate::error::{Error, Result};
 use crate::extend::byte_pool::{Block, BufferPool};
@@ -83,8 +81,8 @@ impl Pipe {
                 x.push_str(":3478");
             }
         }
-        #[cfg(feature = "aes-gcm")]
-        let cipher = config.encryption.clone().map(cipher);
+        #[cfg(any(feature = "aes-gcm", feature = "chacha20-poly1305"))]
+        let cipher = config.encryption.clone().map(crate::cipher::Cipher::from);
 
         let config: rust_p2p_core::pipe::config::PipeConfig = config.into();
         let mut recycle_buf: Option<RecycleBuf> = None;
@@ -110,7 +108,7 @@ impl Pipe {
             local_tcp_port,
             default_interface.clone(),
             dns,
-            #[cfg(feature = "aes-gcm")]
+            #[cfg(any(feature = "aes-gcm", feature = "chacha20-poly1305"))]
             cipher,
         );
         if let Some(group_code) = group_code {
@@ -360,11 +358,11 @@ impl PipeWriter {
             packet.set_group_code(&group_code);
             packet.set_src_id(&src_id);
             packet.set_dest_id(dest_id);
-            #[cfg(feature = "aes-gcm")]
+            #[cfg(any(feature = "aes-gcm", feature = "chacha20-poly1305"))]
             if packet.is_user_data() {
-                if let Some(cipher) = self.pipe_context.aes_gcm_cipher.as_ref() {
+                if let Some(cipher) = self.pipe_context.cipher.as_ref() {
                     let data_len = packet.len();
-                    packet.resize(data_len + AES_GCM_ENCRYPTION_RESERVED, 0);
+                    packet.resize(data_len + cipher.reserved_len(), 0);
 
                     cipher.encrypt(tag(&src_id, dest_id), &mut packet)?;
                     packet.set_encrypt_flag(true);
@@ -470,26 +468,26 @@ impl PipeLine {
             return match self.handle(RecvResult::new(&mut block, route_key)).await {
                 Ok(handle_result) => {
                     if let Some(rs) = handle_result {
-                        #[cfg(feature = "aes-gcm")]
+                        #[cfg(any(feature = "aes-gcm", feature = "chacha20-poly1305"))]
                         let mut rs = rs;
-                        #[cfg(feature = "aes-gcm")]
+                        #[cfg(any(feature = "aes-gcm", feature = "chacha20-poly1305"))]
                         {
-                            if rs.is_encrypt != self.pipe_context.aes_gcm_cipher.is_some() {
+                            if rs.is_encrypt != self.pipe_context.cipher.is_some() {
                                 return Ok(Err(HandleError::new(
                                     route_key,
                                     Error::Any(anyhow::anyhow!(
                                         "Inconsistent encryption status: data tag-{} current tag-{}",
                                         rs.is_encrypt,
-                                        self.pipe_context.aes_gcm_cipher.is_some()
+                                        self.pipe_context.cipher.is_some()
                                     )),
                                 )));
                             }
-                            if let Some(cipher) = self.pipe_context.aes_gcm_cipher.as_ref() {
+                            if let Some(cipher) = self.pipe_context.cipher.as_ref() {
                                 match cipher.decrypt(
                                     tag(&rs.src_id, &rs.dest_id),
                                     &mut block[rs.start..rs.end],
                                 ) {
-                                    Ok(_len) => rs.end -= AES_GCM_ENCRYPTION_RESERVED,
+                                    Ok(_len) => rs.end -= cipher.reserved_len(),
                                     Err(e) => {
                                         return Ok(Err(HandleError::new(route_key, Error::Any(e))))
                                     }
