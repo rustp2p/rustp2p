@@ -20,7 +20,7 @@ pub(crate) trait VntSocketTrait {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct LocalInterface {
     #[cfg(not(any(target_os = "linux", target_os = "android")))]
     pub index: u32,
