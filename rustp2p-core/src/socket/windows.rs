@@ -13,6 +13,7 @@ use crate::socket::{LocalInterface, VntSocketTrait};
 
 impl VntSocketTrait for socket2::Socket {
     fn set_ip_unicast_if(&self, interface: &LocalInterface) -> crate::error::Result<()> {
+        log::debug!("set_ip_unicast_if ={interface:?}");
         let index = interface.index;
         let raw_socket = self.as_raw_socket();
         let result = unsafe {
