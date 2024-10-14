@@ -43,6 +43,8 @@ pub struct PipeConfig {
     pub recycle_buf_cap: usize,
     #[cfg(any(feature = "aes-gcm", feature = "chacha20-poly1305"))]
     pub encryption: Option<crate::cipher::Algorithm>,
+    pub default_interface: Option<LocalInterface>,
+    pub use_v6: bool,
 }
 
 impl Default for PipeConfig {
@@ -80,6 +82,8 @@ impl Default for PipeConfig {
             recycle_buf_cap: 64,
             #[cfg(any(feature = "aes-gcm", feature = "chacha20-poly1305"))]
             encryption: None,
+            default_interface: None,
+            use_v6: true,
         }
     }
 }
@@ -174,14 +178,20 @@ impl PipeConfig {
         self.encryption.replace(encryption);
         self
     }
+    pub fn set_default_interface(mut self, default_interface: LocalInterface) -> Self {
+        self.default_interface = Some(default_interface.clone());
+        self
+    }
+    pub fn set_use_v6(mut self, use_v6: bool) -> Self {
+        self.use_v6 = use_v6;
+        self
+    }
 }
 
 pub struct TcpPipeConfig {
     pub route_idle_time: Duration,
     pub tcp_multiplexing_limit: usize,
-    pub default_interface: Option<LocalInterface>,
     pub tcp_port: u16,
-    pub use_v6: bool,
 }
 
 impl Default for TcpPipeConfig {
@@ -189,9 +199,7 @@ impl Default for TcpPipeConfig {
         Self {
             route_idle_time: ROUTE_IDLE_TIME,
             tcp_multiplexing_limit: MULTI_PIPELINE,
-            default_interface: None,
             tcp_port: 0,
-            use_v6: true,
         }
     }
 }
@@ -205,16 +213,8 @@ impl TcpPipeConfig {
         self.route_idle_time = route_idle_time;
         self
     }
-    pub fn set_default_interface(mut self, default_interface: LocalInterface) -> Self {
-        self.default_interface = Some(default_interface.clone());
-        self
-    }
     pub fn set_tcp_port(mut self, tcp_port: u16) -> Self {
         self.tcp_port = tcp_port;
-        self
-    }
-    pub fn set_use_v6(mut self, use_v6: bool) -> Self {
-        self.use_v6 = use_v6;
         self
     }
 }
@@ -224,9 +224,7 @@ pub struct UdpPipeConfig {
     pub main_pipeline_num: usize,
     pub sub_pipeline_num: usize,
     pub model: Model,
-    pub default_interface: Option<LocalInterface>,
     pub udp_ports: Vec<u16>,
-    pub use_v6: bool,
 }
 
 impl Default for UdpPipeConfig {
@@ -235,9 +233,7 @@ impl Default for UdpPipeConfig {
             main_pipeline_num: MULTI_PIPELINE,
             sub_pipeline_num: UDP_SUB_PIPELINE_NUM,
             model: Model::Low,
-            default_interface: None,
             udp_ports: vec![0, 0],
-            use_v6: true,
         }
     }
 }
@@ -255,20 +251,13 @@ impl UdpPipeConfig {
         self.model = model;
         self
     }
-    pub fn set_default_interface(mut self, default_interface: LocalInterface) -> Self {
-        self.default_interface = Some(default_interface.clone());
-        self
-    }
+
     pub fn set_udp_ports(mut self, udp_ports: Vec<u16>) -> Self {
         self.udp_ports = udp_ports;
         self
     }
     pub fn set_simple_udp_port(mut self, udp_port: u16) -> Self {
         self.udp_ports = vec![udp_port];
-        self
-    }
-    pub fn set_use_v6(mut self, use_v6: bool) -> Self {
-        self.use_v6 = use_v6;
         self
     }
 }
@@ -286,11 +275,19 @@ impl From<PipeConfig> for rust_p2p_core::pipe::config::PipeConfig {
         let udp_pipe_config = value.udp_pipe_config.map(|v| {
             let mut config: rust_p2p_core::pipe::config::UdpPipeConfig = v.into();
             config.recycle_buf.clone_from(&recycle_buf);
+            config.use_v6 = value.use_v6;
+            config
+                .default_interface
+                .clone_from(&value.default_interface);
             config
         });
         let tcp_pipe_config = value.tcp_pipe_config.map(|v| {
             let mut config: rust_p2p_core::pipe::config::TcpPipeConfig = v.into();
             config.recycle_buf = recycle_buf;
+            config.use_v6 = value.use_v6;
+            config
+                .default_interface
+                .clone_from(&value.default_interface);
             config
         });
         rust_p2p_core::pipe::config::PipeConfig {
@@ -310,9 +307,9 @@ impl From<UdpPipeConfig> for rust_p2p_core::pipe::config::UdpPipeConfig {
             main_pipeline_num: value.main_pipeline_num,
             sub_pipeline_num: value.sub_pipeline_num,
             model: value.model,
-            default_interface: value.default_interface,
+            default_interface: None,
             udp_ports: value.udp_ports,
-            use_v6: value.use_v6,
+            use_v6: false,
             recycle_buf: None,
         }
     }
@@ -323,9 +320,9 @@ impl From<TcpPipeConfig> for rust_p2p_core::pipe::config::TcpPipeConfig {
         rust_p2p_core::pipe::config::TcpPipeConfig {
             route_idle_time: value.route_idle_time,
             tcp_multiplexing_limit: value.tcp_multiplexing_limit,
-            default_interface: value.default_interface,
+            default_interface: None,
             tcp_port: value.tcp_port,
-            use_v6: value.use_v6,
+            use_v6: false,
             init_codec: Box::new(LengthPrefixedInitCodec),
             recycle_buf: None,
         }

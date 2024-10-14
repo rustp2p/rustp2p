@@ -55,11 +55,7 @@ impl Pipe {
         let direct_addrs = config.direct_addrs.take();
         let mapping_addrs = config.mapping_addrs.take();
         let dns = config.dns.take();
-        let default_interface = if let Some(v) = &config.udp_pipe_config {
-            v.default_interface.clone()
-        } else {
-            None
-        };
+        let default_interface = config.default_interface.clone();
         let buffer_pool = if config.recycle_buf_cap > 0 {
             Some(BufferPool::new(
                 config.recycle_buf_cap,
