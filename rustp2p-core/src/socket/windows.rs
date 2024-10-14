@@ -4,10 +4,7 @@ use std::os::windows::io::AsRawSocket;
 
 use windows_sys::core::PCSTR;
 use windows_sys::Win32::NetworkManagement::IpHelper::GetBestInterfaceEx;
-use windows_sys::Win32::Networking::WinSock::{
-    htonl, setsockopt, WSAIoctl, AF_INET, IPPROTO_IP, IP_UNICAST_IF, SIO_UDP_CONNRESET, SOCKADDR,
-    SOCKADDR_IN, SOCKET_ERROR,
-};
+use windows_sys::Win32::Networking::WinSock::{htonl, setsockopt, WSAIoctl, AF_INET, IPPROTO_IP, IP_UNICAST_IF, SIO_UDP_CONNRESET, SOCKADDR, SOCKADDR_IN, SOCKET_ERROR, IPPROTO_IPV4};
 
 use crate::socket::{LocalInterface, VntSocketTrait};
 
@@ -20,7 +17,7 @@ impl VntSocketTrait for socket2::Socket {
             let best_interface = htonl(index);
             setsockopt(
                 raw_socket as usize,
-                IPPROTO_IP,
+                IPPROTO_IPV4,
                 IP_UNICAST_IF,
                 &best_interface as *const _ as PCSTR,
                 std::mem::size_of_val(&best_interface) as i32,
