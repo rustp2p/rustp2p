@@ -730,7 +730,7 @@ impl PipeLine {
                     route_key,
                     ttl: packet.ttl(),
                     max_ttl: packet.max_ttl(),
-                    #[cfg(feature = "aes-gcm")]
+                    #[cfg(any(feature = "aes-gcm", feature = "chacha20-poly1305"))]
                     is_encrypt: packet.is_encrypt(),
                 }))
             }
@@ -759,7 +759,7 @@ impl PipeLine {
                         route_key,
                         ttl: packet.ttl(),
                         max_ttl: packet.max_ttl(),
-                        #[cfg(feature = "aes-gcm")]
+                        #[cfg(any(feature = "aes-gcm", feature = "chacha20-poly1305"))]
                         is_encrypt: packet.is_encrypt(),
                     }));
                 }
@@ -968,7 +968,7 @@ struct HandleResultInner {
     pub(crate) route_key: RouteKey,
     pub(crate) ttl: u8,
     pub(crate) max_ttl: u8,
-    #[cfg(feature = "aes-gcm")]
+    #[cfg(any(feature = "aes-gcm", feature = "chacha20-poly1305"))]
     pub(crate) is_encrypt: bool,
 }
 
@@ -1062,7 +1062,7 @@ impl HandleError {
     }
 }
 
-#[cfg(feature = "aes-gcm")]
+#[cfg(any(feature = "aes-gcm", feature = "chacha20-poly1305"))]
 fn tag(src_id: &NodeID, dest_id: &NodeID) -> [u8; 12] {
     let mut tmp = [0; 12];
     tmp[..4].copy_from_slice(src_id.as_ref());

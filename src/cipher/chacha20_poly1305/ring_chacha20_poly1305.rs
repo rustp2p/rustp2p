@@ -53,7 +53,7 @@ impl ChaCha20Poly1305Cipher {
         let rs = self.cipher.seal_in_place_separate_tag(
             nonce,
             aead::Aad::empty(),
-            &mut payload[..data_len - crate::cipher::aes_gcm::ENCRYPTION_RESERVED],
+            &mut payload[..data_len - ENCRYPTION_RESERVED],
         );
         match rs {
             Ok(tag) => {
