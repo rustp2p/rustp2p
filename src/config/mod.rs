@@ -83,7 +83,10 @@ impl Default for PipeConfig {
             #[cfg(any(feature = "aes-gcm", feature = "chacha20-poly1305"))]
             encryption: None,
             default_interface: None,
-            use_v6: true,
+            use_v6: rust_p2p_core::pipe::config::UdpPipeConfig::default()
+                .set_use_v6(true)
+                .check()
+                .is_ok(),
         }
     }
 }
