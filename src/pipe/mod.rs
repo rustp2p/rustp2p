@@ -225,6 +225,9 @@ impl PipeWriter {
     pub fn lookup_route(&self, node_id: &NodeID) -> Option<Vec<Route>> {
         self.pipe_writer.route_table().route(node_id)
     }
+    pub fn nodes(&self) -> Vec<NodeID> {
+        self.pipe_writer.route_table().route_table_ids()
+    }
     pub(crate) async fn send_to_id_by_code<B: AsRef<[u8]>>(
         &self,
         buf: &NetPacket<B>,
