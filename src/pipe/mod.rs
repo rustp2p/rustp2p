@@ -228,6 +228,32 @@ impl PipeWriter {
     pub fn nodes(&self) -> Vec<NodeID> {
         self.pipe_writer.route_table().route_table_ids()
     }
+    pub fn other_group_codes(&self) -> Vec<GroupCode> {
+        self.pipe_context
+            .other_route_table
+            .iter()
+            .map(|v| *v.key())
+            .collect()
+    }
+    pub fn other_group_nodes(&self, group_code: &GroupCode) -> Option<Vec<NodeID>> {
+        self.pipe_context
+            .other_route_table
+            .get(group_code)
+            .map(|v| v.route_table_ids())
+    }
+    pub fn other_group_route(
+        &self,
+        group_code: &GroupCode,
+        node_id: &NodeID,
+    ) -> Option<Vec<Route>> {
+        self.pipe_context
+            .other_route_table
+            .get(group_code)
+            .map(|v| v.route(node_id))?
+    }
+    pub fn current_group_code(&self) -> GroupCode {
+        self.pipe_context.load_group_code()
+    }
     pub(crate) async fn send_to_id_by_code<B: AsRef<[u8]>>(
         &self,
         buf: &NetPacket<B>,
