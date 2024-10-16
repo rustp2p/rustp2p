@@ -631,6 +631,30 @@ impl PipeLine {
                     self.send_to_route(packet.buffer(), &route_key).await?;
                 }
                 ProtocolType::EchoReply => {}
+                ProtocolType::TimestampRequest => {
+                    packet.set_protocol(ProtocolType::TimestampReply);
+                    packet.set_ttl(packet.max_ttl());
+                    packet.set_dest_id(&NodeID::unspecified());
+                    packet.set_src_id(&self_id);
+                    packet.set_group_code(&self_group_code);
+                    self.send_to_route(packet.buffer(), &route_key).await?;
+                }
+                ProtocolType::TimestampReply => {
+                    // update rtt
+                    let time = packet.payload();
+                    if time.len() != 4 {
+                        return Err(Error::InvalidArgument("time error".into()));
+                    }
+                    let time = u32::from_be_bytes(time.try_into().unwrap());
+                    let now = std::time::SystemTime::now()
+                        .duration_since(UNIX_EPOCH)?
+                        .as_millis() as u32;
+                    let rtt = now.saturating_sub(time);
+                    self.pipe_context
+                        .other_route_table
+                        .get(&src_group_code)
+                        .map(|v| v.add_route(src_id, Route::from(route_key, metric, rtt)));
+                }
                 _ => {}
             }
             return Ok(());
