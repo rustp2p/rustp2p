@@ -257,6 +257,16 @@ impl PipeWriter {
     pub fn route_to_node_id(&self, route: &RouteKey) -> Option<NodeID> {
         self.pipe_writer.route_table().route_to_id(route)
     }
+    pub fn other_route_to_node_id(
+        &self,
+        group_code: &GroupCode,
+        route: &RouteKey,
+    ) -> Option<NodeID> {
+        self.pipe_context
+            .other_route_table
+            .get(group_code)
+            .map(|v| v.route_to_id(route))?
+    }
     pub(crate) async fn send_to_id_by_code<B: AsRef<[u8]>>(
         &self,
         buf: &NetPacket<B>,
