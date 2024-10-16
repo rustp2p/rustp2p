@@ -28,6 +28,27 @@ impl NodeID {
     }
 }
 
+impl From<NodeID> for [u8; 4] {
+    fn from(value: NodeID) -> Self {
+        value.0
+    }
+}
+impl From<NodeID> for u32 {
+    fn from(value: NodeID) -> Self {
+        u32::from_be_bytes(value.0)
+    }
+}
+impl From<NodeID> for i32 {
+    fn from(value: NodeID) -> Self {
+        i32::from_be_bytes(value.0)
+    }
+}
+impl From<NodeID> for Ipv4Addr {
+    fn from(value: NodeID) -> Self {
+        Ipv4Addr::from(value.0)
+    }
+}
+
 impl From<[u8; 4]> for NodeID {
     fn from(value: [u8; 4]) -> Self {
         NodeID(value)
