@@ -4,7 +4,7 @@ use rust_p2p_core::punch::{PunchConsultInfo, PunchModelBox};
 use rust_p2p_core::route::Index;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct NodePunchInfo {
     pub punch_model_box: PunchModelBox,
     pub local_udp_ports: Vec<u16>,

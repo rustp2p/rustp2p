@@ -8,15 +8,15 @@ use bytes::{Buf, BytesMut};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 
-use rust_p2p_core::pipe::recycle::RecycleBuf;
-use rust_p2p_core::pipe::tcp_pipe::{Decoder, Encoder, InitCodec};
-pub use rust_p2p_core::pipe::udp_pipe::Model;
-pub use rust_p2p_core::route::*;
-pub use rust_p2p_core::socket::LocalInterface;
-
 use crate::pipe::{NodeAddress, PeerNodeAddress};
 use crate::protocol::node_id::{GroupCode, NodeID};
 use crate::protocol::{NetPacket, HEAD_LEN};
+use rust_p2p_core::pipe::recycle::RecycleBuf;
+use rust_p2p_core::pipe::tcp_pipe::{Decoder, Encoder, InitCodec};
+pub use rust_p2p_core::pipe::udp_pipe::Model;
+pub use rust_p2p_core::punch::config::{PunchModel, PunchModelBox};
+pub use rust_p2p_core::route::*;
+pub use rust_p2p_core::socket::LocalInterface;
 
 pub(crate) mod punch_info;
 
