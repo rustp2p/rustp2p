@@ -577,6 +577,9 @@ impl PipeLine {
         let metric = packet.max_ttl() - packet.ttl();
         let src_group_code = GroupCode::try_from(packet.group_code())?;
         let src_id = NodeID::try_from(packet.src_id())?;
+        if src_id.is_unspecified() || src_id.is_broadcast() {
+            return Err(Error::InvalidArgument("src id is unspecified".into()));
+        }
         {
             let ref_mut = self
                 .pipe_context
@@ -615,9 +618,7 @@ impl PipeLine {
         if !packet.incr_ttl() {
             return Ok(());
         }
-        if src_id.is_unspecified() || src_id.is_broadcast() {
-            return Err(Error::InvalidArgument("src id is unspecified".into()));
-        }
+
         let dest_id = NodeID::try_from(packet.dest_id())?;
         if dest_id.is_unspecified() {
             // 是不同组的节点发给自己的数据
@@ -664,7 +665,9 @@ impl PipeLine {
             if dest_id.is_broadcast() {
                 // broadcast
             } else if let Ok(v) = route_table.get_route_by_id(&dest_id) {
-                self.send_to_route(packet.buffer(), &v.route_key()).await?;
+                if !route_table.is_route_of_peer_id(&src_id, &v.route_key()) {
+                    self.send_to_route(packet.buffer(), &v.route_key()).await?;
+                }
             } else if let Some((relay_group_code, relay_node_id)) =
                 self.pipe_context.reachable_node(&src_group_code, &dest_id)
             {
@@ -673,7 +676,9 @@ impl PipeLine {
                     self.pipe_context.other_route_table.get(&relay_group_code)
                 {
                     if let Ok(v) = route_table.get_route_by_id(&relay_node_id) {
-                        self.send_to_route(packet.buffer(), &v.route_key()).await?;
+                        if !route_table.is_route_of_peer_id(&src_id, &v.route_key()) {
+                            self.send_to_route(packet.buffer(), &v.route_key()).await?;
+                        }
                     } else {
                         // broadcast query?
                     }
