@@ -242,6 +242,22 @@ impl<PeerID: Hash + Eq> PipeWriter<PeerID> {
         let route = self.route_table.get_route_by_id(peer_id)?;
         self.send_to(buf, &route.route_key()).await
     }
+    /// Writing `buf` to the target named by `peer_id`
+    pub async fn send_to_id_safe(
+        &self,
+        buf: BytesMut,
+        src_id: &PeerID,
+        peer_id: &PeerID,
+    ) -> crate::error::Result<()> {
+        let route = self.route_table.get_route_by_id(peer_id)?;
+        if self
+            .route_table
+            .is_route_of_peer_id(src_id, &route.route_key())
+        {
+            return Err(crate::error::Error::RouteNotFound("loop route".to_string()));
+        }
+        self.send_to(buf, &route.route_key()).await
+    }
 }
 
 impl PipeLine {
