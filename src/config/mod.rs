@@ -11,6 +11,7 @@ use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use crate::pipe::{NodeAddress, PeerNodeAddress};
 use crate::protocol::node_id::{GroupCode, NodeID};
 use crate::protocol::{NetPacket, HEAD_LEN};
+pub use rust_p2p_core::nat::*;
 use rust_p2p_core::pipe::recycle::RecycleBuf;
 use rust_p2p_core::pipe::tcp_pipe::{Decoder, Encoder, InitCodec};
 pub use rust_p2p_core::pipe::udp_pipe::Model;
