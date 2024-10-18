@@ -1,4 +1,5 @@
 #![allow(clippy::type_complexity)]
+
 #[cfg(any(feature = "aes-gcm", feature = "chacha20-poly1305"))]
 use crate::cipher::Cipher;
 use crate::config::punch_info::NodePunchInfo;
@@ -14,6 +15,7 @@ use rust_p2p_core::punch::{PunchConsultInfo, PunchModelBox};
 use rust_p2p_core::route::route_table::RouteTable;
 use rust_p2p_core::route::Index;
 use rust_p2p_core::socket::LocalInterface;
+use std::fmt::Display;
 use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -329,5 +331,27 @@ impl FromStr for PeerNodeAddress {
             }
         };
         Ok(addr)
+    }
+}
+impl Display for PeerNodeAddress {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let str = match self {
+            PeerNodeAddress::Tcp(addr) => {
+                format!("tcp://{addr}")
+            }
+            PeerNodeAddress::Udp(addr) => {
+                format!("udp://{addr}")
+            }
+            PeerNodeAddress::TcpDomain(addr) => {
+                format!("tcp://{addr}")
+            }
+            PeerNodeAddress::UdpDomain(addr) => {
+                format!("udp://{addr}")
+            }
+            PeerNodeAddress::TxtDomain(addr) => {
+                format!("txt://{addr}")
+            }
+        };
+        write!(f, "{}", str)
     }
 }
