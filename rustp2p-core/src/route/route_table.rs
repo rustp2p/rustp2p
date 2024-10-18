@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::io;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -50,7 +50,7 @@ impl<PeerID: Hash + Eq> RouteTable<PeerID> {
     }
     pub fn get_route_by_id(&self, id: &PeerID) -> io::Result<Route> {
         if let Some(entry) = self.route_table.get(id) {
-            let (count, routes) = entry.value();
+            let (_count, routes) = entry.value();
             if self.first_latency {
                 if let Some((route, _)) = routes.first() {
                     return Ok(*route);
@@ -58,8 +58,9 @@ impl<PeerID: Hash + Eq> RouteTable<PeerID> {
             } else {
                 let len = routes.len();
                 if len != 0 {
-                    let index = count.fetch_add(1, Ordering::Relaxed);
-                    let route = &routes[index % len].0;
+                    // let index = count.fetch_add(1, Ordering::Relaxed);
+                    // The first route usually has lower latency
+                    let route = &routes[0].0;
                     // 尝试跳过默认rt的路由(一般是刚加入的)，这有助于提升稳定性
                     if route.rtt != DEFAULT_RTT {
                         return Ok(*route);
