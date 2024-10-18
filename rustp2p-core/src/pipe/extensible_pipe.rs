@@ -142,6 +142,7 @@ impl ExtensiblePipeLine {
         }
         Ok(())
     }
+    pub fn done(&mut self) {}
 }
 
 struct LineOwned {

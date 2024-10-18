@@ -124,6 +124,9 @@ impl TcpPipeLine {
     pub fn route_key(&self) -> RouteKey {
         self.route_key
     }
+    pub fn done(&mut self) {
+        self.write_half_collect.remove(&self.route_key);
+    }
 }
 
 impl Drop for TcpPipeLine {

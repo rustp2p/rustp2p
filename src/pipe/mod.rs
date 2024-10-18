@@ -494,6 +494,7 @@ impl PipeLine {
                     },
                 }
             } else {
+                self.pipe_line.done();
                 return Err(RecvError::Done);
             };
 

@@ -765,7 +765,7 @@ impl UdpPipeLine {
             socket_layer: None,
         }
     }
-    pub(crate) fn done(&mut self) {
+    pub fn done(&mut self) {
         let _ = self.udp.take();
         let _ = self.close_notify.take();
     }

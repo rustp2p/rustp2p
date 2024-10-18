@@ -274,6 +274,13 @@ impl PipeLine {
             PipeLine::Extend(line) => Some(line.recv_from(buf).await),
         }
     }
+    pub fn done(&mut self) {
+        match self {
+            PipeLine::Udp(line) => line.done(),
+            PipeLine::Tcp(line) => line.done(),
+            PipeLine::Extend(line) => line.done(),
+        }
+    }
 }
 
 impl PipeLine {
