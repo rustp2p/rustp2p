@@ -107,7 +107,10 @@ async fn route_table_heartbeat_request(
     let mut sent_relay_ids = HashSet::with_capacity(table.len());
     for (node_id, routes) in table {
         packet.set_dest_id(&node_id);
-        for route in routes {
+        for (i, route) in routes.into_iter().enumerate() {
+            if i >= pipe_writer.pipe_context.multi_pipeline {
+                break;
+            }
             if let Err(e) = pipe_writer
                 .send_to_route(packet.buffer(), &route.route_key())
                 .await

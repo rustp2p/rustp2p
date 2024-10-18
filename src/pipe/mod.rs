@@ -44,6 +44,7 @@ pub struct Pipe {
 
 impl Pipe {
     pub async fn new(mut config: PipeConfig) -> Result<Pipe> {
+        let multi_pipeline = config.multi_pipeline;
         let send_buffer_size = config.send_buffer_size;
         let recv_buffer_size = config.recv_buffer_size;
         let query_id_interval = config.query_id_interval;
@@ -100,6 +101,7 @@ impl Pipe {
             vec![]
         };
         let pipe_context = PipeContext::new(
+            multi_pipeline,
             local_udp_ports,
             local_tcp_port,
             default_interface.clone(),

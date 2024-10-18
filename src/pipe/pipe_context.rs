@@ -33,10 +33,12 @@ pub struct PipeContext {
     pub(crate) other_route_table: Arc<DashMap<GroupCode, RouteTable<NodeID>>>,
     #[cfg(any(feature = "aes-gcm", feature = "chacha20-poly1305"))]
     pub(crate) cipher: Option<Cipher>,
+    pub(crate) multi_pipeline: usize,
 }
 pub type DirectNodes = Vec<(NodeAddress, u16, Option<(GroupCode, NodeID)>)>;
 impl PipeContext {
     pub(crate) fn new(
+        multi_pipeline: usize,
         local_udp_ports: Vec<u16>,
         local_tcp_port: u16,
         default_interface: Option<LocalInterface>,
@@ -45,6 +47,7 @@ impl PipeContext {
     ) -> Self {
         let punch_info = NodePunchInfo::new(local_udp_ports, local_tcp_port);
         Self {
+            multi_pipeline,
             self_node_id: Arc::new(Default::default()),
             group_code: Arc::new(Default::default()),
             direct_node_address_list: Arc::new(Default::default()),
