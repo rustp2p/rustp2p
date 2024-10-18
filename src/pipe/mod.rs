@@ -181,6 +181,7 @@ impl Pipe {
         };
         let pipe_line = pipe_line?;
         Ok(PipeLine {
+            shutdown_manager: self.shutdown_manager.clone(),
             pipe_context: self.pipe_context.clone(),
             pipe_line,
             pipe_writer: self.writer(),
@@ -455,6 +456,7 @@ impl PipeWriter {
 }
 
 pub struct PipeLine {
+    shutdown_manager: ShutdownManager<()>,
     pipe_context: PipeContext,
     pipe_line: rust_p2p_core::pipe::PipeLine,
     pipe_writer: PipeWriter,
@@ -479,13 +481,22 @@ impl PipeLine {
                 let capacity = block.capacity();
                 block.set_len(capacity);
             }
-            let (len, route_key) = match self.pipe_line.recv_from(&mut block).await {
-                None => return Err(RecvError::Done),
-                Some(recv_rs) => match recv_rs {
-                    Ok(rs) => rs,
-                    Err(e) => return Err(RecvError::Io(e)),
-                },
+            let (len, route_key) = if let Ok(v) = self
+                .shutdown_manager
+                .wrap_cancel(self.pipe_line.recv_from(&mut block))
+                .await
+            {
+                match v {
+                    None => return Err(RecvError::Done),
+                    Some(recv_rs) => match recv_rs {
+                        Ok(rs) => rs,
+                        Err(e) => return Err(RecvError::Io(e)),
+                    },
+                }
+            } else {
+                return Err(RecvError::Done);
             };
+
             if len == 0 {
                 return Err(RecvError::Io(std::io::Error::from(
                     std::io::ErrorKind::UnexpectedEof,
