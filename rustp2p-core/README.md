@@ -2,8 +2,8 @@
 
 NAT traversal for p2p communication, this is implemented in terms of a hole-punching technique.
 
-[![Crates.io](https://img.shields.io/crates/v/rust-p2p.svg)](https://crates.io/crates/rust-p2p)
-![rust-p2p](https://docs.rs/rust-p2p/badge.svg)
+[![Crates.io](https://img.shields.io/crates/v/rust-p2p-core.svg)](https://crates.io/crates/rust-p2p-core)
+![rust-p2p-core](https://docs.rs/rust-p2p-core/badge.svg)
 
 This crate provides a convenient way to create a pipe between multiple remote peers that may be behind Nats, these pipelines that are spawned from the pipe can be used to read/write bytes from/to a peer to another.
 
