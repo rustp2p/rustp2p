@@ -471,6 +471,7 @@ impl Encoder for LengthPrefixedEncoder {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct LengthPrefixedInitCodec;
 
 impl InitCodec for LengthPrefixedInitCodec {
