@@ -7,6 +7,7 @@ use async_lock::Mutex;
 use async_trait::async_trait;
 use bytes::BytesMut;
 use dashmap::DashMap;
+use dyn_clone::DynClone;
 use rand::Rng;
 use std::io;
 use std::io::IoSlice;
@@ -637,6 +638,7 @@ impl Encoder for LengthPrefixedCodec {
     }
 }
 
+#[derive(Clone)]
 pub struct BytesInitCodec;
 
 impl InitCodec for BytesInitCodec {
@@ -645,6 +647,7 @@ impl InitCodec for BytesInitCodec {
     }
 }
 
+#[derive(Clone)]
 pub struct LengthPrefixedInitCodec;
 
 impl InitCodec for LengthPrefixedInitCodec {
@@ -653,9 +656,10 @@ impl InitCodec for LengthPrefixedInitCodec {
     }
 }
 
-pub trait InitCodec: Send + Sync {
+pub trait InitCodec: Send + Sync + DynClone {
     fn codec(&self, addr: SocketAddr) -> io::Result<(Box<dyn Decoder>, Box<dyn Encoder>)>;
 }
+dyn_clone::clone_trait_object!(InitCodec);
 
 #[async_trait]
 pub trait Decoder: Send + Sync {
@@ -702,6 +706,7 @@ mod tests {
         drop(tcp_pipe)
     }
 
+    #[derive(Clone)]
     struct MyInitCodeC;
 
     impl InitCodec for MyInitCodeC {

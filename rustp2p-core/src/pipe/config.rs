@@ -10,6 +10,7 @@ pub(crate) const MAX_SYMMETRIC_PIPELINE_NUM: usize = 200;
 pub(crate) const MAX_MAIN_PIPELINE_NUM: usize = 10;
 pub(crate) const ROUTE_IDLE_TIME: Duration = Duration::from_secs(10);
 
+#[derive(Clone)]
 pub struct PipeConfig {
     pub first_latency: bool,
     pub multi_pipeline: usize,
@@ -96,6 +97,7 @@ impl PipeConfig {
     }
 }
 
+#[derive(Clone)]
 pub struct TcpPipeConfig {
     pub route_idle_time: Duration,
     pub tcp_multiplexing_limit: usize,
