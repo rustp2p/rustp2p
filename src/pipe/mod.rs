@@ -473,6 +473,13 @@ impl PipeLine {
     pub async fn next(
         &mut self,
     ) -> core::result::Result<core::result::Result<RecvUserData, HandleError>, RecvError> {
+        self.next_process::<crate::config::DefaultInterceptor>(None)
+            .await
+    }
+    pub async fn next_process<I: crate::config::DataInterceptor>(
+        &mut self,
+        interceptor: Option<&I>,
+    ) -> core::result::Result<core::result::Result<RecvUserData, HandleError>, RecvError> {
         let mut block = if let Some(buffer_pool) = self.buffer_pool.as_ref() {
             Data::Recyclable(buffer_pool.alloc())
         } else {
@@ -517,7 +524,14 @@ impl PipeLine {
                 }
                 continue;
             }
-            return match self.handle(RecvResult::new(&mut block, route_key)).await {
+            let mut recv_result = RecvResult::new(&mut block, route_key);
+            if let Some(interceptor) = interceptor {
+                if interceptor.pre_handle(&mut recv_result).await {
+                    continue;
+                }
+            }
+
+            return match self.handle(recv_result).await {
                 Ok(handle_result) => {
                     if let Some(rs) = handle_result {
                         #[cfg(any(feature = "aes-gcm", feature = "chacha20-poly1305"))]
@@ -1033,6 +1047,12 @@ impl<'a> RecvResult<'a> {
     }
     pub fn remote_addr(&self) -> SocketAddr {
         self.route_key.addr()
+    }
+    pub fn net_packet(&self) -> Result<NetPacket<&[u8]>> {
+        NetPacket::new(self.buf)
+    }
+    pub fn net_packet_mut(&mut self) -> Result<NetPacket<&mut [u8]>> {
+        NetPacket::new(self.buf)
     }
 }
 

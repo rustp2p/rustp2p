@@ -8,7 +8,7 @@ use bytes::{Buf, BytesMut};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 
-use crate::pipe::{NodeAddress, PeerNodeAddress};
+use crate::pipe::{NodeAddress, PeerNodeAddress, RecvResult};
 use crate::protocol::node_id::{GroupCode, NodeID};
 use crate::protocol::{NetPacket, HEAD_LEN};
 pub use rust_p2p_core::nat::*;
@@ -480,5 +480,17 @@ impl InitCodec for LengthPrefixedInitCodec {
             Box::new(LengthPrefixedDecoder::new()),
             Box::new(LengthPrefixedEncoder::new()),
         ))
+    }
+}
+#[async_trait]
+pub trait DataInterceptor {
+    async fn pre_handle(&self, data: &mut RecvResult) -> bool;
+}
+pub(crate) struct DefaultInterceptor;
+
+#[async_trait]
+impl DataInterceptor for DefaultInterceptor {
+    async fn pre_handle(&self, _data: &mut RecvResult) -> bool {
+        false
     }
 }
