@@ -591,9 +591,6 @@ impl PipeLine {
         let metric = packet.max_ttl() - packet.ttl();
         let src_group_code = GroupCode::try_from(packet.group_code())?;
         let src_id = NodeID::try_from(packet.src_id())?;
-        if src_id.is_unspecified() || src_id.is_broadcast() {
-            return Err(Error::InvalidArgument("src id is unspecified".into()));
-        }
         {
             let ref_mut = self
                 .pipe_context
@@ -714,25 +711,24 @@ impl PipeLine {
         if packet.ttl() == 0 {
             return Ok(None);
         }
-        let self_id = if let Some(self_id) = self.pipe_context.load_id() {
-            self_id
-        } else {
-            return Err(Error::InvalidArgument("self id is none".into()));
-        };
-        let my_group_code = self.pipe_context.load_group_code();
-        let route_key = recv_result.route_key;
-        let group_code = if my_group_code.as_ref() == packet.group_code() {
-            my_group_code
-        } else {
-            self.other_group_handle(packet, route_key, my_group_code, self_id)
-                .await?;
-            return Ok(None);
-        };
         let src_id = NodeID::try_from(packet.src_id())?;
 
         if src_id.is_unspecified() || src_id.is_broadcast() {
             return Err(Error::InvalidArgument("src id is unspecified".into()));
         }
+        let self_id = if let Some(self_id) = self.pipe_context.load_id() {
+            self_id
+        } else {
+            return Err(Error::InvalidArgument("self id is none".into()));
+        };
+        let group_code = self.pipe_context.load_group_code();
+        let route_key = recv_result.route_key;
+        if group_code.as_ref() != packet.group_code() {
+            self.other_group_handle(packet, route_key, group_code, self_id)
+                .await?;
+            return Ok(None);
+        }
+
         let dest_id = NodeID::try_from(packet.dest_id())?;
 
         let metric = packet.max_ttl() - packet.ttl();
