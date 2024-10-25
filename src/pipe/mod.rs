@@ -175,6 +175,11 @@ impl Pipe {
         }
     }
 }
+impl Drop for Pipe {
+    fn drop(&mut self) {
+        _ = self.shutdown_manager.trigger_shutdown(());
+    }
+}
 
 impl Pipe {
     pub async fn accept(&mut self) -> Result<PipeLine> {
