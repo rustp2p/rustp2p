@@ -2,6 +2,7 @@ use std::io;
 use std::io::IoSlice;
 use std::net::SocketAddr;
 use std::ops::Deref;
+use std::os::windows::io::AsSocket;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context};
@@ -479,8 +480,6 @@ impl UdpPipe {
         tokio::spawn(async move {
             #[cfg(target_os = "linux")]
             let mut vec_buf = Vec::with_capacity(16);
-            #[cfg(target_os = "linux")]
-            let mut vec: Vec<(&mut [u8], SocketAddr)> = Vec::with_capacity(16);
 
             #[cfg(target_os = "linux")]
             use std::os::fd::AsRawFd;
@@ -490,22 +489,16 @@ impl UdpPipe {
                 if let Ok((buf_, addr_)) = r.try_recv() {
                     vec_buf.push((buf, addr));
                     vec_buf.push((buf_, addr_));
-                    while let Ok(buf) = r.try_recv() {
-                        vec_buf.push(buf);
+                    while let Ok(tup) = r.try_recv() {
+                        vec_buf.push(tup);
                         if vec_buf.len() == MAX_MESSAGES {
                             break;
                         }
                     }
                     let rs = {
-                        for (buf, addr) in &mut vec_buf {
-                            let u8_slice = unsafe {
-                                std::slice::from_raw_parts_mut(buf.as_mut_ptr(), buf.len())
-                            };
-                            vec.push((u8_slice, *addr));
-                        }
                         let rs = loop {
-                            break match sendmmsg(udp.as_raw_fd(), &mut vec) {
-                                Ok(_) => Ok(()),
+                            match sendmmsg(udp.as_raw_fd(), &mut vec_buf) {
+                                Ok(_) => break Ok(()),
                                 Err(e) => {
                                     if e.kind() == io::ErrorKind::WouldBlock {
                                         if let Err(e) = udp.readable().await {
@@ -513,12 +506,11 @@ impl UdpPipe {
                                         }
                                         continue;
                                     } else {
-                                        Err(e)
+                                        break Err(e);
                                     }
                                 }
                             };
                         };
-                        vec.clear();
                         rs
                     };
                     if let Err(e) = rs {
@@ -578,7 +570,7 @@ impl UdpPipe {
     }
 }
 #[cfg(target_os = "linux")]
-fn sendmmsg(fd: std::os::fd::RawFd, buf: &mut [(&mut [u8], SocketAddr)]) -> io::Result<()> {
+fn sendmmsg(fd: std::os::fd::RawFd, buf: &mut [(BytesMut, SocketAddr)]) -> io::Result<()> {
     assert!(buf.len() <= MAX_MESSAGES);
     let mut iov: [libc::iovec; MAX_MESSAGES] = unsafe { std::mem::zeroed() };
     let mut msgs: [libc::mmsghdr; MAX_MESSAGES] = unsafe { std::mem::zeroed() };
