@@ -4,7 +4,6 @@ use std::sync::Arc;
 
 use clap::Parser;
 use env_logger::Env;
-use mimalloc_rust::GlobalMiMalloc;
 use pnet_packet::icmp::IcmpTypes;
 use pnet_packet::ip::IpNextHeaderProtocols;
 use pnet_packet::Packet;
@@ -15,9 +14,6 @@ use rustp2p::pipe::{PeerNodeAddress, Pipe, PipeLine, PipeWriter, RecvUserData};
 use rustp2p::protocol::node_id::GroupCode;
 use tokio::sync::mpsc::{channel, Sender};
 use tun_rs::AsyncDevice;
-
-#[global_allocator]
-static GLOBAL_MI_MALLOC: GlobalMiMalloc = GlobalMiMalloc;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
