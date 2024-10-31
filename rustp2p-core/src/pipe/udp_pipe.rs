@@ -2,7 +2,6 @@ use std::io;
 use std::io::IoSlice;
 use std::net::SocketAddr;
 use std::ops::Deref;
-use std::os::windows::io::AsSocket;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context};
@@ -486,17 +485,19 @@ impl UdpPipe {
 
             while let Some((buf, addr)) = r.recv().await {
                 #[cfg(target_os = "linux")]
-                if let Ok((buf_, addr_)) = r.try_recv() {
+                {
                     vec_buf.push((buf, addr));
-                    vec_buf.push((buf_, addr_));
                     while let Ok(tup) = r.try_recv() {
                         vec_buf.push(tup);
                         if vec_buf.len() == MAX_MESSAGES {
                             break;
                         }
                     }
-                    let rs = {
-                        let rs = loop {
+                    let rs = if vec_buf.len() == 1 {
+                        let first = unsafe { vec_buf.get_unchecked(0) };
+                        udp.send_to(&first.0, first.1).await.map(|_| ())
+                    } else {
+                        loop {
                             match sendmmsg(udp.as_raw_fd(), &mut vec_buf) {
                                 Ok(_) => break Ok(()),
                                 Err(e) => {
@@ -510,8 +511,7 @@ impl UdpPipe {
                                     }
                                 }
                             };
-                        };
-                        rs
+                        }
                     };
                     if let Err(e) = rs {
                         log::debug!("sendmmsg {e:?}");
@@ -521,15 +521,7 @@ impl UdpPipe {
                             recycle_buf.push(buf);
                         }
                     } else {
-                        vec_buf.clear()
-                    }
-                } else {
-                    let rs = udp.send_to(&buf, addr).await;
-                    if let Some(recycle_buf) = recycle_buf.as_ref() {
-                        recycle_buf.push(buf);
-                    }
-                    if let Err(e) = rs {
-                        log::debug!("{addr:?},{e:?}")
+                        vec_buf.clear();
                     }
                 }
                 #[cfg(not(target_os = "linux"))]
@@ -569,6 +561,7 @@ impl UdpPipe {
         }
     }
 }
+
 #[cfg(target_os = "linux")]
 fn sendmmsg(fd: std::os::fd::RawFd, buf: &mut [(BytesMut, SocketAddr)]) -> io::Result<()> {
     assert!(buf.len() <= MAX_MESSAGES);
