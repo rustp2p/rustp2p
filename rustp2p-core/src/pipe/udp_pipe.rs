@@ -493,29 +493,28 @@ impl UdpPipe {
                             break;
                         }
                     }
-                    let rs = if vec_buf.len() == 1 {
-                        let first = unsafe { vec_buf.get_unchecked(0) };
-                        udp.send_to(&first.0, first.1).await.map(|_| ())
-                    } else {
-                        loop {
-                            match sendmmsg(udp.as_raw_fd(), &mut vec_buf) {
-                                Ok(_) => break Ok(()),
-                                Err(e) => {
-                                    if e.kind() == io::ErrorKind::WouldBlock {
-                                        if let Err(e) = udp.readable().await {
-                                            break Err(e);
-                                        }
-                                        continue;
-                                    } else {
+                    if vec_buf.len() == 1 {
+                        let (buf, addr) = unsafe { vec_buf.get_unchecked(0) };
+                        if let Err(e) = udp.send_to(buf, addr).await {
+                            log::debug!("{addr:?},{e:?}")
+                        }
+                    } else if let Err(e) = loop {
+                        match sendmmsg(udp.as_raw_fd(), &mut vec_buf) {
+                            Ok(_) => break Ok(()),
+                            Err(e) => {
+                                if e.kind() == io::ErrorKind::WouldBlock {
+                                    if let Err(e) = udp.readable().await {
                                         break Err(e);
                                     }
+                                    continue;
+                                } else {
+                                    break Err(e);
                                 }
-                            };
-                        }
-                    };
-                    if let Err(e) = rs {
+                            }
+                        };
+                    } {
                         log::debug!("sendmmsg {e:?}");
-                    }
+                    };
                     if let Some(recycle_buf) = recycle_buf.as_ref() {
                         while let Some((buf, _)) = vec_buf.pop() {
                             recycle_buf.push(buf);
