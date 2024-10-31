@@ -479,65 +479,48 @@ impl UdpPipe {
         tokio::spawn(async move {
             #[cfg(target_os = "linux")]
             let mut vec_buf = Vec::with_capacity(16);
-            #[cfg(target_os = "linux")]
-            let mut vec: Vec<(&mut [u8], SocketAddr)> = Vec::with_capacity(16);
 
             #[cfg(target_os = "linux")]
             use std::os::fd::AsRawFd;
 
             while let Some((buf, addr)) = r.recv().await {
                 #[cfg(target_os = "linux")]
-                if let Ok((buf_, addr_)) = r.try_recv() {
+                {
                     vec_buf.push((buf, addr));
-                    vec_buf.push((buf_, addr_));
-                    while let Ok(buf) = r.try_recv() {
-                        vec_buf.push(buf);
+                    while let Ok(tup) = r.try_recv() {
+                        vec_buf.push(tup);
                         if vec_buf.len() == MAX_MESSAGES {
                             break;
                         }
                     }
-                    let rs = {
-                        for (buf, addr) in &mut vec_buf {
-                            let u8_slice = unsafe {
-                                std::slice::from_raw_parts_mut(buf.as_mut_ptr(), buf.len())
-                            };
-                            vec.push((u8_slice, *addr));
+                    if vec_buf.len() == 1 {
+                        let (buf, addr) = unsafe { vec_buf.get_unchecked(0) };
+                        if let Err(e) = udp.send_to(buf, addr).await {
+                            log::debug!("{addr:?},{e:?}")
                         }
-                        let rs = loop {
-                            break match sendmmsg(udp.as_raw_fd(), &mut vec) {
-                                Ok(_) => Ok(()),
-                                Err(e) => {
-                                    if e.kind() == io::ErrorKind::WouldBlock {
-                                        if let Err(e) = udp.readable().await {
-                                            break Err(e);
-                                        }
-                                        continue;
-                                    } else {
-                                        Err(e)
+                    } else if let Err(e) = loop {
+                        match sendmmsg(udp.as_raw_fd(), &mut vec_buf) {
+                            Ok(_) => break Ok(()),
+                            Err(e) => {
+                                if e.kind() == io::ErrorKind::WouldBlock {
+                                    if let Err(e) = udp.readable().await {
+                                        break Err(e);
                                     }
+                                    continue;
+                                } else {
+                                    break Err(e);
                                 }
-                            };
+                            }
                         };
-                        vec.clear();
-                        rs
-                    };
-                    if let Err(e) = rs {
+                    } {
                         log::debug!("sendmmsg {e:?}");
-                    }
+                    };
                     if let Some(recycle_buf) = recycle_buf.as_ref() {
                         while let Some((buf, _)) = vec_buf.pop() {
                             recycle_buf.push(buf);
                         }
                     } else {
-                        vec_buf.clear()
-                    }
-                } else {
-                    let rs = udp.send_to(&buf, addr).await;
-                    if let Some(recycle_buf) = recycle_buf.as_ref() {
-                        recycle_buf.push(buf);
-                    }
-                    if let Err(e) = rs {
-                        log::debug!("{addr:?},{e:?}")
+                        vec_buf.clear();
                     }
                 }
                 #[cfg(not(target_os = "linux"))]
@@ -577,8 +560,9 @@ impl UdpPipe {
         }
     }
 }
+
 #[cfg(target_os = "linux")]
-fn sendmmsg(fd: std::os::fd::RawFd, buf: &mut [(&mut [u8], SocketAddr)]) -> io::Result<()> {
+fn sendmmsg(fd: std::os::fd::RawFd, buf: &mut [(BytesMut, SocketAddr)]) -> io::Result<()> {
     assert!(buf.len() <= MAX_MESSAGES);
     let mut iov: [libc::iovec; MAX_MESSAGES] = unsafe { std::mem::zeroed() };
     let mut msgs: [libc::mmsghdr; MAX_MESSAGES] = unsafe { std::mem::zeroed() };
