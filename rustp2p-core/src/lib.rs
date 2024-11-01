@@ -1,3 +1,4 @@
+pub(crate) mod async_socket;
 pub mod error;
 pub mod extend;
 pub mod idle;

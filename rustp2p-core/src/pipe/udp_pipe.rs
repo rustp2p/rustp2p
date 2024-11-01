@@ -4,11 +4,11 @@ use std::net::SocketAddr;
 use std::ops::Deref;
 use std::sync::Arc;
 
+use crate::async_socket::udp::UdpSocket;
 use anyhow::{anyhow, Context};
 use bytes::BytesMut;
 use dashmap::DashMap;
 use parking_lot::{Mutex, RwLock};
-use tokio::net::UdpSocket;
 use tokio::sync::mpsc::Sender;
 
 use crate::pipe::config::UdpPipeConfig;
