@@ -147,7 +147,7 @@ impl TcpPipeLine {
     }
 
     pub(crate) async fn recv(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        match tokio::time::timeout(
+        match crate::async_compat::timeout(
             self.route_idle_time,
             self.decoder.decode(&mut self.tcp_read, buf),
         )

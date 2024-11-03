@@ -1,3 +1,5 @@
+pub use async_std::future::timeout;
+pub use async_std::task::sleep;
 pub use async_std::task::spawn;
 
 #[macro_export]

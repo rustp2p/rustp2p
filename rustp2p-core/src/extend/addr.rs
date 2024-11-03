@@ -1,6 +1,6 @@
+use crate::async_compat::net::udp::UdpSocket;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-use tokio::net::UdpSocket;
 
 pub async fn local_ipv4() -> io::Result<Ipv4Addr> {
     let socket = UdpSocket::bind("0.0.0.0:0").await?;

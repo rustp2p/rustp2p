@@ -164,7 +164,7 @@ impl<PeerID: Hash + Eq + Clone> Puncher<PeerID> {
         addr: SocketAddr,
         ttl: Option<u32>,
     ) {
-        match tokio::time::timeout(
+        match crate::async_compat::timeout(
             Duration::from_secs(3),
             tcp_pipe_writer.send_to_addr_multi0(buf.into(), addr, ttl),
         )
@@ -325,7 +325,7 @@ impl<PeerID: Hash + Eq + Clone> Puncher<PeerID> {
                 if let Err(e) = udp_pipe_writer.try_send_to_addr(buf, addr) {
                     log::info!("{addr},{e:?}");
                 }
-                tokio::time::sleep(Duration::from_millis(2)).await
+                crate::async_compat::sleep(Duration::from_millis(2)).await
             }
         }
         Ok(ports.len())
