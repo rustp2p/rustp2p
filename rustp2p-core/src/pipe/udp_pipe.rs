@@ -4,18 +4,19 @@ use std::net::SocketAddr;
 use std::ops::Deref;
 use std::sync::Arc;
 
-use crate::async_socket::udp::UdpSocket;
+use crate::async_compat::net::udp::UdpSocket;
 use anyhow::{anyhow, Context};
 use bytes::BytesMut;
 use dashmap::DashMap;
 use parking_lot::{Mutex, RwLock};
-use tokio::sync::mpsc::Sender;
+use tachyonix::{Receiver, Sender};
 
 use crate::pipe::config::UdpPipeConfig;
 use crate::pipe::recycle::RecycleBuf;
 use crate::pipe::{DEFAULT_ADDRESS_V4, DEFAULT_ADDRESS_V6};
 use crate::route::{Index, RouteKey};
 use crate::socket::{bind_udp, LocalInterface};
+
 #[cfg(target_os = "linux")]
 const MAX_MESSAGES: usize = 16;
 
@@ -25,6 +26,7 @@ pub enum Model {
     #[default]
     Low,
 }
+
 impl Model {
     pub fn is_low(&self) -> bool {
         self == &Model::Low
@@ -85,7 +87,8 @@ pub(crate) fn udp_pipe(config: UdpPipeConfig) -> anyhow::Result<UdpPipe> {
             break;
         }
     }
-    let (pipe_line_sender, pipe_line_receiver) = tokio::sync::mpsc::unbounded_channel();
+    let (pipe_line_sender, pipe_line_receiver) =
+        tachyonix::channel(config.main_pipeline_num + config.sub_pipeline_num);
     let socket_layer = Arc::new(SocketLayer {
         main_udp_v4,
         main_udp_v6,
@@ -110,8 +113,8 @@ pub struct SocketLayer {
     main_udp_v4: Vec<Arc<UdpSocket>>,
     main_udp_v6: Vec<Arc<UdpSocket>>,
     sub_udp: RwLock<Vec<Arc<UdpSocket>>>,
-    sub_close_notify: Mutex<Option<tokio::sync::broadcast::Sender<()>>>,
-    pipe_line_sender: tokio::sync::mpsc::UnboundedSender<UdpPipeLine>,
+    sub_close_notify: Mutex<Option<async_broadcast::Sender<()>>>,
+    pipe_line_sender: Sender<UdpPipeLine>,
     sub_udp_num: usize,
     default_interface: Option<LocalInterface>,
     sender_map: DashMap<Index, Sender<(BytesMut, SocketAddr)>>,
@@ -170,7 +173,7 @@ impl SocketLayer {
         }
         guard.clear();
         if let Some(sub_close_notify) = self.sub_close_notify.lock().take() {
-            let _ = sub_close_notify.send(());
+            let _ = sub_close_notify.close();
         }
     }
     pub(crate) fn switch_high(&self) -> anyhow::Result<()> {
@@ -180,10 +183,9 @@ impl SocketLayer {
         }
         let mut sub_close_notify_guard = self.sub_close_notify.lock();
         if let Some(sender) = sub_close_notify_guard.take() {
-            let _ = sender.send(());
+            let _ = sender.close();
         }
-        let (sub_close_notify_sender, _sub_close_notify_receiver) =
-            tokio::sync::broadcast::channel(2);
+        let (sub_close_notify_sender, sub_close_notify_receiver) = async_broadcast::broadcast(2);
         let mut sub_udp_list = Vec::with_capacity(self.sub_udp_num);
         for _ in 0..self.sub_udp_num {
             let udp = bind_udp(DEFAULT_ADDRESS_V4, self.default_interface.as_ref())?;
@@ -195,9 +197,11 @@ impl SocketLayer {
             let udp_pipe_line = UdpPipeLine::sub_new(
                 UDPIndex::SubV4(index),
                 udp,
-                sub_close_notify_sender.subscribe(),
+                sub_close_notify_receiver.clone(),
             );
-            self.pipe_line_sender.send(udp_pipe_line)?;
+            if self.pipe_line_sender.try_send(udp_pipe_line).is_err() {
+                Err(anyhow::anyhow!("pipe channel error"))?
+            }
         }
         sub_close_notify_guard.replace(sub_close_notify_sender);
         *guard = sub_udp_list;
@@ -426,10 +430,11 @@ impl SocketLayer {
 }
 
 pub struct UdpPipe {
-    pipe_line_receiver: tokio::sync::mpsc::UnboundedReceiver<UdpPipeLine>,
+    pipe_line_receiver: Receiver<UdpPipeLine>,
     socket_layer: Arc<SocketLayer>,
     recycle_buf: Option<RecycleBuf>,
 }
+
 impl UdpPipe {
     pub(crate) fn init(&self) -> anyhow::Result<()> {
         for (index, udp) in self.socket_layer.main_udp_v4.iter().enumerate() {
@@ -439,7 +444,14 @@ impl UdpPipe {
                 udp,
                 self.socket_layer.pipe_line_sender.clone(),
             );
-            self.socket_layer.pipe_line_sender.send(udp_pipe_line)?;
+            if self
+                .socket_layer
+                .pipe_line_sender
+                .try_send(udp_pipe_line)
+                .is_err()
+            {
+                Err(anyhow::anyhow!("pipe channel error"))?
+            }
         }
         for (index, udp) in self.socket_layer.main_udp_v6.iter().enumerate() {
             let udp = udp.clone();
@@ -448,11 +460,19 @@ impl UdpPipe {
                 udp,
                 self.socket_layer.pipe_line_sender.clone(),
             );
-            self.socket_layer.pipe_line_sender.send(udp_pipe_line)?;
+            if self
+                .socket_layer
+                .pipe_line_sender
+                .try_send(udp_pipe_line)
+                .is_err()
+            {
+                Err(anyhow::anyhow!("pipe channel error"))?
+            }
         }
         Ok(())
     }
 }
+
 impl UdpPipe {
     /// Construct a `UDP` pipe with the specified configuration
     pub fn new(config: UdpPipeConfig) -> anyhow::Result<UdpPipe> {
@@ -469,21 +489,21 @@ impl UdpPipe {
         if line.socket_layer.is_some() {
             return Ok(line);
         }
-        let (s, mut r) = tokio::sync::mpsc::channel(32);
+        let (s, mut r) = tachyonix::channel(32);
         let index = line.index;
         self.socket_layer.sender_map.insert(index, s);
         line.socket_layer.replace(self.socket_layer.clone());
         let socket_layer = self.socket_layer.clone();
         let udp = line.udp.clone().unwrap();
         let recycle_buf = self.recycle_buf.clone();
-        tokio::spawn(async move {
+        crate::async_compat::spawn(async move {
             #[cfg(target_os = "linux")]
             let mut vec_buf = Vec::with_capacity(16);
 
             #[cfg(target_os = "linux")]
             use std::os::fd::AsRawFd;
 
-            while let Some((buf, addr)) = r.recv().await {
+            while let Ok((buf, addr)) = r.recv().await {
                 #[cfg(target_os = "linux")]
                 {
                     vec_buf.push((buf, addr));
@@ -587,6 +607,7 @@ fn sendmmsg(fd: std::os::fd::RawFd, buf: &mut [(BytesMut, SocketAddr)]) -> io::R
         Ok(())
     }
 }
+
 #[cfg(target_os = "linux")]
 fn socket_addr_to_sockaddr(addr: &SocketAddr) -> libc::sockaddr_storage {
     let mut storage: libc::sockaddr_storage = unsafe { std::mem::zeroed() }; // 初始化为 0
@@ -695,10 +716,11 @@ pub struct UdpPipeLine {
     active: bool,
     index: Index,
     udp: Option<Arc<UdpSocket>>,
-    close_notify: Option<tokio::sync::broadcast::Receiver<()>>,
-    re_sender: Option<tokio::sync::mpsc::UnboundedSender<UdpPipeLine>>,
+    close_notify: Option<async_broadcast::Receiver<()>>,
+    re_sender: Option<Sender<UdpPipeLine>>,
     socket_layer: Option<Arc<SocketLayer>>,
 }
+
 impl Drop for UdpPipeLine {
     fn drop(&mut self) {
         if self.udp.is_none() || !self.active {
@@ -724,7 +746,7 @@ impl UdpPipeLine {
     pub(crate) fn sub_new(
         index: UDPIndex,
         udp: Arc<UdpSocket>,
-        close_notify: tokio::sync::broadcast::Receiver<()>,
+        close_notify: async_broadcast::Receiver<()>,
     ) -> Self {
         Self {
             active: false,
@@ -738,7 +760,7 @@ impl UdpPipeLine {
     pub(crate) fn main_new(
         index: UDPIndex,
         udp: Arc<UdpSocket>,
-        re_sender: tokio::sync::mpsc::UnboundedSender<UdpPipeLine>,
+        re_sender: Sender<UdpPipeLine>,
     ) -> Self {
         Self {
             active: false,
@@ -754,6 +776,7 @@ impl UdpPipeLine {
         let _ = self.close_notify.take();
     }
 }
+
 impl UdpPipeLine {
     /// Writing `buf` to the target denoted by SocketAddr via this pipeline
     pub async fn send_to_addr<A: Into<SocketAddr>>(
@@ -840,6 +863,7 @@ impl UdpPipeLine {
         }
     }
 }
+
 fn should_ignore_error(e: &std::io::Error) -> bool {
     #[cfg(windows)]
     {
@@ -874,6 +898,7 @@ mod tests {
         }
         assert_eq!(count, 2)
     }
+
     #[tokio::test]
     pub async fn create_sub_udp_pipe() {
         let config = crate::pipe::config::UdpPipeConfig::default()
@@ -908,6 +933,7 @@ mod tests {
         assert_eq!(count, 12);
         assert_eq!(close_pipe_line_count, 10);
     }
+
     async fn pipe_line_recv(mut udp_pipe_line: UdpPipeLine) -> bool {
         let mut buf = [0; 1400];
         udp_pipe_line.recv_from(&mut buf).await.is_none()

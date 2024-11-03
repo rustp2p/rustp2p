@@ -34,31 +34,24 @@ impl LocalInterface {
     }
 }
 
-#[allow(dead_code)]
 pub(crate) async fn connect_tcp(
     addr: SocketAddr,
     bind_port: u16,
     default_interface: Option<&LocalInterface>,
     ttl: Option<u32>,
-) -> crate::error::Result<tokio::net::TcpStream> {
-    let socket = create_tcp0(addr.is_ipv4(), bind_port, default_interface, ttl)?;
-    Ok(socket.connect(addr).await?)
-}
-
-#[allow(dead_code)]
-pub(crate) fn create_tcp(
-    v4: bool,
-    default_interface: Option<&LocalInterface>,
-) -> crate::error::Result<tokio::net::TcpSocket> {
-    create_tcp0(v4, 0, default_interface, None)
+) -> crate::error::Result<crate::async_compat::net::TcpStream> {
+    let socket = create_tcp0(addr, bind_port, default_interface, ttl)?;
+    socket.writable().await?;
+    Ok(socket)
 }
 
 pub(crate) fn create_tcp0(
-    v4: bool,
+    addr: SocketAddr,
     bind_port: u16,
     default_interface: Option<&LocalInterface>,
     ttl: Option<u32>,
-) -> crate::error::Result<tokio::net::TcpSocket> {
+) -> crate::error::Result<crate::async_compat::net::TcpStream> {
+    let v4 = addr.is_ipv4();
     let socket = if v4 {
         socket2::Socket::new(
             socket2::Domain::IPV4,
@@ -93,7 +86,10 @@ pub(crate) fn create_tcp0(
     }
     socket.set_nonblocking(true)?;
     socket.set_nodelay(true)?;
-    Ok(tokio::net::TcpSocket::from_std_stream(socket.into()))
+    socket.connect(&addr.into())?;
+    Ok(crate::async_compat::net::TcpStream::from_std(
+        socket.into(),
+    )?)
 }
 
 pub(crate) fn create_tcp_listener(addr: SocketAddr) -> anyhow::Result<std::net::TcpListener> {

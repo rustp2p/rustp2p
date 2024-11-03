@@ -1,3 +1,6 @@
+use crate::async_compat::net::tcp::{AsyncReadExt, AsyncWriteExt};
+use crate::async_compat::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
+use crate::async_compat::net::{TcpListener, TcpStream};
 use crate::pipe::config::TcpPipeConfig;
 use crate::pipe::recycle::RecycleBuf;
 use crate::route::{Index, RouteKey};
@@ -16,10 +19,7 @@ use std::net::SocketAddr;
 use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
-use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::mpsc::{Receiver, Sender};
+use tachyonix::{Receiver, Sender};
 
 pub struct TcpPipe {
     route_idle_time: Duration,
@@ -43,7 +43,7 @@ impl TcpPipe {
         let tcp_listener = create_tcp_listener(address)?;
         let local_addr = tcp_listener.local_addr()?;
         let tcp_listener = TcpListener::from_std(tcp_listener)?;
-        let (connect_sender, connect_receiver) = tokio::sync::mpsc::channel(64);
+        let (connect_sender, connect_receiver) = tachyonix::channel(64);
         let write_half_collect =
             WriteHalfCollect::new(config.tcp_multiplexing_limit, config.recycle_buf);
         let init_codec = Arc::new(config.init_codec);
@@ -220,16 +220,16 @@ impl WriteHalfCollect {
                 v[index_offset] = index;
                 v
             });
-        let (s, mut r) = tokio::sync::mpsc::channel(32);
+        let (s, mut r) = tachyonix::channel(32);
         self.write_half_map.insert(index, s);
         let collect = self.clone();
         let recycle_buf = self.recycle_buf.clone();
-        tokio::spawn(async move {
+        crate::async_compat::spawn(async move {
             let mut vec_buf = Vec::with_capacity(16);
             const IO_SLICE_CAPACITY: usize = 16;
             let mut io_buffer: Vec<IoSlice> = Vec::with_capacity(IO_SLICE_CAPACITY);
             let io_slice_storage = io_buffer.as_mut_slice();
-            while let Some(v) = r.recv().await {
+            while let Ok(v) = r.recv().await {
                 if let Ok(buf) = r.try_recv() {
                     vec_buf.push(v);
                     vec_buf.push(buf);

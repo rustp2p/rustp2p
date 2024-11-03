@@ -1,7 +1,7 @@
+use async_io::Async;
 use std::io;
 use std::net::SocketAddr;
 use std::ops::Deref;
-use async_io::Async;
 
 #[repr(transparent)]
 pub struct UdpSocket {
