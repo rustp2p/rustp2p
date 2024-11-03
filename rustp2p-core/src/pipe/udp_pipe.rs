@@ -830,8 +830,8 @@ impl UdpPipeLine {
         };
         loop {
             if let Some(close_notify) = &mut self.close_notify {
-                tokio::select! {
-                    _=close_notify.recv()=>{
+                crate::async_compat::select! {
+                    _rs=close_notify.recv()=>{
                          self.done();
                          return None
                     }
