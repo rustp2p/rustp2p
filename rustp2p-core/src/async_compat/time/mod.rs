@@ -5,11 +5,7 @@ pub use async_std::future::timeout;
 pub use tokio::time::timeout;
 
 #[cfg(feature = "use-tokio")]
-pub async fn sleep(duration: std::time::Duration) {
-    tokio::time::sleep(duration).await
-}
+pub use tokio::time::sleep;
 
 #[cfg(feature = "use-async-std")]
-pub async fn sleep(duration: std::time::Duration) {
-    async_std::task::sleep(duration).await
-}
+pub use async_std::task::sleep;
