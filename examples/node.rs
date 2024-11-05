@@ -43,9 +43,11 @@ async fn main() -> Result<()> {
 #[cfg(feature = "use-async-std")]
 #[::async_std::main]
 async fn main() -> Result<()> {
-    main0().await
+    use futures_util::FutureExt;
+    main0().boxed().await
 }
 
+#[allow(unused_mut)]
 pub async fn main0() -> Result<()> {
     let Args {
         peer,
