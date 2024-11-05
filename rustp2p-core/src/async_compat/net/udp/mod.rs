@@ -1,8 +1,8 @@
-#[cfg(feature = "async_tokio")]
+#[cfg(feature = "use-tokio")]
 mod tokio;
-#[cfg(feature = "async_tokio")]
+#[cfg(feature = "use-tokio")]
 pub use tokio::*;
-#[cfg(feature = "async_std")]
+#[cfg(feature = "use-async-std")]
 mod async_std;
-#[cfg(feature = "async_std")]
+#[cfg(feature = "use-async-std")]
 pub use async_std::*;

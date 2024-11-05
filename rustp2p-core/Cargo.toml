@@ -47,9 +47,9 @@ windows-sys = { version = "0.59.0", features = ["Win32_Foundation",
     "Win32_System_WindowsProgramming", ] }
 
 [features]
-default = ["async_std"]
-async_tokio = ["tokio", "async-scoped/use-tokio"]
-async_std = ["async-std", "async-io", "futures-util", "async-scoped/use-async-std"]
+default = ["use-tokio"]
+use-tokio = ["tokio", "async-scoped/use-tokio"]
+use-async-std = ["async-std", "async-io", "futures-util", "async-scoped/use-async-std"]
 
 [dev-dependencies]
 tokio = { version = "1.41", features = ["full"] }

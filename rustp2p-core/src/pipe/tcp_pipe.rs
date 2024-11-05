@@ -682,6 +682,7 @@ pub trait Encoder: Send + Sync {
 }
 
 #[cfg(test)]
+#[cfg(feature = "use-tokio")]
 mod tests {
     use async_trait::async_trait;
     use std::io;

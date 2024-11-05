@@ -730,7 +730,7 @@ impl Drop for UdpPipeLine {
             return;
         }
         if let Some(re_sender) = &self.re_sender {
-            let _ = re_sender.send(UdpPipeLine {
+            let rs = re_sender.try_send(UdpPipeLine {
                 active: false,
                 index: self.index,
                 udp: self.udp.take(),
@@ -738,6 +738,9 @@ impl Drop for UdpPipeLine {
                 re_sender: self.re_sender.clone(),
                 socket_layer: self.socket_layer.take(),
             });
+            if let Err(e) = rs {
+                log::warn!("UdpPipeLine drop{e}");
+            }
         }
     }
 }
@@ -877,6 +880,7 @@ fn should_ignore_error(e: &std::io::Error) -> bool {
 }
 
 #[cfg(test)]
+#[cfg(feature = "use-tokio")]
 mod tests {
     use std::time::Duration;
 

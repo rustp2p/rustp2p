@@ -124,8 +124,11 @@ impl<PeerID: Hash + Eq + Clone> Puncher<PeerID> {
         };
         let peer_nat_info = punch_info.peer_nat_info;
         let punch_model = punch_info.punch_model;
-
-        async_scoped::TokioScope::scope_and_block(|s| {
+        #[cfg(feature = "use-async-std")]
+        type Scope<'a, T> = async_scoped::AsyncStdScope<'a, T>;
+        #[cfg(feature = "use-tokio")]
+        type Scope<'a, T> = async_scoped::TokioScope<'a, T>;
+        Scope::scope_and_block(|s| {
             if let Some(tcp_pipe_writer) = self.tcp_pipe_writer.as_ref() {
                 for addr in &peer_nat_info.mapping_tcp_addr {
                     s.spawn(async move {
