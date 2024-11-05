@@ -86,7 +86,11 @@ pub(crate) fn create_tcp0(
     }
     socket.set_nonblocking(true)?;
     socket.set_nodelay(true)?;
-    socket.connect(&addr.into())?;
+    if let Err(e) = socket.connect(&addr.into()) {
+        if e.kind() != std::io::ErrorKind::WouldBlock {
+            Err(e)?;
+        }
+    }
     Ok(crate::async_compat::net::TcpStream::from_std(
         socket.into(),
     )?)
