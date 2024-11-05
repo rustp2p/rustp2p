@@ -77,7 +77,7 @@ impl TcpPipe {
 impl TcpPipe {
     /// Accept `TCP` pipelines from this kind pipe
     pub async fn accept(&mut self) -> anyhow::Result<TcpPipeLine> {
-        crate::async_compat::select! {
+        crate::select! {
             rs=self.connect_receiver.recv()=>{
                 let (route_key,read_half) = rs.context("connect_receiver done")?;
                 Ok(TcpPipeLine::new(self.route_idle_time,route_key,read_half,self.write_half_collect.clone()))

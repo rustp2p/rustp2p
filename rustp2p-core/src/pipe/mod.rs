@@ -92,7 +92,7 @@ pub struct PipeWriterRef<'a, PeerID> {
 impl<PeerID> Pipe<PeerID> {
     /// Accept pipelines from a given `pipe`
     pub async fn accept(&mut self) -> anyhow::Result<PipeLine> {
-        crate::async_compat::select! {
+        crate::select! {
             rs=accept_udp(self.udp_pipe.as_mut())=>{
                 rs
             }

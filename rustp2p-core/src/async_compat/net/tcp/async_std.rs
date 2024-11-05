@@ -1,5 +1,6 @@
 use std::io;
 use std::net::SocketAddr;
+use std::ops::{Deref, DerefMut};
 #[cfg(windows)]
 use std::os::windows::io::{AsRawSocket, RawSocket};
 
@@ -65,5 +66,19 @@ impl TcpStream {
     }
     pub fn set_nodelay(&self, nodelay: bool) -> io::Result<()> {
         self.inner.get_ref().set_nodelay(nodelay)
+    }
+}
+
+impl Deref for TcpStream{
+    type Target = Async<std::net::TcpStream>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl DerefMut for TcpStream{
+    fn deref_mut(&mut self) -> &mut Self::Target {
+       & mut self.inner
     }
 }

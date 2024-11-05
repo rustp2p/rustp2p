@@ -4,14 +4,18 @@ use crate::protocol::protocol_type::ProtocolType;
 use rand::seq::SliceRandom;
 use rust_p2p_core::punch::{PunchConsultInfo, PunchInfo, Puncher};
 use std::time::Duration;
+#[cfg(feature = "use-tokio")]
 use tokio::sync::mpsc::Receiver;
+
+#[cfg(feature = "use-async-std")]
+use async_std::channel::Receiver;
 
 pub async fn punch_consult_loop(pipe_writer: PipeWriter, puncher: Puncher<NodeID>) {
     let mut seq = 0;
-    tokio::time::sleep(Duration::from_secs(1)).await;
+    rust_p2p_core::async_compat::time::sleep(Duration::from_secs(1)).await;
     let route_table = pipe_writer.pipe_writer.route_table();
     loop {
-        tokio::time::sleep(Duration::from_secs(5)).await;
+        rust_p2p_core::async_compat::time::sleep(Duration::from_secs(5)).await;
         seq += 1;
         let self_id = if let Some(self_id) = pipe_writer.pipe_context.load_id() {
             self_id
@@ -67,7 +71,21 @@ pub async fn punch_loop(
     pipe_writer: PipeWriter,
     puncher: Puncher<NodeID>,
 ) {
+    #[cfg(feature = "use-tokio")]
     while let Some((node_id, info)) = receiver.recv().await {
+        let punch_info = PunchInfo::new(
+            active,
+            info.peer_punch_model & pipe_writer.pipe_context().punch_model_box(),
+            info.peer_nat_info,
+        );
+        if let Ok(packet) = pipe_writer.allocate_send_packet_proto(ProtocolType::PunchRequest, 0) {
+            if let Err(e) = puncher.punch(node_id, packet.buf(), punch_info).await {
+                log::warn!("punch {e:?} {node_id:?}");
+            }
+        }
+    }
+    #[cfg(feature = "use-async-std")]
+    while let Ok((node_id, info)) = receiver.recv().await {
         let punch_info = PunchInfo::new(
             active,
             info.peer_punch_model & pipe_writer.pipe_context().punch_model_box(),
