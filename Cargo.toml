@@ -65,7 +65,7 @@ crossbeam-utils = "0.8"
 crossbeam-queue = "0.3.11"
 
 [features]
-default = ["use-async-std"]
+default = ["use-tokio"]
 aes-gcm = ["ring"]
 chacha20-poly1305 = ["ring"]
 use-tokio = ["rust-p2p-core/use-tokio","tokio"]
