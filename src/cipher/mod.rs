@@ -7,7 +7,7 @@ mod chacha20_poly1305;
 #[derive(Clone)]
 pub enum Cipher {
     #[cfg(feature = "aes-gcm")]
-    AesGcm(aes_gcm::AesGcmCipher),
+    AesGcm(Box<aes_gcm::AesGcmCipher>),
     #[cfg(feature = "chacha20-poly1305")]
     ChaCha20Poly1305(chacha20_poly1305::ChaCha20Poly1305Cipher),
     None,
@@ -33,7 +33,7 @@ impl From<Algorithm> for Cipher {
 #[cfg(feature = "aes-gcm")]
 impl Cipher {
     pub fn new_aes_gcm(password: String) -> Self {
-        Cipher::AesGcm(aes_gcm::cipher(password))
+        Cipher::AesGcm(Box::new(aes_gcm::cipher(password)))
     }
 }
 #[cfg(feature = "chacha20-poly1305")]

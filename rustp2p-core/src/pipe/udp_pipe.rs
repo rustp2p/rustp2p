@@ -515,7 +515,7 @@ impl UdpPipe {
                     }
                     if vec_buf.len() == 1 {
                         let (buf, addr) = unsafe { vec_buf.get_unchecked(0) };
-                        if let Err(e) = udp.send_to(buf, addr).await {
+                        if let Err(e) = udp.send_to(buf, *addr).await {
                             log::debug!("{addr:?},{e:?}")
                         }
                     } else if let Err(e) = loop {

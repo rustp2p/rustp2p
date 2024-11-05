@@ -102,40 +102,28 @@ pub(crate) fn start_task(
     active_receiver: Receiver<(NodeID, PunchConsultInfo)>,
     passive_receiver: Receiver<(NodeID, PunchConsultInfo)>,
 ) -> futures::future::JoinAll<BoxFuture<'static, ()>> {
-    let mut join_set = Vec::new();
-    join_set.push(heartbeat::heartbeat_loop(pipe_writer.clone(), heartbeat_interval).boxed());
-    join_set.push(idle::idle_check_loop(idle_route_manager).boxed());
-    join_set.push(
+    let join_set = vec![
+        heartbeat::heartbeat_loop(pipe_writer.clone(), heartbeat_interval).boxed(),
+        idle::idle_check_loop(idle_route_manager).boxed(),
         idle::other_group_idle_check_loop(pipe_writer.pipe_context.clone(), route_idle_time)
             .boxed(),
-    );
-    join_set.push(
         id_route::id_route_query_loop(pipe_writer.clone(), query_id_interval, query_id_max_num)
             .boxed(),
-    );
-    join_set.push(
         nat_query::nat_test_loop(
             pipe_writer.clone(),
             udp_stun_servers.clone(),
             default_interface,
         )
-        .boxed(),
-    );
-    join_set.push(
+            .boxed(),
         query_public_addr::query_tcp_public_addr_loop(pipe_writer.clone(), tcp_stun_servers)
             .boxed(),
-    );
-    join_set.push(
         query_public_addr::query_udp_public_addr_loop(pipe_writer.clone(), udp_stun_servers)
             .boxed(),
-    );
-    join_set.push(punch_consult::punch_consult_loop(pipe_writer.clone(), puncher.clone()).boxed());
-    join_set.push(
+        punch_consult::punch_consult_loop(pipe_writer.clone(), puncher.clone()).boxed(),
         punch_consult::punch_loop(true, active_receiver, pipe_writer.clone(), puncher.clone())
             .boxed(),
-    );
-    join_set.push(
         punch_consult::punch_loop(false, passive_receiver, pipe_writer.clone(), puncher).boxed(),
-    );
+    ];
+
     futures::future::join_all(join_set)
 }
