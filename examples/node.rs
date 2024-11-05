@@ -7,12 +7,12 @@ use env_logger::Env;
 use pnet_packet::icmp::IcmpTypes;
 use pnet_packet::ip::IpNextHeaderProtocols;
 use pnet_packet::Packet;
+use rust_p2p_core::async_compat::mpsc::{channel, Sender};
 use rustp2p::cipher::Algorithm;
 use rustp2p::config::{PipeConfig, TcpPipeConfig, UdpPipeConfig};
 use rustp2p::error::*;
 use rustp2p::pipe::{PeerNodeAddress, Pipe, PipeLine, PipeWriter, RecvUserData};
 use rustp2p::protocol::node_id::GroupCode;
-use tokio::sync::mpsc::{channel, Sender};
 use tun_rs::AsyncDevice;
 
 #[derive(Parser, Debug)]
@@ -34,8 +34,19 @@ struct Args {
     port: Option<u16>,
 }
 
+#[cfg(feature = "use-tokio")]
 #[tokio::main]
-pub async fn main() -> Result<()> {
+async fn main() -> Result<()> {
+    main0().await
+}
+
+#[cfg(feature = "use-async-std")]
+#[::async_std::main]
+async fn main() -> Result<()> {
+    main0().await
+}
+
+pub async fn main0() -> Result<()> {
     let Args {
         peer,
         local,
@@ -52,7 +63,7 @@ pub async fn main() -> Result<()> {
             addrs.push(addr.parse::<PeerNodeAddress>().expect("--peer"))
         }
     }
-    let (tx, mut quit) = tokio::sync::mpsc::channel::<()>(1);
+    let (tx, mut quit) = rust_p2p_core::async_compat::mpsc::channel::<()>(1);
 
     ctrlc2::set_async_handler(async move {
         tx.send(()).await.expect("Signal error");
@@ -98,7 +109,14 @@ pub async fn main() -> Result<()> {
     });
 
     tokio::spawn(async move {
+        #[cfg(feature = "use-tokio")]
         while let Some(data) = receiver1.recv().await {
+            if let Err(e) = device.send(data.payload()).await {
+                log::warn!("device.send {e:?}")
+            }
+        }
+        #[cfg(feature = "use-async-std")]
+        while let Ok(data) = receiver1.recv().await {
             if let Err(e) = device.send(data.payload()).await {
                 log::warn!("device.send {e:?}")
             }

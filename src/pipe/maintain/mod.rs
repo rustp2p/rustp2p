@@ -114,7 +114,7 @@ pub(crate) fn start_task(
             udp_stun_servers.clone(),
             default_interface,
         )
-            .boxed(),
+        .boxed(),
         query_public_addr::query_tcp_public_addr_loop(pipe_writer.clone(), tcp_stun_servers)
             .boxed(),
         query_public_addr::query_udp_public_addr_loop(pipe_writer.clone(), udp_stun_servers)

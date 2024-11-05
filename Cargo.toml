@@ -38,6 +38,8 @@ env_logger = "0.11.5"
 tun-rs = { version = "1", features = ["async"] }
 pnet_packet = "0.35.0"
 ctrlc2 = { version = "3", features = ["tokio", "termination"] }
+async-std = {version = "1.13.0",features = ["attributes","unstable"]}
+tokio = {version = "1.41.0",features = ["full"]}
 
 [[example]]
 name = "node"

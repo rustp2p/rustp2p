@@ -1,25 +1,8 @@
-#[cfg(feature = "use-async-std")]
-use futures_util::FutureExt;
-use std::future::Future;
-
 pub struct Elapsed;
-#[cfg(feature = "use-tokio")]
-pub async fn timeout<F: Future>(duration: std::time::Duration, f: F) -> Result<F::Output, Elapsed> {
-    tokio::time::timeout(duration, f).await.map_err(|_| Elapsed)
-}
 #[cfg(feature = "use-async-std")]
-pub async fn timeout<F: Future>(duration: std::time::Duration, f: F) -> Result<F::Output, Elapsed> {
-    futures::select! {
-        _ = async {
-            async_std::task::sleep(duration).await
-        }.fuse() =>{
-            Err(Elapsed)
-        }
-        result = f.fuse() =>{
-            Ok(result)
-        }
-    }
-}
+pub use async_std::future::timeout;
+#[cfg(feature = "use-tokio")]
+pub use tokio::time::timeout;
 
 #[cfg(feature = "use-tokio")]
 pub async fn sleep(duration: std::time::Duration) {
