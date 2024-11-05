@@ -69,7 +69,7 @@ impl TcpStream {
     }
 }
 
-impl Deref for TcpStream{
+impl Deref for TcpStream {
     type Target = Async<std::net::TcpStream>;
 
     fn deref(&self) -> &Self::Target {
@@ -77,8 +77,8 @@ impl Deref for TcpStream{
     }
 }
 
-impl DerefMut for TcpStream{
+impl DerefMut for TcpStream {
     fn deref_mut(&mut self) -> &mut Self::Target {
-       & mut self.inner
+        &mut self.inner
     }
 }

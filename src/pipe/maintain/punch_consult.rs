@@ -65,6 +65,7 @@ pub async fn punch_consult_loop(pipe_writer: PipeWriter, puncher: Puncher<NodeID
         }
     }
 }
+#[allow(unused_mut)]
 pub async fn punch_loop(
     active: bool,
     mut receiver: Receiver<(NodeID, PunchConsultInfo)>,

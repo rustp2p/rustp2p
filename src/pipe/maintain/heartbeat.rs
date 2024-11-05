@@ -18,7 +18,7 @@ pub async fn heartbeat_loop(pipe_writer: PipeWriter, heartbeat_interval: Duratio
             log::warn!("heartbeat_request e={e:?}");
         }
 
-       rust_p2p_core::async_compat::time::sleep(heartbeat_interval).await;
+        rust_p2p_core::async_compat::time::sleep(heartbeat_interval).await;
         count += 1;
     }
 }

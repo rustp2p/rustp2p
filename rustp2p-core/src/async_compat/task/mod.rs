@@ -1,5 +1,5 @@
 #[cfg(feature = "use-tokio")]
-mod tokio;
+pub mod tokio;
 #[cfg(feature = "use-tokio")]
 pub use tokio::*;
 #[cfg(feature = "use-async-std")]

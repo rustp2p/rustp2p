@@ -9,7 +9,7 @@ use std::future::Future;
 pub use task::*;
 
 #[cfg(feature = "use-tokio")]
-pub use tokio::spawn;
+pub use ::tokio::spawn;
 
 #[cfg(feature = "use-async-std")]
 use ::async_std::task::JoinHandle;

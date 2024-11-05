@@ -69,13 +69,21 @@ pub async fn dns_query_all(
                     let host = host.to_string();
                     let name_server = name_server.clone();
                     let default_interface = default_interface.clone();
-                    rust_p2p_core::async_compat::spawn(a_dns(host, name_server, default_interface.clone()))
+                    rust_p2p_core::async_compat::spawn(a_dns(
+                        host,
+                        name_server,
+                        default_interface.clone(),
+                    ))
                 };
                 let th2 = {
                     let host = host.to_string();
                     let name_server = name_server.clone();
                     let default_interface = default_interface.clone();
-                    rust_p2p_core::async_compat::spawn(aaaa_dns(host, name_server, default_interface.clone()))
+                    rust_p2p_core::async_compat::spawn(aaaa_dns(
+                        host,
+                        name_server,
+                        default_interface.clone(),
+                    ))
                 };
                 let mut addr = Vec::new();
                 match th1.await? {
@@ -137,7 +145,9 @@ async fn query<'a>(
     let len = loop {
         udp.send(&packet).await?;
 
-        match rust_p2p_core::async_compat::time::timeout(Duration::from_secs(3), udp.recv(buf)).await {
+        match rust_p2p_core::async_compat::time::timeout(Duration::from_secs(3), udp.recv(buf))
+            .await
+        {
             Ok(len) => {
                 break len?;
             }
@@ -205,7 +215,6 @@ fn bind_udp(
     let socket = rust_p2p_core::socket::bind_udp(addr, default_interface.as_ref())?;
 
     {
-
         Ok(UdpSocket::from_std(socket.into())?)
     }
 }

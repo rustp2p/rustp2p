@@ -11,6 +11,9 @@ use rust_p2p_core::async_compat::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 #[cfg(feature = "use-async-std")]
 use async_std::prelude::*;
 
+#[cfg(feature = "use-tokio")]
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
 use crate::pipe::{NodeAddress, PeerNodeAddress, RecvResult};
 use crate::protocol::node_id::{GroupCode, NodeID};
 use crate::protocol::{NetPacket, HEAD_LEN};
