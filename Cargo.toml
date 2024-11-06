@@ -40,6 +40,7 @@ pnet_packet = "0.35.0"
 ctrlc2 = { version = "3", features = ["tokio", "termination"] }
 async-std = {version = "1.13.0",features = ["attributes","unstable"]}
 tokio = {version = "1.41.0",features = ["full"]}
+ctrlc = "3.4.5"
 
 [[example]]
 name = "node"
@@ -65,7 +66,7 @@ crossbeam-utils = "0.8"
 crossbeam-queue = "0.3.11"
 
 [features]
-default = ["use-tokio"]
+default = ["use-async-std"]
 aes-gcm = ["ring"]
 chacha20-poly1305 = ["ring"]
 use-tokio = ["rust-p2p-core/use-tokio","tokio"]
