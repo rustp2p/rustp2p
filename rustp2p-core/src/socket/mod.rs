@@ -86,10 +86,13 @@ pub(crate) fn create_tcp0(
     }
     socket.set_nonblocking(true)?;
     socket.set_nodelay(true)?;
-    if let Err(e) = socket.connect(&addr.into()) {
-        if e.kind() != std::io::ErrorKind::WouldBlock {
-            Err(e)?;
-        }
+    let res = socket.connect(&addr.into());
+    match res {
+        Ok(()) => {}
+        Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+        #[cfg(unix)]
+        Err(ref e) if e.raw_os_error() == Some(libc::EINPROGRESS) => {}
+        Err(e) => Err(e)?,
     }
     Ok(crate::async_compat::net::TcpStream::from_std(
         socket.into(),

@@ -7,28 +7,28 @@ macro_rules! select {
   (@INNER {$($collect:tt)*} $name:ident = $future:expr => $result:expr, $($r:tt)*) => {
       {
           #[allow(unused_imports)]
-          use $crate::async_compat::task::async_std::FutureExt;
+          use $crate::async_compat::task::use_async_std::FutureExt;
           $crate::select!{@INNER {$($collect)* $name = $future.fuse()=>$result, } $($r)*}
       }
   };
   (@INNER {$($collect:tt)*} $name:ident = $future:expr => $result:block $($r:tt)*) => {
       {
           #[allow(unused_imports)]
-          use $crate::async_compat::task::async_std::FutureExt;
+          use $crate::async_compat::task::use_async_std::FutureExt;
           $crate::select!{@INNER {$($collect)* $name = $future.fuse()=>$result, } $($r)*}
       }
   };
   (@INNER {$($collect:tt)*} $name:pat = $future:expr => $result:expr , $($r:tt)*) => {
       {
           #[allow(unused_imports)]
-          use $crate::async_compat::task::async_std::FutureExt;
+          use $crate::async_compat::task::use_async_std::FutureExt;
           $crate::select!{@INNER {$($collect)* $name = $future.fuse()=>$result, } $($r)*}
       }
   };
   (@INNER {$($collect:tt)*} $name:pat = $future:expr => $result:block  $($r:tt)*) => {
       {
           #[allow(unused_imports)]
-          use $crate::async_compat::task::async_std::FutureExt;
+          use $crate::async_compat::task::use_async_std::FutureExt;
           $crate::select!{@INNER {$($collect)* $name = $future.fuse()=>$result, } $($r)*}
       }
   };
@@ -51,7 +51,7 @@ macro_rules! select {
       }
   };
    (@INNER {$($collect:tt)*}) => {
-       $crate::async_compat::task::async_std::futures::select! {
+       $crate::async_compat::task::use_async_std::futures::select! {
            $($collect)*
        }
    };
