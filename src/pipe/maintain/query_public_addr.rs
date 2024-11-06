@@ -75,6 +75,7 @@ pub(crate) async fn query_tcp_public_addr_loop(
                             Ok(addr) => {
                                 log::debug!("update_tcp_public_addr {cur_index},{stun} {addr}");
                                 pipe_writer.pipe_context().update_tcp_public_addr(addr);
+                                let mut buf = [0;1024];
                                 loop {
                                     rust_p2p_core::async_compat::time::sleep(Duration::from_secs(10)).await;
                                     if let Err(e) = tcp_stream.try_write(b"1"){
@@ -83,7 +84,7 @@ pub(crate) async fn query_tcp_public_addr_loop(
                                             break
                                         }
                                     }
-                                    match tcp_stream.try_read(&mut [0;1024]) {
+                                    match tcp_stream.try_read(&mut buf) {
                                         Ok(_) => {}
                                         Err(e) => {
                                             if std::io::ErrorKind::WouldBlock != e.kind(){
