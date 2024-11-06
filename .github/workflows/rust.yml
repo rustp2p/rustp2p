@@ -25,7 +25,7 @@ jobs:
       run: cargo check --verbose
     - name: clippy
       if: ${{ !cancelled() }}
-      run: cargo clippy --all-targets --features use-tokio --no-default-features -- -D warnings
+      run: cargo clippy --all-targets -- -D warnings
     - name: Build
       if: ${{ !cancelled() }}
       run: cargo build --verbose --examples --tests
