@@ -2,7 +2,6 @@ use crate::pipe::PipeWriter;
 use std::collections::HashMap;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::time::Duration;
-//use rust_p2p_core::async_compat::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use rust_p2p_core::async_compat::net::tcp::TcpStream;
 
 #[cfg(feature = "use-async-std")]
@@ -71,20 +70,38 @@ pub(crate) async fn query_tcp_public_addr_loop(
                 Ok(rs) => {
                     if let Err(e) = rs {
                         log::debug!("query_tcp_public_addr_loop write_all {e:?},server={stun:?}");
+                    }else{
+                        match stun_tcp_read(&mut tcp_stream).await {
+                            Ok(addr) => {
+                                log::debug!("update_tcp_public_addr {cur_index},{stun} {addr}");
+                                pipe_writer.pipe_context().update_tcp_public_addr(addr);
+                                loop {
+                                    rust_p2p_core::async_compat::time::sleep(Duration::from_secs(10)).await;
+                                    if let Err(e) = tcp_stream.try_write(b"1"){
+                                        if std::io::ErrorKind::WouldBlock != e.kind(){
+                                            log::debug!("stun tcp w close {cur_index},{stun} {addr} {e}");
+                                            break
+                                        }
+                                    }
+                                    match tcp_stream.try_read(&mut [0;1024]) {
+                                        Ok(_) => {}
+                                        Err(e) => {
+                                            if std::io::ErrorKind::WouldBlock != e.kind(){
+                                                log::debug!("stun tcp r close {cur_index},{stun} {addr} {e}");
+                                                break
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                log::debug!("query_tcp_public_addr_loop stun_tcp_read {e:?},server={stun:?}",);
+                            }
+                        }
                     }
                 }
                 Err(_) => {
                     log::debug!("query_tcp_public_addr_loop write_all timeout,server={stun:?}");
-                }
-            }
-            match stun_tcp_read(&mut tcp_stream).await {
-                Ok(addr) => {
-                    pipe_writer.pipe_context().update_tcp_public_addr(addr);
-                    rust_p2p_core::async_compat::time::sleep(Duration::from_secs(12)).await;
-                    continue;
-                }
-                Err(e) => {
-                    log::debug!("query_tcp_public_addr_loop stun_tcp_read {e:?},server={stun:?}",);
                 }
             }
         }

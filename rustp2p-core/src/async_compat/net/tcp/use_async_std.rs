@@ -1,4 +1,5 @@
 use std::io;
+use std::io::{Read, Write};
 use std::net::SocketAddr;
 use std::ops::{Deref, DerefMut};
 #[cfg(windows)]
@@ -66,6 +67,12 @@ impl TcpStream {
     }
     pub fn set_nodelay(&self, nodelay: bool) -> io::Result<()> {
         self.inner.get_ref().set_nodelay(nodelay)
+    }
+    pub fn try_write(&mut self,buf:&[u8])->io::Result<usize>{
+        self.inner.get_ref().write(buf)
+    }
+    pub fn try_read(&mut self,buf:&mut [u8])->io::Result<usize>{
+        self.inner.get_ref().read(buf)
     }
 }
 
