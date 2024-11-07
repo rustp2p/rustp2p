@@ -1,8 +1,8 @@
 use crate::pipe::PipeWriter;
+use rust_p2p_core::async_compat::net::tcp::TcpStream;
 use std::collections::HashMap;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::time::Duration;
-use rust_p2p_core::async_compat::net::tcp::TcpStream;
 
 #[cfg(feature = "use-async-std")]
 use async_std::prelude::*;
@@ -70,26 +70,31 @@ pub(crate) async fn query_tcp_public_addr_loop(
                 Ok(rs) => {
                     if let Err(e) = rs {
                         log::debug!("query_tcp_public_addr_loop write_all {e:?},server={stun:?}");
-                    }else{
+                    } else {
                         match stun_tcp_read(&mut tcp_stream).await {
                             Ok(addr) => {
                                 log::debug!("update_tcp_public_addr {cur_index},{stun} {addr}");
                                 pipe_writer.pipe_context().update_tcp_public_addr(addr);
-                                let mut buf = [0;1024];
+                                let mut buf = [0; 1024];
                                 loop {
-                                    rust_p2p_core::async_compat::time::sleep(Duration::from_secs(10)).await;
-                                    if let Err(e) = tcp_stream.try_write(b"1"){
-                                        if std::io::ErrorKind::WouldBlock != e.kind(){
-                                            log::debug!("stun tcp w close {cur_index},{stun} {addr} {e}");
-                                            break
+                                    rust_p2p_core::async_compat::time::sleep(Duration::from_secs(
+                                        10,
+                                    ))
+                                    .await;
+                                    if let Err(e) = tcp_stream.try_write(b"1") {
+                                        if std::io::ErrorKind::WouldBlock != e.kind() {
+                                            log::debug!(
+                                                "stun tcp w close {cur_index},{stun} {addr} {e}"
+                                            );
+                                            break;
                                         }
                                     }
                                     match tcp_stream.try_read(&mut buf) {
                                         Ok(_) => {}
                                         Err(e) => {
-                                            if std::io::ErrorKind::WouldBlock != e.kind(){
+                                            if std::io::ErrorKind::WouldBlock != e.kind() {
                                                 log::debug!("stun tcp r close {cur_index},{stun} {addr} {e}");
-                                                break
+                                                break;
                                             }
                                         }
                                     }
