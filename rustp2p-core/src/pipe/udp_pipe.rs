@@ -739,7 +739,7 @@ impl Drop for UdpPipeLine {
                 socket_layer: self.socket_layer.take(),
             });
             if let Err(e) = rs {
-                log::warn!("UdpPipeLine drop{e}");
+                log::warn!("UdpPipeLine drop {e}");
             }
         }
     }

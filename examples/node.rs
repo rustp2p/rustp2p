@@ -7,12 +7,12 @@ use env_logger::Env;
 use pnet_packet::icmp::IcmpTypes;
 use pnet_packet::ip::IpNextHeaderProtocols;
 use pnet_packet::Packet;
-use rust_p2p_core::async_compat::mpsc::{channel, Sender};
 use rustp2p::cipher::Algorithm;
 use rustp2p::config::{PipeConfig, TcpPipeConfig, UdpPipeConfig};
 use rustp2p::error::*;
 use rustp2p::pipe::{PeerNodeAddress, Pipe, PipeLine, PipeWriter, RecvUserData};
 use rustp2p::protocol::node_id::GroupCode;
+use tachyonix::{channel, Sender};
 use tun_rs::AsyncDevice;
 
 #[derive(Parser, Debug)]
@@ -113,13 +113,6 @@ pub async fn main0() -> Result<()> {
     });
 
     rust_p2p_core::async_compat::spawn(async move {
-        #[cfg(feature = "use-tokio")]
-        while let Some(data) = receiver1.recv().await {
-            if let Err(e) = device.send(data.payload()).await {
-                log::warn!("device.send {e:?}")
-            }
-        }
-        #[cfg(feature = "use-async-std")]
         while let Ok(data) = receiver1.recv().await {
             if let Err(e) = device.send(data.payload()).await {
                 log::warn!("device.send {e:?}")

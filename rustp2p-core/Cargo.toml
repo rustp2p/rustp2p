@@ -18,13 +18,13 @@ thiserror = { workspace = true }
 rand = { workspace = true }
 crossbeam-utils = { workspace = true }
 crossbeam-queue = { workspace = true }
+tachyonix = { workspace = true }
+tokio = { workspace = true, optional = true }
+async-std = { workspace = true, optional = true }
+async-io = { workspace = true, optional = true }
+futures-util = { workspace = true, optional = true }
 
-tachyonix = "0.3"
 async-broadcast = "0.7"
-tokio = { version = "1.41", features = ["full"], optional = true }
-async-io = { version = "2.3", optional = true }
-async-std = { version = "1.13", optional = true }
-futures-util = { version = "0.3", optional = true }
 
 socket2 = { version = "0.5.7", features = ["all"] }
 network-interface = "2.0.0"
