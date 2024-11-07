@@ -9,7 +9,7 @@ use anyhow::{anyhow, Context};
 use bytes::BytesMut;
 use dashmap::DashMap;
 use parking_lot::{Mutex, RwLock};
-use tachyonix::{Receiver, Sender};
+use tachyonix::{Receiver, Sender, TrySendError};
 
 use crate::pipe::config::UdpPipeConfig;
 use crate::pipe::recycle::RecycleBuf;
@@ -738,8 +738,8 @@ impl Drop for UdpPipeLine {
                 re_sender: self.re_sender.clone(),
                 socket_layer: self.socket_layer.take(),
             });
-            if let Err(e) = rs {
-                log::warn!("UdpPipeLine drop {e}");
+            if let Err(TrySendError::Full(_)) = rs {
+                log::warn!("UdpPipeLine TrySendError full");
             }
         }
     }
