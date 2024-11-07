@@ -41,13 +41,6 @@ impl TcpStream {
     }
 }
 
-#[cfg(windows)]
-impl AsRawSocket for TcpStream {
-    fn as_raw_socket(&self) -> RawSocket {
-        self.inner.as_raw_socket()
-    }
-}
-
 impl TcpStream {
     pub fn from_std(stream: std::net::TcpStream) -> io::Result<Self> {
         Ok(Self {
