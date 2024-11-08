@@ -1,3 +1,4 @@
+pub mod async_compat;
 pub mod error;
 pub mod extend;
 pub mod idle;

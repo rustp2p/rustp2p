@@ -3,11 +3,11 @@ use std::io;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 use std::time::Duration;
 
+use crate::async_compat::net::udp::UdpSocket;
 use crate::nat::NatType;
 use crate::socket::{bind_udp, LocalInterface};
 use rand::RngCore;
 use stun_format::Attr;
-use tokio::net::UdpSocket;
 
 /// Obtain nat information with the option specified interface from the stun servers
 pub async fn stun_test_nat(
@@ -135,14 +135,18 @@ async fn test_nat_(
         });
         udp.send(msg.as_bytes()).await?;
         let mut buf = [0; 10240];
-        let (len, _addr) =
-            match tokio::time::timeout(Duration::from_secs(3), udp.recv_from(&mut buf)).await {
-                Ok(rs) => rs?,
-                Err(e) => {
-                    log::warn!("stun {} error {:?}", stun_server, e);
-                    continue;
-                }
-            };
+        let (len, _addr) = match crate::async_compat::time::timeout(
+            Duration::from_secs(3),
+            udp.recv_from(&mut buf),
+        )
+        .await
+        {
+            Ok(rs) => rs?,
+            Err(e) => {
+                log::warn!("stun {} error {:?}", stun_server, e);
+                continue;
+            }
+        };
         let msg = stun_format::Msg::from(&buf[..len]);
         let mut mapped_addr = None;
         let mut changed_addr = None;

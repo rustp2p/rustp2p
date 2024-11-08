@@ -5,8 +5,14 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use bytes::{Buf, BytesMut};
+
+use rust_p2p_core::async_compat::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
+
+#[cfg(feature = "use-async-std")]
+use async_std::prelude::*;
+
+#[cfg(feature = "use-tokio")]
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 
 use crate::pipe::{NodeAddress, PeerNodeAddress, RecvResult};
 use crate::protocol::node_id::{GroupCode, NodeID};

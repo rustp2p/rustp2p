@@ -8,10 +8,10 @@ description = "A decentralized p2p library powered by Rust, which is devoted to 
 repository = "https://github.com/rustp2p/rustp2p"
 
 [dependencies]
-rust-p2p-core = { path = "rustp2p-core", version = "0.1" }
+rust-p2p-core = { path = "rustp2p-core", version = "0.1", default-features = false }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, optional = true }
 log = { workspace = true }
 thiserror = { workspace = true }
 bytes = { workspace = true }
@@ -20,21 +20,30 @@ dashmap = { workspace = true }
 rand = { workspace = true }
 crossbeam-utils = { workspace = true }
 crossbeam-queue = { workspace = true }
-async-shutdown = "0.2.2"
-rmp-serde = "1.3.0"
-dns-parser = "0.8.0"
+tachyonix = { workspace = true }
+async-std = { workspace = true, optional = true }
+async-io = { workspace = true, optional = true }
+futures-util = { workspace = true, optional = true }
 
-ring = { version = "0.17.8", optional = true }
-sha2 = "0.10.8"
+
+async-shutdown = "0.2"
+rmp-serde = "1.3"
+dns-parser = "0.8"
+
+ring = { version = "0.17", optional = true }
+sha2 = "0.10"
 
 [dev-dependencies]
 rustp2p = { path = "../rustp2p", features = ["aes-gcm"] }
 clap = { version = "=4.0.32", features = ["derive"] }
 log = "0.4.22"
 env_logger = "0.11.5"
-tun-rs = { version = "1", features = ["async"] }
+tun-rs = { git = "https://github.com/xmh0511/tun-rs", features = ["async_tokio"] }
 pnet_packet = "0.35.0"
-ctrlc2 = { version = "3", features = ["tokio", "termination"] }
+ctrlc2 = { version = "3", features = ["termination"] }
+async-std = { version = "1.13.0", features = ["attributes", "unstable"] }
+tokio = { version = "1.41.0", features = ["full"] }
+ctrlc = "3.4.5"
 
 [[example]]
 name = "node"
@@ -47,19 +56,25 @@ members = [
 ]
 
 [workspace.dependencies]
-anyhow = "1.0.86"
-thiserror = "1.0.63"
-tokio = { version = "1.39.2", features = ["full"] }
-async-trait = "0.1.81"
-log = "0.4.17"
+futures-util = "0.3"
+async-io = "2.3"
+async-std = "1.13"
+tachyonix = "0.3"
+anyhow = "1"
+thiserror = "2"
+tokio = { version = "1.41", features = ["full"] }
+async-trait = "0.1"
+log = "0.4"
 parking_lot = "0.12"
-bytes = "1.7.1"
+bytes = "1.8"
 dashmap = "6.1"
-rand = "0.8.5"
+rand = "0.8"
 crossbeam-utils = "0.8"
-crossbeam-queue = "0.3.11"
+crossbeam-queue = "0.3"
 
 [features]
-default = []
+default = ["use-tokio"]
 aes-gcm = ["ring"]
 chacha20-poly1305 = ["ring"]
+use-tokio = ["rust-p2p-core/use-tokio", "tokio"]
+use-async-std = ["rust-p2p-core/use-async-std", "async-std", "async-io", "futures-util"]

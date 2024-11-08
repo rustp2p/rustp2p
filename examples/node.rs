@@ -12,7 +12,7 @@ use rustp2p::config::{PipeConfig, TcpPipeConfig, UdpPipeConfig};
 use rustp2p::error::*;
 use rustp2p::pipe::{PeerNodeAddress, Pipe, PipeLine, PipeWriter, RecvUserData};
 use rustp2p::protocol::node_id::GroupCode;
-use tokio::sync::mpsc::{channel, Sender};
+use tachyonix::{channel, Sender};
 use tun_rs::AsyncDevice;
 
 #[derive(Parser, Debug)]
@@ -34,8 +34,21 @@ struct Args {
     port: Option<u16>,
 }
 
+#[cfg(feature = "use-tokio")]
 #[tokio::main]
-pub async fn main() -> Result<()> {
+async fn main() -> Result<()> {
+    main0().await
+}
+
+#[cfg(feature = "use-async-std")]
+#[::async_std::main]
+async fn main() -> Result<()> {
+    use futures_util::FutureExt;
+    main0().boxed().await
+}
+
+#[allow(unused_mut)]
+pub async fn main0() -> Result<()> {
     let Args {
         peer,
         local,
@@ -52,12 +65,14 @@ pub async fn main() -> Result<()> {
             addrs.push(addr.parse::<PeerNodeAddress>().expect("--peer"))
         }
     }
-    let (tx, mut quit) = tokio::sync::mpsc::channel::<()>(1);
 
-    ctrlc2::set_async_handler(async move {
-        tx.send(()).await.expect("Signal error");
+    let (tx, mut quit) = rust_p2p_core::async_compat::mpsc::channel::<()>(1);
+
+    ctrlc::set_handler(move || {
+        tx.try_send(()).expect("Could not send signal on channel.");
     })
-    .await;
+    .expect("Error setting Ctrl-C handler");
+
     let device = tun_rs::create_as_async(
         tun_rs::Configuration::default()
             .address_with_prefix(self_id, mask)
@@ -93,12 +108,12 @@ pub async fn main() -> Result<()> {
     let shutdown_writer = writer.clone();
     let device_r = device.clone();
     let (sender1, mut receiver1) = channel::<RecvUserData>(128);
-    tokio::spawn(async move {
+    rust_p2p_core::async_compat::spawn(async move {
         tun_recv(writer, device_r, self_id).await.unwrap();
     });
 
-    tokio::spawn(async move {
-        while let Some(data) = receiver1.recv().await {
+    rust_p2p_core::async_compat::spawn(async move {
+        while let Ok(data) = receiver1.recv().await {
             if let Err(e) = device.send(data.payload()).await {
                 log::warn!("device.send {e:?}")
             }
@@ -106,11 +121,11 @@ pub async fn main() -> Result<()> {
     });
     log::info!("listen local port: {port}");
 
-    tokio::spawn(async move {
+    rust_p2p_core::async_compat::spawn(async move {
         loop {
             let line = pipe.accept().await?;
             let writer = pipe.writer();
-            tokio::spawn(recv(line, sender1.clone(), writer));
+            rust_p2p_core::async_compat::spawn(recv(line, sender1.clone(), writer));
         }
         #[allow(unreachable_code)]
         Ok::<(), Error>(())
@@ -251,54 +266,3 @@ async fn process_myself(payload: &[u8], device: &Arc<AsyncDevice>) -> Result<()>
     };
     Ok(())
 }
-
-// #[allow(dead_code)]
-// async fn process_icmp(payload: &[u8], writer: &mut PipeWriter) -> Result<()> {
-//     if let Some(ip_packet) = pnet_packet::ipv4::Ipv4Packet::new(payload) {
-//         match ip_packet.get_next_level_protocol() {
-//             IpNextHeaderProtocols::Icmp => {
-//                 let icmp_pkt = pnet_packet::icmp::IcmpPacket::new(ip_packet.payload())
-//                     .ok_or(std::io::Error::other("invalid icmp packet"))?;
-//                 if IcmpTypes::EchoRequest == icmp_pkt.get_icmp_type() {
-//                     let dest_id = NodeID::from(ip_packet.get_source());
-//                     let mut v = ip_packet.payload().to_owned();
-//                     let mut icmp_new =
-//                         pnet_packet::icmp::MutableIcmpPacket::new(&mut v[..]).unwrap();
-//                     icmp_new.set_icmp_type(IcmpTypes::EchoReply);
-//                     icmp_new.set_checksum(pnet_packet::icmp::checksum(&icmp_new.to_immutable()));
-//                     let len = ip_packet.packet().len();
-//                     let mut buf = vec![0u8; len];
-//                     let mut res = pnet_packet::ipv4::MutableIpv4Packet::new(&mut buf).unwrap();
-//                     res.set_total_length(ip_packet.get_total_length());
-//                     res.set_header_length(ip_packet.get_header_length());
-//                     res.set_destination(ip_packet.get_source());
-//                     res.set_source(ip_packet.get_destination());
-//                     res.set_identification(0x42);
-//                     res.set_next_level_protocol(IpNextHeaderProtocols::Icmp);
-//                     res.set_payload(&v);
-//                     res.set_ttl(64);
-//                     res.set_version(ip_packet.get_version());
-//                     res.set_checksum(pnet_packet::ipv4::checksum(&res.to_immutable()));
-//                     let mut send_packet = writer.allocate_send_packet()?;
-//                     send_packet.set_payload(&buf)?;
-//                     writer.send_to_packet(&mut send_packet, &dest_id).await?;
-//                 }
-//             }
-//             other => {
-//                 log::warn!("{other:?} is not processed by this");
-//             }
-//         }
-//     };
-//     Ok(())
-// }
-
-// async fn is_icmp_request(payload: &[u8]) -> bool {
-//     if let Some(ip_packet) = pnet_packet::ipv4::Ipv4Packet::new(payload) {
-//         if ip_packet.get_next_level_protocol() == IpNextHeaderProtocols::Icmp {
-//             if let Some(icmp_pkt) = pnet_packet::icmp::IcmpPacket::new(ip_packet.payload()) {
-//                 return icmp_pkt.get_icmp_type() == IcmpTypes::EchoRequest;
-//             }
-//         }
-//     }
-//     false
-// }

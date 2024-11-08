@@ -8,8 +8,7 @@ use async_trait::async_trait;
 use bytes::BytesMut;
 use crossbeam_utils::atomic::AtomicCell;
 use dashmap::DashMap;
-use tokio::sync::mpsc::{Receiver, Sender};
-use tokio::sync::Mutex;
+use tachyonix::{Receiver, Sender};
 
 use crate::route::{Index, RouteKey};
 
@@ -33,24 +32,9 @@ pub struct ExtensibleReader {
     read: Box<dyn ExtendRead>,
 }
 
-#[derive(Clone)]
-pub struct ExtensibleWriter {
-    write: Arc<Mutex<Box<dyn ExtendWrite>>>,
-}
-
 impl ExtensibleReader {
     pub async fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         self.read.read(buf).await
-    }
-}
-impl ExtensibleWriter {
-    pub async fn write_all(&self, buf: &[u8]) -> io::Result<()> {
-        let mut guard = self.write.lock().await;
-        guard.write_all(buf).await
-    }
-    pub async fn write_all_vectored(&self, bufs: &[IoSlice<'_>]) -> io::Result<()> {
-        let mut guard = self.write.lock().await;
-        guard.write_all_vectored(bufs).await
     }
 }
 
@@ -62,7 +46,7 @@ pub struct ExtensiblePipe {
 
 impl ExtensiblePipe {
     pub fn new() -> ExtensiblePipe {
-        let (connect_sender, connect_receiver) = tokio::sync::mpsc::channel(64);
+        let (connect_sender, connect_receiver) = tachyonix::channel(64);
         let write_half_collect = Arc::new(WriteHalfCollect::default());
         Self {
             connect_receiver,
@@ -219,11 +203,11 @@ impl ExtensiblePipeWriter {
         let index = self.id.fetch_add(1);
         let route_key = RouteKey::new(Index::Extend(index), addr);
         let reader = ExtensibleReader { read: r };
-        let (sender, mut receiver) = tokio::sync::mpsc::channel::<BytesMut>(32);
+        let (sender, mut receiver) = tachyonix::channel::<BytesMut>(32);
         let collect = self.write_half_collect.clone();
         collect.insert(route_key, sender.clone());
-        tokio::spawn(async move {
-            while let Some(data) = receiver.recv().await {
+        crate::async_compat::spawn(async move {
+            while let Ok(data) = receiver.recv().await {
                 if let Err(e) = w.write_all(&data).await {
                     log::debug!("ExtendWrite {route_key:?},{e:?}");
                     break;
