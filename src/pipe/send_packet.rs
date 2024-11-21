@@ -128,6 +128,18 @@ impl DerefMut for SendPacket {
         &mut self.buf[HEAD_LEN..]
     }
 }
+
+impl AsMut<[u8]> for SendPacket {
+    fn as_mut(&mut self) -> &mut [u8] {
+        self
+    }
+}
+
+impl AsRef<[u8]> for SendPacket {
+    fn as_ref(&self) -> &[u8] {
+        self
+    }
+}
 impl SendPacket {
     pub(crate) fn buf(&self) -> &[u8] {
         &self.buf
