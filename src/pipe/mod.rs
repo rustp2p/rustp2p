@@ -1134,8 +1134,11 @@ impl RecvUserData {
     pub fn offset(&self) -> usize {
         self._offset
     }
-    pub fn original_bytes(&mut self) -> &mut BytesMut {
+    pub fn original_bytes_mut(&mut self) -> &mut BytesMut {
         &mut self._data
+    }
+    pub fn original_bytes(&self) -> &BytesMut {
+        &self._data
     }
     pub fn is_recyclable(&self) -> bool {
         match self._data {
