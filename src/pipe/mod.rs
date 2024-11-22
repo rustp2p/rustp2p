@@ -1132,7 +1132,23 @@ impl DerefMut for Data {
         }
     }
 }
-
+impl RecvUserData {
+    pub fn offset_start(&self) -> usize {
+        self._start
+    }
+    pub fn offset_end(&self) -> usize {
+        self._end
+    }
+    pub fn original_bytes(&mut self) -> &mut BytesMut {
+        &mut self._data
+    }
+    pub fn is_recyclable(&self) -> bool {
+        match self._data {
+            Data::Recyclable(_) => true,
+            Data::Temporary(_) => false,
+        }
+    }
+}
 impl RecvUserData {
     pub fn ttl(&self) -> u8 {
         self._ttl

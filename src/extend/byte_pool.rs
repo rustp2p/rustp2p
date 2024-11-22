@@ -20,6 +20,7 @@ impl<T: Allocatable> BufferPool<T> {
     pub fn alloc(&self) -> Block<T> {
         if let Some(mut data) = self.queue.pop() {
             data.clear();
+            data.reserve(self.buf_capacity);
             Block::new(self.queue.clone(), data)
         } else {
             Block::new(self.queue.clone(), T::alloc(self.buf_capacity))
@@ -62,6 +63,7 @@ impl<T> DerefMut for Block<T> {
 pub trait Allocatable {
     fn alloc(capacity: usize) -> Self;
     fn clear(&mut self);
+    fn reserve(&mut self, capacity: usize);
 }
 
 impl Allocatable for BytesMut {
@@ -71,5 +73,8 @@ impl Allocatable for BytesMut {
 
     fn clear(&mut self) {
         self.clear();
+    }
+    fn reserve(&mut self, capacity: usize) {
+        self.reserve(capacity)
     }
 }
