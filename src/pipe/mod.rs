@@ -577,10 +577,9 @@ impl PipeLine {
                                 }
                             }
                         }
-
+                        block.truncate(rs.end);
                         return Ok(Ok(RecvUserData {
-                            _start: rs.start,
-                            _end: rs.end,
+                            _offset: rs.start,
                             _src_id: rs.src_id,
                             _dest_id: rs.dest_id,
                             _route_key: rs.route_key,
@@ -1098,8 +1097,7 @@ struct HandleResultInner {
 }
 
 pub struct RecvUserData {
-    _start: usize,
-    _end: usize,
+    _offset: usize,
     _data: Data,
     _ttl: u8,
     _max_ttl: u8,
@@ -1133,11 +1131,8 @@ impl DerefMut for Data {
     }
 }
 impl RecvUserData {
-    pub fn offset_start(&self) -> usize {
-        self._start
-    }
-    pub fn offset_end(&self) -> usize {
-        self._end
+    pub fn offset(&self) -> usize {
+        self._offset
     }
     pub fn original_bytes(&mut self) -> &mut BytesMut {
         &mut self._data
@@ -1157,10 +1152,10 @@ impl RecvUserData {
         self._max_ttl
     }
     pub fn payload(&self) -> &[u8] {
-        &self._data[self._start..self._end]
+        &self._data[self._offset..]
     }
     pub fn payload_mut(&mut self) -> &mut [u8] {
-        &mut self._data[self._start..self._end]
+        &mut self._data[self._offset..]
     }
     pub fn src_id(&self) -> NodeID {
         self._src_id
