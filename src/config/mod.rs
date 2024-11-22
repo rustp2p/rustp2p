@@ -278,7 +278,7 @@ impl From<PipeConfig> for rust_p2p_core::pipe::config::PipeConfig {
         let recycle_buf = if value.recycle_buf_cap > 0 {
             Some(RecycleBuf::new(
                 value.recycle_buf_cap,
-                value.send_buffer_size..value.send_buffer_size + 1,
+                value.send_buffer_size..usize::MAX,
             ))
         } else {
             None
