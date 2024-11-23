@@ -1,4 +1,4 @@
-use std::net::SocketAddr;
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 
 pub mod route_table;
 
@@ -88,6 +88,14 @@ impl Index {
 pub struct RouteKey {
     index: Index,
     addr: SocketAddr,
+}
+impl Default for RouteKey {
+    fn default() -> Self {
+        Self {
+            index: Index::Tcp(0),
+            addr: SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0)),
+        }
+    }
 }
 impl RouteKey {
     pub(crate) const fn new(index: Index, addr: SocketAddr) -> Self {

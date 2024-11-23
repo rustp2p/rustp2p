@@ -199,6 +199,9 @@ impl Pipe {
             return Err(Error::ShutDown);
         };
         let pipe_line = pipe_line?;
+        let recv_buff = Vec::with_capacity(BUF_SIZE);
+        let recv_sizes = Vec::with_capacity(BUF_SIZE);
+        let recv_addrs = Vec::with_capacity(BUF_SIZE);
         Ok(PipeLine {
             shutdown_manager: self.shutdown_manager.clone(),
             pipe_context: self.pipe_context.clone(),
@@ -209,6 +212,9 @@ impl Pipe {
             passive_punch_sender: self.passive_punch_sender.clone(),
             buffer_pool: self.buffer_pool.clone(),
             recv_buffer_size: self.recv_buffer_size,
+            recv_buff,
+            recv_sizes,
+            recv_addrs,
         })
     }
 }
@@ -484,8 +490,12 @@ pub struct PipeLine {
     passive_punch_sender: Sender<(NodeID, PunchConsultInfo)>,
     buffer_pool: Option<BufferPool<BytesMut>>,
     recv_buffer_size: usize,
+    recv_buff: Vec<Data>,
+    recv_sizes: Vec<usize>,
+    recv_addrs: Vec<RouteKey>,
 }
-
+const BUF_SIZE: usize = 16;
+type RecvRs = core::result::Result<core::result::Result<RecvUserData, HandleError>, RecvError>;
 impl PipeLine {
     pub async fn next(
         &mut self,
@@ -493,15 +503,78 @@ impl PipeLine {
         self.next_process::<crate::config::DefaultInterceptor>(None)
             .await
     }
+    pub async fn recv_multi(
+        &mut self,
+        data_vec: &mut Vec<RecvUserData>,
+    ) -> core::result::Result<core::result::Result<(), HandleError>, RecvError> {
+        self.recv_multi_process::<crate::config::DefaultInterceptor>(None, data_vec)
+            .await
+    }
+    pub async fn recv_multi_process<I: crate::config::DataInterceptor>(
+        &mut self,
+        interceptor: Option<&I>,
+        data_vec: &mut Vec<RecvUserData>,
+    ) -> core::result::Result<core::result::Result<(), HandleError>, RecvError> {
+        self.recv_addrs.resize(BUF_SIZE, RouteKey::default());
+        self.recv_sizes.resize(BUF_SIZE, 0);
+        self.recv_buff.truncate(BUF_SIZE);
+        loop {
+            while self.recv_buff.len() < BUF_SIZE {
+                self.recv_buff.push(self.alloc());
+            }
+            let num = if let Ok(v) = self
+                .shutdown_manager
+                .wrap_cancel(self.pipe_line.recv_multi_from(
+                    &mut self.recv_buff,
+                    &mut self.recv_sizes,
+                    &mut self.recv_addrs,
+                ))
+                .await
+            {
+                match v {
+                    None => return Err(RecvError::Done),
+                    Some(recv_rs) => match recv_rs {
+                        Ok(rs) => rs,
+                        Err(e) => return Err(RecvError::Io(e)),
+                    },
+                }
+            } else {
+                self.pipe_line.done();
+                return Err(RecvError::Done);
+            };
+            for index in 0..num {
+                let len = self.recv_sizes[index];
+
+                if len == 0 {
+                    return Err(RecvError::Io(std::io::Error::from(
+                        std::io::ErrorKind::UnexpectedEof,
+                    )));
+                }
+                let mut block = self.recv_buff.swap_remove(index);
+                let route_key = std::mem::take(&mut self.recv_addrs[index]);
+                unsafe {
+                    block.set_len(len);
+                }
+                match self.handle_data(interceptor, block, route_key).await {
+                    Ok(rs) => match rs? {
+                        Ok(data) => {
+                            data_vec.push(data);
+                        }
+                        Err(e) => return Ok(Err(e)),
+                    },
+                    Err(data) => self.recv_buff.push(data),
+                }
+            }
+            if !data_vec.is_empty() {
+                return Ok(Ok(()));
+            }
+        }
+    }
     pub async fn next_process<I: crate::config::DataInterceptor>(
         &mut self,
         interceptor: Option<&I>,
-    ) -> core::result::Result<core::result::Result<RecvUserData, HandleError>, RecvError> {
-        let mut block = if let Some(buffer_pool) = self.buffer_pool.as_ref() {
-            Data::Recyclable(buffer_pool.alloc())
-        } else {
-            Data::Temporary(BytesMut::with_capacity(self.recv_buffer_size))
-        };
+    ) -> RecvRs {
+        let mut block = self.alloc();
         loop {
             unsafe {
                 let capacity = block.capacity();
@@ -532,68 +605,90 @@ impl PipeLine {
             unsafe {
                 block.set_len(len);
             }
-            if rust_p2p_core::stun::is_stun_response(&block) {
-                if let Some(pub_addr) = rust_p2p_core::stun::recv_stun_response(&block) {
-                    self.pipe_context
-                        .update_public_addr(route_key.index(), pub_addr);
-                } else {
-                    log::debug!("stun error {route_key:?}")
-                }
-                continue;
+            match self.handle_data(interceptor, block, route_key).await {
+                Ok(rs) => return rs,
+                Err(data) => block = data,
             }
-            let mut recv_result = RecvResult::new(&mut block, route_key);
-            if let Some(interceptor) = interceptor {
-                if interceptor.pre_handle(&mut recv_result).await {
-                    continue;
-                }
+        }
+    }
+    fn alloc(&self) -> Data {
+        let mut block = if let Some(buffer_pool) = self.buffer_pool.as_ref() {
+            Data::Recyclable(buffer_pool.alloc())
+        } else {
+            Data::Temporary(BytesMut::with_capacity(self.recv_buffer_size))
+        };
+        unsafe {
+            let capacity = block.capacity();
+            block.set_len(capacity);
+        }
+        block
+    }
+    async fn handle_data<I: crate::config::DataInterceptor>(
+        &mut self,
+        interceptor: Option<&I>,
+        mut block: Data,
+        route_key: RouteKey,
+    ) -> core::result::Result<RecvRs, Data> {
+        if rust_p2p_core::stun::is_stun_response(&block) {
+            if let Some(pub_addr) = rust_p2p_core::stun::recv_stun_response(&block) {
+                self.pipe_context
+                    .update_public_addr(route_key.index(), pub_addr);
+            } else {
+                log::debug!("stun error {route_key:?}")
             }
+            return Err(block);
+        }
+        let mut recv_result = RecvResult::new(&mut block, route_key);
+        if let Some(interceptor) = interceptor {
+            if interceptor.pre_handle(&mut recv_result).await {
+                return Err(block);
+            }
+        }
 
-            return match self.handle(recv_result).await {
-                Ok(handle_result) => {
-                    if let Some(rs) = handle_result {
-                        #[cfg(any(feature = "aes-gcm", feature = "chacha20-poly1305"))]
-                        let mut rs = rs;
-                        #[cfg(any(feature = "aes-gcm", feature = "chacha20-poly1305"))]
-                        {
-                            if rs.is_encrypt != self.pipe_context.cipher.is_some() {
-                                return Ok(Err(HandleError::new(
-                                    route_key,
-                                    Error::Any(anyhow::anyhow!(
-                                        "Inconsistent encryption status: data tag-{} current tag-{}",
-                                        rs.is_encrypt,
-                                        self.pipe_context.cipher.is_some()
-                                    )),
-                                )));
-                            }
-                            if let Some(cipher) = self.pipe_context.cipher.as_ref() {
-                                match cipher.decrypt(
-                                    tag(&rs.src_id, &rs.dest_id),
-                                    &mut block[rs.start..rs.end],
-                                ) {
-                                    Ok(_len) => rs.end -= cipher.reserved_len(),
-                                    Err(e) => {
-                                        return Ok(Err(HandleError::new(route_key, Error::Any(e))))
-                                    }
+        return match self.handle(recv_result).await {
+            Ok(handle_result) => {
+                if let Some(rs) = handle_result {
+                    #[cfg(any(feature = "aes-gcm", feature = "chacha20-poly1305"))]
+                    let mut rs = rs;
+                    #[cfg(any(feature = "aes-gcm", feature = "chacha20-poly1305"))]
+                    {
+                        if rs.is_encrypt != self.pipe_context.cipher.is_some() {
+                            return Ok(Ok(Err(HandleError::new(
+                                route_key,
+                                Error::Any(anyhow::anyhow!(
+                                    "Inconsistent encryption status: data tag-{} current tag-{}",
+                                    rs.is_encrypt,
+                                    self.pipe_context.cipher.is_some()
+                                )),
+                            ))));
+                        }
+                        if let Some(cipher) = self.pipe_context.cipher.as_ref() {
+                            match cipher
+                                .decrypt(tag(&rs.src_id, &rs.dest_id), &mut block[rs.start..rs.end])
+                            {
+                                Ok(_len) => rs.end -= cipher.reserved_len(),
+                                Err(e) => {
+                                    return Ok(Ok(Err(HandleError::new(route_key, Error::Any(e)))))
                                 }
                             }
                         }
-                        block.truncate(rs.end);
-                        return Ok(Ok(RecvUserData {
-                            _offset: rs.start,
-                            _src_id: rs.src_id,
-                            _dest_id: rs.dest_id,
-                            _route_key: rs.route_key,
-                            _data: block,
-                            _ttl: rs.ttl,
-                            _max_ttl: rs.max_ttl,
-                        }));
-                    } else {
-                        continue;
                     }
+                    block.truncate(rs.end);
+                    Ok(Ok(Ok(RecvUserData {
+                        _offset: rs.start,
+                        _src_id: rs.src_id,
+                        _dest_id: rs.dest_id,
+                        _route_key: rs.route_key,
+                        _data: block,
+                        _ttl: rs.ttl,
+                        _max_ttl: rs.max_ttl,
+                    })))
+                } else {
+                    Err(block)
                 }
-                Err(e) => Ok(Err(HandleError::new(route_key, e))),
-            };
-        }
+            }
+            Err(e) => Ok(Ok(Err(HandleError::new(route_key, e)))),
+        };
     }
     pub fn protocol(&self) -> ConnectProtocol {
         self.pipe_line.protocol()
@@ -1119,6 +1214,12 @@ impl Deref for Data {
             Data::Recyclable(data) => data,
             Data::Temporary(data) => data,
         }
+    }
+}
+
+impl AsMut<[u8]> for Data {
+    fn as_mut(&mut self) -> &mut [u8] {
+        self
     }
 }
 
