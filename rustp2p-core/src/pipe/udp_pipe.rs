@@ -822,10 +822,7 @@ impl UdpPipeLine {
     /// Receving buf from this PipeLine
     /// `usize` in the `Ok` branch indicates how many bytes are received
     /// `RouteKey` in the `Ok` branch denotes the source where these bytes are received from
-    pub async fn recv_from(
-        &mut self,
-        buf: &mut [u8],
-    ) -> Option<std::io::Result<(usize, RouteKey)>> {
+    pub async fn recv_from(&mut self, buf: &mut [u8]) -> Option<io::Result<(usize, RouteKey)>> {
         let udp = if let Some(udp) = &self.udp {
             udp
         } else {
@@ -863,6 +860,37 @@ impl UdpPipeLine {
                 };
                 return Some(Ok((len, RouteKey::new(self.index, addr))));
             }
+        }
+    }
+    pub async fn recv_multi_from<B: AsMut<[u8]>>(
+        &mut self,
+        bufs: &mut [B],
+        sizes: &mut [usize],
+        addrs: &mut [RouteKey],
+    ) -> Option<io::Result<usize>> {
+        if bufs.is_empty() || bufs.len() != sizes.len() || bufs.len() != addrs.len() {
+            return Some(Err(io::Error::new(io::ErrorKind::Other, "bufs error")));
+        }
+        let rs = self.recv_from(bufs[0].as_mut()).await?;
+        match rs {
+            Ok((len, addr)) => {
+                let udp = self.udp.as_ref().unwrap();
+                sizes[0] = len;
+                addrs[0] = addr;
+                let mut num = 1;
+                while num < bufs.len() {
+                    match udp.try_recv_from(bufs[num].as_mut()) {
+                        Ok((len, addr)) => {
+                            sizes[num] = len;
+                            addrs[num] = RouteKey::new(self.index, addr);
+                            num += 1;
+                        }
+                        Err(_) => break,
+                    }
+                }
+                Some(Ok(num))
+            }
+            Err(e) => Some(Err(e)),
         }
     }
 }

@@ -274,6 +274,42 @@ impl PipeLine {
             PipeLine::Extend(line) => Some(line.recv_from(buf).await),
         }
     }
+    pub async fn recv_multi_from<B: AsMut<[u8]>>(
+        &mut self,
+        bufs: &mut [B],
+        sizes: &mut [usize],
+        addrs: &mut [RouteKey],
+    ) -> Option<std::io::Result<usize>> {
+        match self {
+            PipeLine::Udp(line) => line.recv_multi_from(bufs, sizes, addrs).await,
+            PipeLine::Tcp(line) => {
+                if addrs.len() != bufs.len() {
+                    return Some(Err(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        "addrs error",
+                    )));
+                }
+                match line.recv_multi_from(bufs, sizes).await {
+                    Ok((n, route_key)) => {
+                        addrs[..n].fill(route_key);
+                        Some(Ok(n))
+                    }
+                    Err(e) => Some(Err(e)),
+                }
+            }
+            PipeLine::Extend(line) => {
+                let rs = line.recv_from(bufs[0].as_mut()).await;
+                match rs {
+                    Ok((len, addr)) => {
+                        sizes[0] = len;
+                        addrs[0] = addr;
+                        return Some(Ok(1));
+                    }
+                    Err(e) => Some(Err(e)),
+                }
+            }
+        }
+    }
     pub fn done(&mut self) {
         match self {
             PipeLine::Udp(line) => line.done(),

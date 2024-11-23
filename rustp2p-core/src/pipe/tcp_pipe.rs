@@ -157,11 +157,57 @@ impl TcpPipeLine {
             Err(_) => Err(io::Error::from(io::ErrorKind::TimedOut)),
         }
     }
+    pub(crate) async fn recv_multi<B: AsMut<[u8]>>(
+        &mut self,
+        bufs: &mut [B],
+        sizes: &mut [usize],
+    ) -> io::Result<usize> {
+        if bufs.is_empty() || bufs.len() != sizes.len() {
+            return Err(io::Error::new(io::ErrorKind::Other, "bufs error"));
+        }
+        match crate::async_compat::time::timeout(
+            self.route_idle_time,
+            self.decoder.decode(&mut self.tcp_read, bufs[0].as_mut()),
+        )
+        .await
+        {
+            Ok(rs) => {
+                let len = rs?;
+                sizes[0] = len;
+                let mut num = 1;
+                while num < bufs.len() {
+                    let rs = self
+                        .decoder
+                        .try_decode(&mut self.tcp_read, bufs[num].as_mut());
+                    match rs {
+                        Ok(len) => {
+                            sizes[num] = len;
+                            num += 1;
+                        }
+                        Err(_e) => break,
+                    }
+                }
+
+                return Ok(num);
+            }
+            Err(_) => Err(io::Error::from(io::ErrorKind::TimedOut)),
+        }
+    }
     /// Receive bytes from this pipeline, which the configured Decoder pre-processes
     /// `usize` in the `Ok` branch indicates how many bytes are received
     /// `RouteKey` in the `Ok` branch denotes the source where these bytes are received from
     pub async fn recv_from(&mut self, buf: &mut [u8]) -> io::Result<(usize, RouteKey)> {
         match self.recv(buf).await {
+            Ok(len) => Ok((len, self.route_key())),
+            Err(e) => Err(e),
+        }
+    }
+    pub async fn recv_multi_from<B: AsMut<[u8]>>(
+        &mut self,
+        bufs: &mut [B],
+        sizes: &mut [usize],
+    ) -> io::Result<(usize, RouteKey)> {
+        match self.recv_multi(bufs, sizes).await {
             Ok(len) => Ok((len, self.route_key())),
             Err(e) => Err(e),
         }
@@ -664,6 +710,9 @@ dyn_clone::clone_trait_object!(InitCodec);
 #[async_trait]
 pub trait Decoder: Send + Sync {
     async fn decode(&mut self, read: &mut OwnedReadHalf, src: &mut [u8]) -> io::Result<usize>;
+    fn try_decode(&mut self, _read: &mut OwnedReadHalf, _src: &mut [u8]) -> io::Result<usize> {
+        Err(io::Error::from(io::ErrorKind::WouldBlock))
+    }
 }
 
 #[async_trait]

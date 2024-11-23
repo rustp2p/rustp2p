@@ -372,58 +372,93 @@ impl Decoder for LengthPrefixedDecoder {
             if self.buf.is_empty() {
                 let len = read.read(&mut src[offset..]).await?;
                 offset += len;
-                if offset < HEAD_LEN {
-                    continue;
+                if let Some(rs) = self.process_packet(src, offset) {
+                    return rs;
                 }
-                let packet = NetPacket::unchecked(&src);
-                let data_length = packet.data_length() as usize;
-                if data_length > src.len() {
-                    return Err(io::Error::new(io::ErrorKind::Other, "too short"));
-                }
-                match data_length.cmp(&offset) {
-                    std::cmp::Ordering::Less => {
-                        self.buf.extend_from_slice(&src[data_length..offset]);
-                        return Ok(data_length);
+            } else if let Some(rs) = self.process_buf(src, &mut offset) {
+                return rs;
+            }
+        }
+    }
+
+    #[cfg(feature = "use-tokio")]
+    fn try_decode(&mut self, read: &mut OwnedReadHalf, src: &mut [u8]) -> io::Result<usize> {
+        if src.len() < HEAD_LEN {
+            return Err(io::Error::new(io::ErrorKind::Other, "too short"));
+        }
+        let mut offset = 0;
+        loop {
+            if self.buf.is_empty() {
+                match read.try_read(&mut src[offset..]) {
+                    Ok(len) => {
+                        offset += len;
                     }
-                    std::cmp::Ordering::Equal => {
-                        return Ok(data_length);
+                    Err(e) => {
+                        if e.kind() == io::ErrorKind::WouldBlock {
+                            if offset > 0 {
+                                self.buf.extend_from_slice(&src[..offset]);
+                            }
+                        }
+                        return Err(e);
                     }
-                    std::cmp::Ordering::Greater => {
-                        continue;
-                    }
                 }
-            } else {
-                let len = self.buf.len();
-                if len < HEAD_LEN {
-                    src[..len].copy_from_slice(self.buf.as_ref());
-                    offset += len;
-                    self.buf.clear();
-                    continue;
+                if let Some(rs) = self.process_packet(src, offset) {
+                    return rs;
                 }
-                let packet = NetPacket::unchecked(self.buf.as_ref());
-                let data_length = packet.data_length() as usize;
-                if data_length > src.len() {
-                    return Err(io::Error::new(io::ErrorKind::Other, "too short"));
-                }
-                if data_length > len {
-                    src[..len].copy_from_slice(self.buf.as_ref());
-                    offset += len;
-                    self.buf.clear();
-                    continue;
-                } else {
-                    src[..data_length].copy_from_slice(&self.buf[..data_length]);
-                    if data_length == len {
-                        self.buf.clear();
-                    } else {
-                        self.buf.advance(data_length);
-                    }
-                    return Ok(data_length);
-                }
+            } else if let Some(rs) = self.process_buf(src, &mut offset) {
+                return rs;
             }
         }
     }
 }
-
+impl LengthPrefixedDecoder {
+    fn process_buf(&mut self, src: &mut [u8], offset: &mut usize) -> Option<io::Result<usize>> {
+        let len = self.buf.len();
+        if len < HEAD_LEN {
+            src[..len].copy_from_slice(self.buf.as_ref());
+            *offset += len;
+            self.buf.clear();
+            return None;
+        }
+        let packet = NetPacket::unchecked(self.buf.as_ref());
+        let data_length = packet.data_length() as usize;
+        if data_length > src.len() {
+            return Some(Err(io::Error::new(io::ErrorKind::Other, "too short")));
+        }
+        if data_length > len {
+            src[..len].copy_from_slice(self.buf.as_ref());
+            *offset += len;
+            self.buf.clear();
+            return None;
+        } else {
+            src[..data_length].copy_from_slice(&self.buf[..data_length]);
+            if data_length == len {
+                self.buf.clear();
+            } else {
+                self.buf.advance(data_length);
+            }
+            return Some(Ok(data_length));
+        }
+    }
+    fn process_packet(&mut self, src: &mut [u8], offset: usize) -> Option<io::Result<usize>> {
+        if offset < HEAD_LEN {
+            return None;
+        }
+        let packet = NetPacket::unchecked(&src);
+        let data_length = packet.data_length() as usize;
+        if data_length > src.len() {
+            return Some(Err(io::Error::new(io::ErrorKind::Other, "too short")));
+        }
+        match data_length.cmp(&offset) {
+            std::cmp::Ordering::Less => {
+                self.buf.extend_from_slice(&src[data_length..offset]);
+                Some(Ok(data_length))
+            }
+            std::cmp::Ordering::Equal => Some(Ok(data_length)),
+            std::cmp::Ordering::Greater => None,
+        }
+    }
+}
 #[async_trait]
 impl Encoder for LengthPrefixedEncoder {
     async fn encode(&mut self, write: &mut OwnedWriteHalf, data: &[u8]) -> io::Result<()> {

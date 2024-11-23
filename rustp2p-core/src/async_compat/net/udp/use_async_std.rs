@@ -27,6 +27,10 @@ impl UdpSocket {
     pub fn try_send_to(&self, buf: &[u8], addr: SocketAddr) -> io::Result<usize> {
         self.inner.get_ref().send_to(buf, addr)
     }
+    pub fn try_recv_from(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
+        // Need to handle events
+        self.inner.get_ref().recv_from(buf)
+    }
 
     pub fn local_addr(&self) -> io::Result<SocketAddr> {
         self.inner.get_ref().local_addr()
