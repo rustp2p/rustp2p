@@ -394,10 +394,8 @@ impl Decoder for LengthPrefixedDecoder {
                         offset += len;
                     }
                     Err(e) => {
-                        if e.kind() == io::ErrorKind::WouldBlock {
-                            if offset > 0 {
-                                self.buf.extend_from_slice(&src[..offset]);
-                            }
+                        if e.kind() == io::ErrorKind::WouldBlock && offset > 0 {
+                            self.buf.extend_from_slice(&src[..offset]);
                         }
                         return Err(e);
                     }
@@ -429,7 +427,7 @@ impl LengthPrefixedDecoder {
             src[..len].copy_from_slice(self.buf.as_ref());
             *offset += len;
             self.buf.clear();
-            return None;
+            None
         } else {
             src[..data_length].copy_from_slice(&self.buf[..data_length]);
             if data_length == len {
@@ -437,7 +435,7 @@ impl LengthPrefixedDecoder {
             } else {
                 self.buf.advance(data_length);
             }
-            return Some(Ok(data_length));
+            Some(Ok(data_length))
         }
     }
     fn process_packet(&mut self, src: &mut [u8], offset: usize) -> Option<io::Result<usize>> {

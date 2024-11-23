@@ -303,7 +303,7 @@ impl PipeLine {
                     Ok((len, addr)) => {
                         sizes[0] = len;
                         addrs[0] = addr;
-                        return Some(Ok(1));
+                        Some(Ok(1))
                     }
                     Err(e) => Some(Err(e)),
                 }

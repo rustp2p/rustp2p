@@ -188,7 +188,7 @@ impl TcpPipeLine {
                     }
                 }
 
-                return Ok(num);
+                Ok(num)
             }
             Err(_) => Err(io::Error::from(io::ErrorKind::TimedOut)),
         }
