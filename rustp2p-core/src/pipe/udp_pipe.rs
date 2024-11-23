@@ -17,8 +17,12 @@ use crate::pipe::{DEFAULT_ADDRESS_V4, DEFAULT_ADDRESS_V6};
 use crate::route::{Index, RouteKey};
 use crate::socket::{bind_udp, LocalInterface};
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 const MAX_MESSAGES: usize = 16;
+#[cfg(any(target_os = "linux", target_os = "android"))]
+use libc::{c_uint, iovec, mmsghdr, sockaddr_storage, socklen_t, timespec};
+#[cfg(any(target_os = "linux", target_os = "android"))]
+use std::os::fd::AsRawFd;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Default)]
 pub enum Model {
@@ -497,14 +501,14 @@ impl UdpPipe {
         let udp = line.udp.clone().unwrap();
         let recycle_buf = self.recycle_buf.clone();
         crate::async_compat::spawn(async move {
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "android"))]
             let mut vec_buf = Vec::with_capacity(16);
 
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "android"))]
             use std::os::fd::AsRawFd;
 
             while let Ok((buf, addr)) = r.recv().await {
-                #[cfg(target_os = "linux")]
+                #[cfg(any(target_os = "linux", target_os = "android"))]
                 {
                     vec_buf.push((buf, addr));
                     while let Ok(tup) = r.try_recv() {
@@ -543,7 +547,7 @@ impl UdpPipe {
                         vec_buf.clear();
                     }
                 }
-                #[cfg(not(target_os = "linux"))]
+                #[cfg(not(any(target_os = "linux", target_os = "android")))]
                 {
                     let rs = udp.send_to(&buf, addr).await;
                     if let Some(recycle_buf) = recycle_buf.as_ref() {
@@ -581,12 +585,12 @@ impl UdpPipe {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 fn sendmmsg(fd: std::os::fd::RawFd, buf: &mut [(BytesMut, SocketAddr)]) -> io::Result<()> {
     assert!(buf.len() <= MAX_MESSAGES);
-    let mut iov: [libc::iovec; MAX_MESSAGES] = unsafe { std::mem::zeroed() };
-    let mut msgs: [libc::mmsghdr; MAX_MESSAGES] = unsafe { std::mem::zeroed() };
-    let mut addrs: [libc::sockaddr_storage; MAX_MESSAGES] = unsafe { std::mem::zeroed() };
+    let mut iov: [iovec; MAX_MESSAGES] = unsafe { std::mem::zeroed() };
+    let mut msgs: [mmsghdr; MAX_MESSAGES] = unsafe { std::mem::zeroed() };
+    let mut addrs: [sockaddr_storage; MAX_MESSAGES] = unsafe { std::mem::zeroed() };
     for (i, (buf, addr)) in buf.iter_mut().enumerate() {
         addrs[i] = socket_addr_to_sockaddr(addr);
         iov[i].iov_base = buf.as_mut_ptr() as *mut libc::c_void;
@@ -595,8 +599,7 @@ fn sendmmsg(fd: std::os::fd::RawFd, buf: &mut [(BytesMut, SocketAddr)]) -> io::R
         msgs[i].msg_hdr.msg_iovlen = 1;
 
         msgs[i].msg_hdr.msg_name = &mut addrs[i] as *mut _ as *mut libc::c_void;
-        msgs[i].msg_hdr.msg_namelen =
-            std::mem::size_of::<libc::sockaddr_storage>() as libc::socklen_t;
+        msgs[i].msg_hdr.msg_namelen = std::mem::size_of::<sockaddr_storage>() as socklen_t;
     }
 
     unsafe {
@@ -608,25 +611,24 @@ fn sendmmsg(fd: std::os::fd::RawFd, buf: &mut [(BytesMut, SocketAddr)]) -> io::R
     }
 }
 
-#[cfg(target_os = "linux")]
-fn socket_addr_to_sockaddr(addr: &SocketAddr) -> libc::sockaddr_storage {
-    let mut storage: libc::sockaddr_storage = unsafe { std::mem::zeroed() }; // 初始化为 0
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn socket_addr_to_sockaddr(addr: &SocketAddr) -> sockaddr_storage {
+    let mut storage: sockaddr_storage = unsafe { std::mem::zeroed() };
 
     match addr {
         SocketAddr::V4(v4_addr) => {
             let sin = libc::sockaddr_in {
-                sin_family: libc::AF_INET as _,   // 地址族 IPv4
-                sin_port: v4_addr.port().to_be(), // 端口号，网络字节序
+                sin_family: libc::AF_INET as _,
+                sin_port: v4_addr.port().to_be(),
                 sin_addr: libc::in_addr {
                     s_addr: u32::from_ne_bytes(v4_addr.ip().octets()), // IP 地址
                 },
-                sin_zero: [0; 8], // 保留字段，置 0
+                sin_zero: [0; 8],
             };
 
-            // 将 sockaddr_in 转换为 sockaddr_storage
             unsafe {
                 let sin_ptr = &sin as *const libc::sockaddr_in as *const u8;
-                let storage_ptr = &mut storage as *mut libc::sockaddr_storage as *mut u8;
+                let storage_ptr = &mut storage as *mut sockaddr_storage as *mut u8;
                 std::ptr::copy_nonoverlapping(
                     sin_ptr,
                     storage_ptr,
@@ -636,19 +638,18 @@ fn socket_addr_to_sockaddr(addr: &SocketAddr) -> libc::sockaddr_storage {
         }
         SocketAddr::V6(v6_addr) => {
             let sin6 = libc::sockaddr_in6 {
-                sin6_family: libc::AF_INET6 as _,  // 地址族 IPv6
-                sin6_port: v6_addr.port().to_be(), // 端口号，网络字节序
-                sin6_flowinfo: v6_addr.flowinfo(), // 流信息
+                sin6_family: libc::AF_INET6 as _,
+                sin6_port: v6_addr.port().to_be(),
+                sin6_flowinfo: v6_addr.flowinfo(),
                 sin6_addr: libc::in6_addr {
-                    s6_addr: v6_addr.ip().octets(), // IPv6 地址
+                    s6_addr: v6_addr.ip().octets(),
                 },
-                sin6_scope_id: v6_addr.scope_id(), // 作用域 ID
+                sin6_scope_id: v6_addr.scope_id(),
             };
 
-            // 将 sockaddr_in6 转换为 sockaddr_storage
             unsafe {
                 let sin6_ptr = &sin6 as *const libc::sockaddr_in6 as *const u8;
-                let storage_ptr = &mut storage as *mut libc::sockaddr_storage as *mut u8;
+                let storage_ptr = &mut storage as *mut sockaddr_storage as *mut u8;
                 std::ptr::copy_nonoverlapping(
                     sin6_ptr,
                     storage_ptr,
@@ -862,6 +863,7 @@ impl UdpPipeLine {
             }
         }
     }
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
     pub async fn recv_multi_from<B: AsMut<[u8]>>(
         &mut self,
         bufs: &mut [B],
@@ -892,6 +894,105 @@ impl UdpPipeLine {
             }
             Err(e) => Some(Err(e)),
         }
+    }
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    pub async fn recv_multi_from<B: AsMut<[u8]>>(
+        &mut self,
+        bufs: &mut [B],
+        sizes: &mut [usize],
+        addrs: &mut [RouteKey],
+    ) -> Option<io::Result<usize>> {
+        if bufs.is_empty() || bufs.len() != sizes.len() || bufs.len() != addrs.len() {
+            return Some(Err(io::Error::new(
+                io::ErrorKind::Other,
+                "bufs/sizes/addrs error",
+            )));
+        }
+        let udp = if let Some(udp) = &self.udp {
+            udp
+        } else {
+            return None;
+        };
+        loop {
+            let rs = if let Some(close_notify) = &mut self.close_notify {
+                crate::select! {
+                    _rs=close_notify.recv()=>{
+                        self.done();
+                        return None
+                    }
+                    rs=udp.readable()=>{
+                        rs
+                    }
+                }
+            } else {
+                udp.readable().await
+            };
+            if let Err(e) = rs {
+                if should_ignore_error(&e) {
+                    continue;
+                }
+                return Some(Err(e));
+            }
+            return match recvmmsg(self.index, udp.as_raw_fd(), bufs, sizes, addrs) {
+                Ok(rs) => Some(Ok(rs)),
+                Err(e) => Some(Err(e)),
+            };
+        }
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn recvmmsg<B: AsMut<[u8]>>(
+    index: Index,
+    fd: std::os::fd::RawFd,
+    bufs: &mut [B],
+    sizes: &mut [usize],
+    route_keys: &mut [RouteKey],
+) -> io::Result<usize> {
+    let mut iov: [iovec; MAX_MESSAGES] = unsafe { std::mem::zeroed() };
+    let mut msgs: [mmsghdr; MAX_MESSAGES] = unsafe { std::mem::zeroed() };
+    let mut addrs: [sockaddr_storage; MAX_MESSAGES] = unsafe { std::mem::zeroed() };
+    let max_num = bufs.len().min(MAX_MESSAGES);
+    for i in 0..max_num {
+        iov[i].iov_base = bufs[i].as_mut().as_mut_ptr() as *mut libc::c_void;
+        iov[i].iov_len = bufs[i].as_mut().len();
+        msgs[i].msg_hdr.msg_iov = &mut iov[i];
+        msgs[i].msg_hdr.msg_iovlen = 1;
+        msgs[i].msg_hdr.msg_name = &mut addrs[i] as *const _ as *mut libc::c_void;
+        msgs[i].msg_hdr.msg_namelen = std::mem::size_of::<sockaddr_storage>() as socklen_t;
+    }
+    let mut time: timespec = unsafe { std::mem::zeroed() };
+    let res = unsafe { libc::recvmmsg(fd, msgs.as_mut_ptr(), max_num as c_uint, 0, &mut time) };
+    if res == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    let nmsgs = res as usize;
+    for i in 0..nmsgs {
+        let addr = sockaddr_to_socket_addr(&addrs[i], msgs[i].msg_hdr.msg_namelen);
+        sizes[i] = msgs[i].msg_len as usize;
+        route_keys[i] = RouteKey::new(index, addr);
+    }
+    Ok(nmsgs)
+}
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn sockaddr_to_socket_addr(addr: &sockaddr_storage, _len: socklen_t) -> SocketAddr {
+    match addr.ss_family as libc::c_int {
+        libc::AF_INET => {
+            let addr_in = unsafe { *(addr as *const _ as *const libc::sockaddr_in) };
+            let ip = u32::from_be(addr_in.sin_addr.s_addr);
+            let port = u16::from_be(addr_in.sin_port);
+            SocketAddr::V4(std::net::SocketAddrV4::new(
+                std::net::Ipv4Addr::from(ip),
+                port,
+            ))
+        }
+        libc::AF_INET6 => {
+            let addr_in6 = unsafe { *(addr as *const _ as *const libc::sockaddr_in6) };
+            let ip = std::net::Ipv6Addr::from(addr_in6.sin6_addr.s6_addr);
+            let port = u16::from_be(addr_in6.sin6_port);
+            SocketAddr::V6(std::net::SocketAddrV6::new(ip, port, 0, 0))
+        }
+        _ => panic!("Unsupported address family"),
     }
 }
 
