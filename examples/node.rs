@@ -143,21 +143,19 @@ fn string_to_group_code(input: &str) -> GroupCode {
     array[..len].copy_from_slice(&bytes[..len]);
     array.into()
 }
-async fn recv(mut line: PipeLine, sender: Sender<RecvUserData>, mut _pipe_wirter: PipeWriter) {
+async fn recv(mut line: PipeLine, sender: Sender<RecvUserData>, _pipe_wirter: PipeWriter) {
+    let mut list = Vec::with_capacity(16);
     loop {
-        let rs = match line.next().await {
+        let rs = match line.recv_multi(&mut list).await {
             Ok(rs) => rs,
             Err(e) => {
-                log::warn!("recv_from {e:?}");
+                log::warn!("recv_from {e:?},{:?}", line.protocol());
                 return;
             }
         };
-        let handle_rs = match rs {
-            Ok(handle_rs) => handle_rs,
-            Err(e) => {
-                log::warn!("recv_data_handle {e:?}");
-                continue;
-            }
+        if let Err(e) = rs {
+            log::warn!("recv_data_handle {e:?}");
+            continue;
         };
         // log::info!(
         //     "recv from peer from addr: {:?}, {:?} ->{:?} is_relay:{}\n{:?}",
@@ -174,8 +172,10 @@ async fn recv(mut line: PipeLine, sender: Sender<RecvUserData>, mut _pipe_wirter
         //     }
         //     continue;
         // }
-        if let Err(e) = sender.send(handle_rs).await {
-            log::warn!("UserData {e:?}")
+        for x in list.drain(..) {
+            if sender.send(x).await.is_err() {
+                break;
+            }
         }
     }
 }

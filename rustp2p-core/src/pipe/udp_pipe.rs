@@ -504,9 +504,6 @@ impl UdpPipe {
             #[cfg(any(target_os = "linux", target_os = "android"))]
             let mut vec_buf = Vec::with_capacity(16);
 
-            #[cfg(any(target_os = "linux", target_os = "android"))]
-            use std::os::fd::AsRawFd;
-
             while let Ok((buf, addr)) = r.recv().await {
                 #[cfg(any(target_os = "linux", target_os = "android"))]
                 {
@@ -913,6 +910,7 @@ impl UdpPipeLine {
         } else {
             return None;
         };
+        let fd = udp.as_raw_fd();
         loop {
             let rs = if let Some(close_notify) = &mut self.close_notify {
                 crate::select! {
@@ -920,22 +918,26 @@ impl UdpPipeLine {
                         self.done();
                         return None
                     }
-                    rs=udp.readable()=>{
+                    rs=udp.async_io(tokio::io::Interest::READABLE,||{
+                        recvmmsg(self.index, fd, bufs, sizes, addrs)
+                    })=>{
                         rs
                     }
                 }
             } else {
-                udp.readable().await
+                udp.async_io(tokio::io::Interest::READABLE, || {
+                    recvmmsg(self.index, fd, bufs, sizes, addrs)
+                })
+                .await
             };
-            if let Err(e) = rs {
-                if should_ignore_error(&e) {
-                    continue;
+            return match rs {
+                Ok(size) => Some(Ok(size)),
+                Err(e) => {
+                    if should_ignore_error(&e) {
+                        continue;
+                    }
+                    Some(Err(e))
                 }
-                return Some(Err(e));
-            }
-            return match recvmmsg(self.index, udp.as_raw_fd(), bufs, sizes, addrs) {
-                Ok(rs) => Some(Ok(rs)),
-                Err(e) => Some(Err(e)),
             };
         }
     }

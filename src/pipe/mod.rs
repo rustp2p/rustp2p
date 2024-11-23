@@ -518,10 +518,10 @@ impl PipeLine {
         self.recv_addrs.resize(BUF_SIZE, RouteKey::default());
         self.recv_sizes.resize(BUF_SIZE, 0);
         self.recv_buff.truncate(BUF_SIZE);
+        while self.recv_buff.len() < BUF_SIZE {
+            self.recv_buff.push(self.alloc());
+        }
         loop {
-            while self.recv_buff.len() < BUF_SIZE {
-                self.recv_buff.push(self.alloc());
-            }
             let num = if let Ok(v) = self
                 .shutdown_manager
                 .wrap_cancel(self.pipe_line.recv_multi_from(
@@ -559,10 +559,20 @@ impl PipeLine {
                     Ok(rs) => match rs? {
                         Ok(data) => {
                             data_vec.push(data);
+                            self.recv_buff.push(self.alloc());
                         }
                         Err(e) => return Ok(Err(e)),
                     },
-                    Err(data) => self.recv_buff.push(data),
+                    Err(mut data) => {
+                        unsafe {
+                            let capacity = data.capacity();
+                            data.set_len(capacity);
+                        }
+                        self.recv_buff.push(data)
+                    }
+                }
+                if num == BUF_SIZE {
+                    self.recv_buff.swap(index, BUF_SIZE - 1);
                 }
             }
             if !data_vec.is_empty() {
