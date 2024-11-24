@@ -22,7 +22,7 @@ pub enum Error {
     #[error("Node ID not available")]
     NodeIDNotAvailable,
     #[error("Pipe is shutdown")]
-    ShutDown,
+    Shutdown,
     #[error("Pipe has already shutdown")]
     AlreadyShutdown,
     #[error("Timeout")]

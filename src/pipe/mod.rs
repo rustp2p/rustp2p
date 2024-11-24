@@ -195,8 +195,11 @@ impl Drop for Pipe {
 
 impl Pipe {
     pub async fn accept(&mut self) -> Result<PipeLine> {
+        if self.shutdown_manager.is_shutdown_triggered() {
+            return Err(Error::Shutdown);
+        }
         let Ok(pipe_line) = self.shutdown_manager.wrap_cancel(self.pipe.accept()).await else {
-            return Err(Error::ShutDown);
+            return Err(Error::Shutdown);
         };
         let pipe_line = pipe_line?;
         let recv_buff = Vec::with_capacity(BUF_SIZE);
@@ -233,6 +236,9 @@ impl PipeWriter {
         &self.pipe_context
     }
     pub fn switch_model(&self, nat_type: NatType) -> Result<()> {
+        if self.shutdown_manager.is_shutdown_triggered() {
+            return Err(Error::Shutdown);
+        }
         use rust_p2p_core::pipe::udp_pipe::Model;
         match nat_type {
             NatType::Cone => {
