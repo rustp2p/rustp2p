@@ -20,7 +20,7 @@ use crate::socket::{bind_udp, LocalInterface};
 #[cfg(any(target_os = "linux", target_os = "android"))]
 const MAX_MESSAGES: usize = 16;
 #[cfg(any(target_os = "linux", target_os = "android"))]
-use libc::{c_uint, iovec, mmsghdr, sockaddr_storage, socklen_t, timespec};
+use libc::{c_uint, iovec, mmsghdr, sockaddr_storage, socklen_t};
 #[cfg(any(target_os = "linux", target_os = "android"))]
 use std::os::fd::AsRawFd;
 
@@ -963,8 +963,15 @@ fn recvmmsg<B: AsMut<[u8]>>(
         msgs[i].msg_hdr.msg_name = &mut addrs[i] as *const _ as *mut libc::c_void;
         msgs[i].msg_hdr.msg_namelen = std::mem::size_of::<sockaddr_storage>() as socklen_t;
     }
-    let mut time: timespec = unsafe { std::mem::zeroed() };
-    let res = unsafe { libc::recvmmsg(fd, msgs.as_mut_ptr(), max_num as c_uint, 0, &mut time) };
+    let res = unsafe {
+        libc::recvmmsg(
+            fd,
+            msgs.as_mut_ptr(),
+            max_num as c_uint,
+            libc::MSG_DONTWAIT as _,
+            std::ptr::null_mut(),
+        )
+    };
     if res == -1 {
         return Err(io::Error::last_os_error());
     }
