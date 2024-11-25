@@ -860,7 +860,10 @@ impl UdpPipeLine {
             }
         }
     }
-    #[cfg(any(not(any(target_os = "linux", target_os = "android")),feature = "use-async-std"))]
+    #[cfg(any(
+        not(any(target_os = "linux", target_os = "android")),
+        feature = "use-async-std"
+    ))]
     pub async fn recv_multi_from<B: AsMut<[u8]>>(
         &mut self,
         bufs: &mut [B],
@@ -892,7 +895,7 @@ impl UdpPipeLine {
             Err(e) => Some(Err(e)),
         }
     }
-    #[cfg(all(any(target_os = "linux", target_os = "android"),feature = "use-tokio"))]
+    #[cfg(all(any(target_os = "linux", target_os = "android"), feature = "use-tokio"))]
     pub async fn recv_multi_from<B: AsMut<[u8]>>(
         &mut self,
         bufs: &mut [B],
