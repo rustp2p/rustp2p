@@ -524,7 +524,7 @@ impl UdpPipe {
                             Ok(_) => break Ok(()),
                             Err(e) => {
                                 if e.kind() == io::ErrorKind::WouldBlock {
-                                    if let Err(e) = udp.readable().await {
+                                    if let Err(e) = udp.writable().await {
                                         break Err(e);
                                     }
                                     continue;
@@ -860,7 +860,7 @@ impl UdpPipeLine {
             }
         }
     }
-    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    #[cfg(any(not(any(target_os = "linux", target_os = "android")),feature = "use-async-std"))]
     pub async fn recv_multi_from<B: AsMut<[u8]>>(
         &mut self,
         bufs: &mut [B],
@@ -892,7 +892,7 @@ impl UdpPipeLine {
             Err(e) => Some(Err(e)),
         }
     }
-    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[cfg(all(any(target_os = "linux", target_os = "android"),feature = "use-tokio"))]
     pub async fn recv_multi_from<B: AsMut<[u8]>>(
         &mut self,
         bufs: &mut [B],

@@ -23,6 +23,12 @@ impl UdpSocket {
             inner: Async::new(udp)?,
         })
     }
+    pub async fn writable(&self) -> io::Result<()> {
+        self.inner.writable().await
+    }
+    pub async fn readable(&self) -> io::Result<()> {
+        self.inner.readable().await
+    }
 
     pub fn try_send_to(&self, buf: &[u8], addr: SocketAddr) -> io::Result<usize> {
         self.inner.get_ref().send_to(buf, addr)
