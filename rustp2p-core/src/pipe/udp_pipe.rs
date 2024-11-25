@@ -517,7 +517,7 @@ impl UdpPipe {
                     if vec_buf.len() == 1 {
                         let (buf, addr) = unsafe { vec_buf.get_unchecked(0) };
                         if let Err(e) = udp.send_to(buf, *addr).await {
-                            log::debug!("{addr:?},{e:?}")
+                            log::warn!("{addr:?},{e:?}")
                         }
                     } else if let Err(e) = loop {
                         match sendmmsg(udp.as_raw_fd(), &mut vec_buf) {
@@ -534,7 +534,7 @@ impl UdpPipe {
                             }
                         };
                     } {
-                        log::debug!("sendmmsg {e:?}");
+                        log::warn!("sendmmsg {e:?}");
                     };
                     if let Some(recycle_buf) = recycle_buf.as_ref() {
                         while let Some((buf, _)) = vec_buf.pop() {
@@ -583,12 +583,12 @@ impl UdpPipe {
 }
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
-fn sendmmsg(fd: std::os::fd::RawFd, buf: &mut [(BytesMut, SocketAddr)]) -> io::Result<()> {
-    assert!(buf.len() <= MAX_MESSAGES);
+fn sendmmsg(fd: std::os::fd::RawFd, bufs: &mut [(BytesMut, SocketAddr)]) -> io::Result<()> {
+    assert!(bufs.len() <= MAX_MESSAGES);
     let mut iov: [iovec; MAX_MESSAGES] = unsafe { std::mem::zeroed() };
     let mut msgs: [mmsghdr; MAX_MESSAGES] = unsafe { std::mem::zeroed() };
     let mut addrs: [sockaddr_storage; MAX_MESSAGES] = unsafe { std::mem::zeroed() };
-    for (i, (buf, addr)) in buf.iter_mut().enumerate() {
+    for (i, (buf, addr)) in bufs.iter_mut().enumerate() {
         addrs[i] = socket_addr_to_sockaddr(addr);
         iov[i].iov_base = buf.as_mut_ptr() as *mut libc::c_void;
         iov[i].iov_len = buf.len();
@@ -603,7 +603,7 @@ fn sendmmsg(fd: std::os::fd::RawFd, buf: &mut [(BytesMut, SocketAddr)]) -> io::R
         let res = libc::sendmmsg(
             fd,
             msgs.as_mut_ptr(),
-            buf.len() as _,
+            bufs.len() as _,
             libc::MSG_DONTWAIT as _,
         );
         if res == -1 {
