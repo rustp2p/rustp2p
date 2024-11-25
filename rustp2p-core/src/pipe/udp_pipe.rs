@@ -600,7 +600,12 @@ fn sendmmsg(fd: std::os::fd::RawFd, buf: &mut [(BytesMut, SocketAddr)]) -> io::R
     }
 
     unsafe {
-        let res = libc::sendmmsg(fd, msgs.as_mut_ptr(), buf.len() as _, 0);
+        let res = libc::sendmmsg(
+            fd,
+            msgs.as_mut_ptr(),
+            buf.len() as _,
+            libc::MSG_DONTWAIT as _,
+        );
         if res == -1 {
             return Err(io::Error::last_os_error());
         }
