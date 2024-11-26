@@ -5,6 +5,8 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use crate::async_compat::net::udp::UdpSocket;
+#[cfg(any(target_os = "linux", target_os = "android"))]
+use crate::async_compat::net::udp::{read_with, write_with};
 use anyhow::{anyhow, Context};
 use bytes::BytesMut;
 use dashmap::DashMap;
@@ -514,28 +516,31 @@ impl UdpPipe {
                             break;
                         }
                     }
-                    if vec_buf.len() == 1 {
-                        let (buf, addr) = unsafe { vec_buf.get_unchecked(0) };
-                        if let Err(e) = udp.send_to(buf, *addr).await {
-                            log::warn!("{addr:?},{e:?}")
-                        }
-                    } else if let Err(e) = loop {
-                        match sendmmsg(udp.as_raw_fd(), &mut vec_buf) {
-                            Ok(_) => break Ok(()),
-                            Err(e) => {
-                                if e.kind() == io::ErrorKind::WouldBlock {
-                                    if let Err(e) = udp.writable().await {
-                                        break Err(e);
+                    let mut bufs = &mut vec_buf[..];
+                    let fd = udp.as_raw_fd();
+                    loop {
+                        if bufs.len() == 1 {
+                            let (buf, addr) = unsafe { bufs.get_unchecked(0) };
+                            if let Err(e) = udp.send_to(buf, *addr).await {
+                                log::warn!("send_to {addr:?},{e:?}")
+                            }
+                            break;
+                        } else {
+                            let rs = write_with(&udp, || sendmmsg(fd, &mut bufs)).await;
+                            match rs {
+                                Ok(size) => {
+                                    if size < bufs.len() {
+                                        bufs = &mut bufs[size..];
+                                        continue;
                                     }
-                                    continue;
-                                } else {
-                                    break Err(e);
+                                    break;
+                                }
+                                Err(e) => {
+                                    log::warn!("sendmmsg {e:?}");
                                 }
                             }
-                        };
-                    } {
-                        log::warn!("sendmmsg {e:?}");
-                    };
+                        }
+                    }
                     if let Some(recycle_buf) = recycle_buf.as_ref() {
                         while let Some((buf, _)) = vec_buf.pop() {
                             recycle_buf.push(buf);
@@ -583,7 +588,7 @@ impl UdpPipe {
 }
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
-fn sendmmsg(fd: std::os::fd::RawFd, bufs: &mut [(BytesMut, SocketAddr)]) -> io::Result<()> {
+fn sendmmsg(fd: std::os::fd::RawFd, bufs: &mut [(BytesMut, SocketAddr)]) -> io::Result<usize> {
     assert!(bufs.len() <= MAX_MESSAGES);
     let mut iov: [iovec; MAX_MESSAGES] = unsafe { std::mem::zeroed() };
     let mut msgs: [mmsghdr; MAX_MESSAGES] = unsafe { std::mem::zeroed() };
@@ -609,7 +614,7 @@ fn sendmmsg(fd: std::os::fd::RawFd, bufs: &mut [(BytesMut, SocketAddr)]) -> io::
         if res == -1 {
             return Err(io::Error::last_os_error());
         }
-        Ok(())
+        Ok(res as usize)
     }
 }
 
@@ -865,10 +870,7 @@ impl UdpPipeLine {
             }
         }
     }
-    #[cfg(any(
-        not(any(target_os = "linux", target_os = "android")),
-        feature = "use-async-std"
-    ))]
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
     pub async fn recv_multi_from<B: AsMut<[u8]>>(
         &mut self,
         bufs: &mut [B],
@@ -900,7 +902,7 @@ impl UdpPipeLine {
             Err(e) => Some(Err(e)),
         }
     }
-    #[cfg(all(any(target_os = "linux", target_os = "android"), feature = "use-tokio"))]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     pub async fn recv_multi_from<B: AsMut<[u8]>>(
         &mut self,
         bufs: &mut [B],
@@ -926,17 +928,12 @@ impl UdpPipeLine {
                         self.done();
                         return None
                     }
-                    rs=udp.async_io(tokio::io::Interest::READABLE,||{
-                        recvmmsg(self.index, fd, bufs, sizes, addrs)
-                    })=>{
+                    rs=read_with(&udp,|| recvmmsg(self.index, fd, bufs, sizes, addrs))=>{
                         rs
                     }
                 }
             } else {
-                udp.async_io(tokio::io::Interest::READABLE, || {
-                    recvmmsg(self.index, fd, bufs, sizes, addrs)
-                })
-                .await
+                read_with(&udp, || recvmmsg(self.index, fd, bufs, sizes, addrs)).await
             };
             return match rs {
                 Ok(size) => Some(Ok(size)),

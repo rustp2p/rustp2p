@@ -9,6 +9,15 @@ pub struct UdpSocket {
     inner: Async<std::net::UdpSocket>,
 }
 
+pub async fn read_with<R>(udp: &UdpSocket, mut op: impl FnMut() -> io::Result<R>) -> io::Result<R> {
+    udp.inner.read_with(|_| op()).await
+}
+pub async fn write_with<R>(
+    udp: &UdpSocket,
+    mut op: impl FnMut() -> io::Result<R>,
+) -> io::Result<R> {
+    udp.inner.write_with(|_| op()).await
+}
 impl Deref for UdpSocket {
     type Target = Async<std::net::UdpSocket>;
 
