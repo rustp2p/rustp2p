@@ -526,7 +526,7 @@ impl UdpPipe {
                             }
                             break;
                         } else {
-                            let rs = write_with(&udp, || sendmmsg(fd, &mut bufs)).await;
+                            let rs = write_with(&udp, || sendmmsg(fd, bufs)).await;
                             match rs {
                                 Ok(size) => {
                                     if size < bufs.len() {
@@ -928,12 +928,12 @@ impl UdpPipeLine {
                         self.done();
                         return None
                     }
-                    rs=read_with(&udp,|| recvmmsg(self.index, fd, bufs, sizes, addrs))=>{
+                    rs=read_with(udp,|| recvmmsg(self.index, fd, bufs, sizes, addrs))=>{
                         rs
                     }
                 }
             } else {
-                read_with(&udp, || recvmmsg(self.index, fd, bufs, sizes, addrs)).await
+                read_with(udp, || recvmmsg(self.index, fd, bufs, sizes, addrs)).await
             };
             return match rs {
                 Ok(size) => Some(Ok(size)),
