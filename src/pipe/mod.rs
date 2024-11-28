@@ -453,6 +453,11 @@ impl PipeWriter {
         };
         SendPacket::with_bytes_mut(buf)
     }
+    pub fn release_send_packet(&self, send_packet: SendPacket) {
+        if let Some(recycle_buf) = self.recycle_buf.as_ref() {
+            recycle_buf.push(send_packet.into_buf());
+        }
+    }
     pub(crate) fn allocate_send_packet_proto(
         &self,
         protocol_type: ProtocolType,
