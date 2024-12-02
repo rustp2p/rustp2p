@@ -533,6 +533,10 @@ impl PipeLine {
             self.recv_buff.push(self.alloc());
         }
         loop {
+            if self.shutdown_manager.is_shutdown_triggered() {
+                self.pipe_line.done();
+                return Err(RecvError::Done);
+            }
             let num = if let Ok(v) = self
                 .shutdown_manager
                 .wrap_cancel(self.pipe_line.recv_multi_from(
@@ -600,6 +604,10 @@ impl PipeLine {
             unsafe {
                 let capacity = block.capacity();
                 block.set_len(capacity);
+            }
+            if self.shutdown_manager.is_shutdown_triggered() {
+                self.pipe_line.done();
+                return Err(RecvError::Done);
             }
             let (len, route_key) = if let Ok(v) = self
                 .shutdown_manager
