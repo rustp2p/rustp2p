@@ -52,11 +52,11 @@ use-tokio = ["tokio", "async-scoped/use-tokio"]
 use-async-std = ["async-std", "async-io", "futures-util", "async-scoped/use-async-std"]
 
 [dev-dependencies]
-tokio = { version = "1.41", features = ["full"] }
+tokio = { version = "1.42", features = ["full"] }
 ctrlc2 = "3.5"
-bytes = "1.7.1"
+bytes = "1.9"
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0.124"
+serde_json = "1.0"
 clap = { version = "=4.0.32", features = ["derive"] }
 log = "0.4.22"
 env_logger = "0.11.5"

@@ -38,11 +38,11 @@ rustp2p = { path = "../rustp2p", features = ["aes-gcm"] }
 clap = { version = "=4.0.32", features = ["derive"] }
 log = "0.4.22"
 env_logger = "0.11.5"
-tun-rs = { git = "https://github.com/xmh0511/tun-rs", features = ["async_tokio"] }
+tun-rs = { version = "1.5", features = ["async_tokio"] }
 pnet_packet = "0.35.0"
 ctrlc2 = { version = "3", features = ["termination"] }
 async-std = { version = "1.13.0", features = ["attributes", "unstable"] }
-tokio = { version = "1.41.0", features = ["full"] }
+tokio = { version = "1.42", features = ["full"] }
 ctrlc = "3.4.5"
 
 [[example]]
@@ -62,11 +62,11 @@ async-std = "1.13"
 tachyonix = "0.3"
 anyhow = "1"
 thiserror = "2"
-tokio = { version = "1.41", features = ["full"] }
+tokio = { version = "1.42", features = ["full"] }
 async-trait = "0.1"
 log = "0.4"
 parking_lot = "0.12"
-bytes = "1.8"
+bytes = "1.9"
 dashmap = "6.1"
 rand = "0.8"
 crossbeam-utils = "0.8"
