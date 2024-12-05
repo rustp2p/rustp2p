@@ -687,7 +687,7 @@ pub struct UdpPipeWriterIndex<'a> {
     index: usize,
 }
 
-impl<'a> UdpPipeWriterIndex<'a> {
+impl UdpPipeWriterIndex<'_> {
     pub async fn send(&self, buf: &[u8]) -> crate::error::Result<()> {
         self.shadow
             .send_to_addr_via_index(buf, self.addr, self.index)
@@ -704,7 +704,7 @@ pub struct UdpPipeWriterRef<'a> {
     socket_layer: &'a Arc<SocketLayer>,
 }
 
-impl<'a> UdpPipeWriterRef<'a> {
+impl UdpPipeWriterRef<'_> {
     pub fn to_owned(&self) -> UdpPipeWriter {
         UdpPipeWriter {
             socket_layer: self.socket_layer.clone(),
@@ -712,7 +712,7 @@ impl<'a> UdpPipeWriterRef<'a> {
     }
 }
 
-impl<'a> Deref for UdpPipeWriterRef<'a> {
+impl Deref for UdpPipeWriterRef<'_> {
     type Target = Arc<SocketLayer>;
 
     fn deref(&self) -> &Self::Target {

@@ -240,7 +240,7 @@ pub struct ExtensiblePipeWriterRef<'a> {
     shadow: &'a ExtensiblePipeWriter,
 }
 
-impl<'a> ExtensiblePipeWriterRef<'a> {
+impl ExtensiblePipeWriterRef<'_> {
     pub fn to_owned(&self) -> ExtensiblePipeWriter {
         self.shadow.clone()
     }

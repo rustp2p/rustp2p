@@ -149,7 +149,7 @@ impl<PeerID> Pipe<PeerID> {
     }
 }
 
-impl<'a, PeerID> PipeWriterRef<'a, PeerID> {
+impl<PeerID> PipeWriterRef<'_, PeerID> {
     pub fn to_owned(&self) -> PipeWriter<PeerID> {
         PipeWriter {
             route_table: self.route_table.clone(),

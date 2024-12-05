@@ -577,15 +577,15 @@ pub struct TcpPipeWriterRef<'a> {
     shadow: &'a Arc<SocketLayer>,
 }
 
-impl<'a> Clone for TcpPipeWriterRef<'a> {
+impl Clone for TcpPipeWriterRef<'_> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<'a> Copy for TcpPipeWriterRef<'a> {}
+impl Copy for TcpPipeWriterRef<'_> {}
 
-impl<'a> TcpPipeWriterRef<'a> {
+impl TcpPipeWriterRef<'_> {
     pub fn to_owned(&self) -> TcpPipeWriter {
         TcpPipeWriter {
             socket_layer: self.shadow.clone(),
@@ -593,7 +593,7 @@ impl<'a> TcpPipeWriterRef<'a> {
     }
 }
 
-impl<'a> Deref for TcpPipeWriterRef<'a> {
+impl Deref for TcpPipeWriterRef<'_> {
     type Target = Arc<SocketLayer>;
 
     fn deref(&self) -> &Self::Target {
@@ -606,7 +606,7 @@ pub struct TcpPipeWriterIndex<'a> {
     marker: PhantomData<&'a ()>,
 }
 
-impl<'a> TcpPipeWriterIndex<'a> {
+impl TcpPipeWriterIndex<'_> {
     pub async fn send(&self, buf: BytesMut) -> crate::error::Result<()> {
         if let Err(_e) = self.shadow.send(buf).await {
             Err(io::Error::from(io::ErrorKind::WriteZero))?

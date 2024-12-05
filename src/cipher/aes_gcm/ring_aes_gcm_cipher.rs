@@ -72,7 +72,7 @@ impl AesGcmCipher {
                 &mut payload[..data_len - ENCRYPTION_RESERVED],
             ),
         };
-        return match rs {
+        match rs {
             Ok(tag) => {
                 let tag = tag.as_ref();
                 if tag.len() != 16 {
@@ -84,7 +84,7 @@ impl AesGcmCipher {
                 Ok(())
             }
             Err(e) => Err(anyhow!("Encryption failed:{:?}", e)),
-        };
+        }
     }
 }
 
