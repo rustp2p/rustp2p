@@ -94,7 +94,7 @@ pub(crate) fn udp_pipe(config: UdpPipeConfig) -> anyhow::Result<UdpPipe> {
         }
     }
     let (pipe_line_sender, pipe_line_receiver) =
-        tachyonix::channel(config.main_pipeline_num + config.sub_pipeline_num);
+        tachyonix::channel(config.main_pipeline_num * 2 + config.sub_pipeline_num * 2);
     let socket_layer = Arc::new(SocketLayer {
         main_udp_v4,
         main_udp_v6,
