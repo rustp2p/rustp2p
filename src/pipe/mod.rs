@@ -854,10 +854,7 @@ impl PipeLine {
         }
         Ok(())
     }
-    async fn handle<'a>(
-        &mut self,
-        recv_result: RecvResult<'a>,
-    ) -> Result<Option<HandleResultInner>> {
+    async fn handle(&mut self, recv_result: RecvResult<'_>) -> Result<Option<HandleResultInner>> {
         let mut packet = NetPacket::new(recv_result.buf)?;
         if packet.max_ttl() < packet.ttl() {
             return Err(Error::InvalidArgument("ttl error".into()));
