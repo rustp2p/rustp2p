@@ -73,25 +73,16 @@ pub async fn main0() -> Result<()> {
     })
     .expect("Error setting Ctrl-C handler");
 
-    let device = tun_rs::create_as_async(
-        tun_rs::Configuration::default()
-            .address_with_prefix(self_id, mask)
-            .platform_config(|_v| {
-                #[cfg(windows)]
-                _v.ring_capacity(4 * 1024 * 1024);
-                #[cfg(target_os = "linux")]
-                _v.tx_queue_len(1000);
-            })
-            .mtu(1400)
-            .up(),
-    )
-    .unwrap();
-    #[cfg(target_os = "macos")]
-    {
-        use tun_rs::AbstractDevice;
-        device.set_ignore_packet_info(true);
-    }
-    let device = Arc::new(device);
+    let dev_builder = tun_rs::DeviceBuilder::new()
+        .ipv4(self_id, mask, None)
+        .mtu(1400);
+    #[cfg(windows)]
+    let dev_builder = dev_builder.ring_capacity(4 * 1024 * 1024);
+    #[cfg(target_os = "linux")]
+    let dev_builder = dev_builder.tx_queue_len(1000);
+
+    let device = Arc::new(dev_builder.build_async().unwrap());
+
     let port = port.unwrap_or(23333);
     let udp_config = UdpPipeConfig::default().set_udp_ports(vec![port]);
     let tcp_config = TcpPipeConfig::default().set_tcp_port(port);
@@ -173,6 +164,14 @@ async fn recv(mut line: PipeLine, sender: Sender<RecvUserData>, _pipe_wirter: Pi
         //     continue;
         // }
         for x in list.drain(..) {
+            log::info!(
+                "------------------------------\nrecv from peer from addr: {:?}, {:?} ->{:?} is_relay:{}\n data:\n{:?}\n------------------------------",
+                x.route_key().addr(),
+                x.src_id(),
+                x.dest_id(),
+                x.is_relay(),
+                pnet_packet::ipv4::Ipv4Packet::new(x.payload())
+            );
             if sender.send(x).await.is_err() {
                 break;
             }
