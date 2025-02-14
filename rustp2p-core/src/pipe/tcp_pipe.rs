@@ -139,11 +139,7 @@ impl Drop for TcpPipeLine {
 impl TcpPipeLine {
     /// Writing `buf` to the target denoted by `route_key` via this pipeline
     pub async fn send(&self, buf: BytesMut) -> crate::error::Result<()> {
-        if let Err(_e) = self.write_half_collect.send_to(buf, &self.route_key).await {
-            Err(crate::error::Error::PacketLoss)
-        } else {
-            Ok(())
-        }
+        self.write_half_collect.send_to(buf, &self.route_key).await
     }
 
     pub(crate) async fn recv(&mut self, buf: &mut [u8]) -> io::Result<usize> {
