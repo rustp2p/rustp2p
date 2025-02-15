@@ -1,8 +1,8 @@
 use crate::cipher::aes_gcm::ENCRYPTION_RESERVED;
-use anyhow::anyhow;
 use rand::RngCore;
 use ring::aead;
 use ring::aead::{LessSafeKey, UnboundKey};
+use std::io;
 
 #[derive(Clone)]
 pub enum AesGcmCipher {
@@ -22,11 +22,13 @@ impl AesGcmCipher {
     pub fn reserved_len(&self) -> usize {
         ENCRYPTION_RESERVED
     }
-    pub fn decrypt(&self, extra_info: [u8; 12], payload: &mut [u8]) -> anyhow::Result<usize> {
+    pub fn decrypt(&self, extra_info: [u8; 12], payload: &mut [u8]) -> io::Result<usize> {
         let data_len = payload.len();
         if data_len < ENCRYPTION_RESERVED {
-            log::error!("Data exception, length too small {}", ENCRYPTION_RESERVED);
-            return Err(anyhow!("data err"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "AesGcm decryption failed: data length too small",
+            ));
         }
         let mut nonce_raw: [u8; 12] = payload[data_len - 12..].try_into().unwrap();
         for (i, b) in nonce_raw.iter_mut().enumerate() {
@@ -43,18 +45,24 @@ impl AesGcmCipher {
             }
         };
         if let Err(e) = rs {
-            return Err(anyhow!("Decryption failed:{:?}", e));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("AesGcm decryption failed: {e:?}"),
+            ));
         }
         Ok(data_len - ENCRYPTION_RESERVED)
     }
     /// payload Sufficient length must be reserved
-    pub fn encrypt(&self, extra_info: [u8; 12], payload: &mut [u8]) -> anyhow::Result<()> {
+    pub fn encrypt(&self, extra_info: [u8; 12], payload: &mut [u8]) -> io::Result<()> {
         let data_len = payload.len();
         if data_len < ENCRYPTION_RESERVED {
-            return Err(anyhow!("data length too small"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "AesGcm encryption failed: data length too small",
+            ));
         }
         let mut random = [0u8; 12];
-        rand::thread_rng().fill_bytes(&mut random);
+        rand::rng().fill_bytes(&mut random);
         let mut nonce_raw = random;
         for (i, b) in nonce_raw.iter_mut().enumerate() {
             *b ^= extra_info[i];
@@ -76,14 +84,20 @@ impl AesGcmCipher {
             Ok(tag) => {
                 let tag = tag.as_ref();
                 if tag.len() != 16 {
-                    return Err(anyhow!("Encryption tag length error:{}", tag.len()));
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "AesGcm encryption failed: tag length error",
+                    ));
                 }
                 payload[data_len - ENCRYPTION_RESERVED..data_len - ENCRYPTION_RESERVED + 16]
                     .copy_from_slice(tag);
                 payload[data_len - 12..].copy_from_slice(&random);
                 Ok(())
             }
-            Err(e) => Err(anyhow!("Encryption failed:{:?}", e)),
+            Err(e) => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("AesGcm encryption failed: {e:?}"),
+            )),
         }
     }
 }

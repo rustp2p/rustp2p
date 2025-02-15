@@ -29,10 +29,10 @@
   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
   protocol = ProtocolType::IDRouteReply
 */
-use crate::error::*;
 use crate::protocol::node_id::{GroupCode, NodeID, ID_LEN};
 use crate::protocol::protocol_type::ProtocolType;
 use crate::protocol::{NetPacket, HEAD_LEN};
+use std::io;
 
 pub struct IDRouteReplyPacket<B> {
     buffer: B,
@@ -41,22 +41,16 @@ impl<B: AsRef<[u8]>> IDRouteReplyPacket<B> {
     pub fn unchecked(buffer: B) -> IDRouteReplyPacket<B> {
         Self { buffer }
     }
-    pub fn new(buffer: B) -> Result<IDRouteReplyPacket<B>> {
+    pub fn new(buffer: B) -> io::Result<IDRouteReplyPacket<B>> {
         let len = buffer.as_ref().len();
         if len < 16 + 5 {
-            return Err(Error::Overflow {
-                cap: len,
-                required: 5,
-            });
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "buf len error"));
         }
         let packet = Self { buffer };
         let calculate_size =
             packet.metric_len() as usize + packet.current_id_num() as usize * ID_LEN + 16 + 5;
         if calculate_size != len {
-            return Err(Error::Overflow {
-                cap: len,
-                required: calculate_size,
-            });
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "buf len error"));
         }
         Ok(packet)
     }
@@ -113,9 +107,9 @@ impl<B: AsRef<[u8]>> Iterator for IDRouteReplyIter<'_, B> {
 
 pub struct Builder;
 impl Builder {
-    pub fn calculate_len(list: &[(NodeID, u8)]) -> Result<usize> {
+    pub fn calculate_len(list: &[(NodeID, u8)]) -> io::Result<usize> {
         if list.len() > 255 {
-            return Err(Error::InvalidArgument("".into()));
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "list len error"));
         }
 
         let id_num = list.len();
@@ -129,7 +123,7 @@ impl Builder {
         list: &[(NodeID, u8)],
         query_id: u16,
         all_id_num: u16,
-    ) -> Result<NetPacket<Vec<u8>>> {
+    ) -> io::Result<NetPacket<Vec<u8>>> {
         let len = Self::calculate_len(list)?;
         let mut packet = NetPacket::unchecked(vec![0; len]);
 

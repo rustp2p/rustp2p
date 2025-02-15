@@ -8,8 +8,7 @@ description = "A decentralized p2p library powered by Rust, which is devoted to 
 repository = "https://github.com/rustp2p/rustp2p"
 
 [dependencies]
-rust-p2p-core = { path = "rustp2p-core", version = "0.1", default-features = false }
-anyhow = { workspace = true }
+rust-p2p-core = { path = "rustp2p-core", version = "0.2", default-features = false }
 async-trait = { workspace = true }
 tokio = { workspace = true, optional = true }
 log = { workspace = true }
@@ -68,7 +67,7 @@ log = "0.4"
 parking_lot = "0.12"
 bytes = "1.9"
 dashmap = "6.1"
-rand = "0.8"
+rand = "0.9"
 crossbeam-utils = "0.8"
 crossbeam-queue = "0.3"
 

@@ -1,5 +1,6 @@
 use bytes::BytesMut;
 use std::hash::Hash;
+use std::io;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 use tcp_pipe::TcpPipeWriterRef;
 
@@ -26,9 +27,7 @@ pub const DEFAULT_ADDRESS_V6: SocketAddr =
 
 pub type PipeComponent<PeerID> = (Pipe<PeerID>, Puncher<PeerID>, IdleRouteManager<PeerID>);
 /// Construct the needed components for p2p communication with the given pipe configuration
-pub fn pipe<PeerID: Hash + Eq + Clone>(
-    config: PipeConfig,
-) -> anyhow::Result<PipeComponent<PeerID>> {
+pub fn pipe<PeerID: Hash + Eq + Clone>(config: PipeConfig) -> io::Result<PipeComponent<PeerID>> {
     let route_table = RouteTable::new(config.first_latency, config.multi_pipeline);
     let udp_pipe = if let Some(mut udp_pipe_config) = config.udp_pipe_config {
         udp_pipe_config.main_pipeline_num = config.multi_pipeline;
@@ -91,7 +90,7 @@ pub struct PipeWriterRef<'a, PeerID> {
 
 impl<PeerID> Pipe<PeerID> {
     /// Accept pipelines from a given `pipe`
-    pub async fn accept(&mut self) -> anyhow::Result<PipeLine> {
+    pub async fn accept(&mut self) -> io::Result<PipeLine> {
         crate::select! {
             rs=accept_udp(self.udp_pipe.as_mut())=>{
                 rs
@@ -105,21 +104,21 @@ impl<PeerID> Pipe<PeerID> {
         }
     }
 }
-async fn accept_tcp(tcp: Option<&mut TcpPipe>) -> anyhow::Result<PipeLine> {
+async fn accept_tcp(tcp: Option<&mut TcpPipe>) -> io::Result<PipeLine> {
     if let Some(tcp_pipe) = tcp {
         Ok(PipeLine::Tcp(tcp_pipe.accept().await?))
     } else {
         futures::future::pending().await
     }
 }
-async fn accept_udp(udp: Option<&mut UdpPipe>) -> anyhow::Result<PipeLine> {
+async fn accept_udp(udp: Option<&mut UdpPipe>) -> io::Result<PipeLine> {
     if let Some(udp_pipe) = udp {
         Ok(PipeLine::Udp(udp_pipe.accept().await?))
     } else {
         futures::future::pending().await
     }
 }
-async fn accept_extend(extend: Option<&mut ExtensiblePipe>) -> anyhow::Result<PipeLine> {
+async fn accept_extend(extend: Option<&mut ExtensiblePipe>) -> io::Result<PipeLine> {
     if let Some(extend) = extend {
         Ok(PipeLine::Extend(extend.accept().await?))
     } else {
@@ -192,7 +191,7 @@ impl<PeerID> PipeWriter<PeerID> {
 
 impl<PeerID> PipeWriter<PeerID> {
     /// Writing `buf` to the target denoted by `route_key`
-    pub async fn send_to(&self, buf: BytesMut, route_key: &RouteKey) -> crate::error::Result<()> {
+    pub async fn send_to(&self, buf: BytesMut, route_key: &RouteKey) -> io::Result<()> {
         match route_key.protocol() {
             ConnectProtocol::UDP => {
                 if let Some(w) = self.udp_pipe_writer.as_ref() {
@@ -210,7 +209,7 @@ impl<PeerID> PipeWriter<PeerID> {
                 }
             }
         }
-        Err(crate::error::Error::InvalidProtocol)
+        Err(io::Error::from(io::ErrorKind::InvalidInput))
     }
 
     /// Writing `buf` to the target denoted by SocketAddr with the specified protocol
@@ -219,7 +218,7 @@ impl<PeerID> PipeWriter<PeerID> {
         connect_protocol: ConnectProtocol,
         buf: BytesMut,
         addr: A,
-    ) -> crate::error::Result<()> {
+    ) -> io::Result<()> {
         match connect_protocol {
             ConnectProtocol::UDP => {
                 if let Some(w) = self.udp_pipe_writer.as_ref() {
@@ -233,12 +232,12 @@ impl<PeerID> PipeWriter<PeerID> {
             }
             ConnectProtocol::Extend => {}
         }
-        Err(crate::error::Error::InvalidProtocol)
+        Err(io::Error::from(io::ErrorKind::InvalidInput))
     }
 }
 impl<PeerID: Hash + Eq> PipeWriter<PeerID> {
     /// Writing `buf` to the target named by `peer_id`
-    pub async fn send_to_id(&self, buf: BytesMut, peer_id: &PeerID) -> crate::error::Result<()> {
+    pub async fn send_to_id(&self, buf: BytesMut, peer_id: &PeerID) -> io::Result<()> {
         let route = self.route_table.get_route_by_id(peer_id)?;
         self.send_to(buf, &route.route_key()).await
     }
@@ -248,13 +247,13 @@ impl<PeerID: Hash + Eq> PipeWriter<PeerID> {
         buf: BytesMut,
         src_id: &PeerID,
         peer_id: &PeerID,
-    ) -> crate::error::Result<()> {
+    ) -> io::Result<()> {
         let route = self.route_table.get_route_by_id(peer_id)?;
         if self
             .route_table
             .is_route_of_peer_id(src_id, &route.route_key())
         {
-            return Err(crate::error::Error::RouteNotFound("loop route".to_string()));
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "loop route"));
         }
         self.send_to(buf, &route.route_key()).await
     }
@@ -264,10 +263,7 @@ impl PipeLine {
     /// Receving buf from the associated PipeLine
     /// `usize` in the `Ok` branch indicates how many bytes are received
     /// `RouteKey` in the `Ok` branch denotes the source where these bytes are received from
-    pub async fn recv_from(
-        &mut self,
-        buf: &mut [u8],
-    ) -> Option<std::io::Result<(usize, RouteKey)>> {
+    pub async fn recv_from(&mut self, buf: &mut [u8]) -> Option<io::Result<(usize, RouteKey)>> {
         match self {
             PipeLine::Udp(line) => line.recv_from(buf).await,
             PipeLine::Tcp(line) => Some(line.recv_from(buf).await),
@@ -279,15 +275,12 @@ impl PipeLine {
         bufs: &mut [B],
         sizes: &mut [usize],
         addrs: &mut [RouteKey],
-    ) -> Option<std::io::Result<usize>> {
+    ) -> Option<io::Result<usize>> {
         match self {
             PipeLine::Udp(line) => line.recv_multi_from(bufs, sizes, addrs).await,
             PipeLine::Tcp(line) => {
                 if addrs.len() != bufs.len() {
-                    return Some(Err(std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        "addrs error",
-                    )));
+                    return Some(Err(io::Error::new(io::ErrorKind::Other, "addrs error")));
                 }
                 match line.recv_multi_from(bufs, sizes).await {
                     Ok((n, route_key)) => {

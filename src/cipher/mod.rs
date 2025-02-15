@@ -1,3 +1,5 @@
+use std::io;
+
 #[cfg(feature = "aes-gcm")]
 pub mod aes_gcm;
 
@@ -9,7 +11,7 @@ pub enum Cipher {
     #[cfg(feature = "aes-gcm")]
     AesGcm(Box<aes_gcm::AesGcmCipher>),
     #[cfg(feature = "chacha20-poly1305")]
-    ChaCha20Poly1305(chacha20_poly1305::ChaCha20Poly1305Cipher),
+    ChaCha20Poly1305(Box<chacha20_poly1305::ChaCha20Poly1305Cipher>),
     None,
 }
 #[derive(Clone, Eq, PartialEq, Debug)]
@@ -39,11 +41,11 @@ impl Cipher {
 #[cfg(feature = "chacha20-poly1305")]
 impl Cipher {
     pub fn new_chacha20_poly1305(password: String) -> Self {
-        Cipher::ChaCha20Poly1305(chacha20_poly1305::cipher(password))
+        Cipher::ChaCha20Poly1305(Box::new(chacha20_poly1305::cipher(password)))
     }
 }
 impl Cipher {
-    pub fn decrypt(&self, _extra_info: [u8; 12], payload: &mut [u8]) -> anyhow::Result<usize> {
+    pub fn decrypt(&self, _extra_info: [u8; 12], payload: &mut [u8]) -> io::Result<usize> {
         match self {
             #[cfg(feature = "aes-gcm")]
             Cipher::AesGcm(c) => c.decrypt(_extra_info, payload),
@@ -52,7 +54,7 @@ impl Cipher {
             Cipher::None => Ok(payload.len()),
         }
     }
-    pub fn encrypt(&self, _extra_info: [u8; 12], _payload: &mut [u8]) -> anyhow::Result<()> {
+    pub fn encrypt(&self, _extra_info: [u8; 12], _payload: &mut [u8]) -> io::Result<()> {
         match self {
             #[cfg(feature = "aes-gcm")]
             Cipher::AesGcm(c) => c.encrypt(_extra_info, _payload),

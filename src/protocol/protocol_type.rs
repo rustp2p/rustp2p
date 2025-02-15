@@ -1,3 +1,5 @@
+use std::io;
+
 #[derive(Eq, PartialEq, Copy, Clone, Debug)]
 #[repr(u8)]
 pub enum ProtocolType {
@@ -22,15 +24,16 @@ pub enum ProtocolType {
 }
 
 impl TryFrom<u8> for ProtocolType {
-    type Error = crate::error::Error;
+    type Error = io::Error;
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         const MAX: u8 = ProtocolType::IDReply as u8;
         match value {
             0..=MAX => unsafe { Ok(std::mem::transmute::<u8, ProtocolType>(value)) },
-            val => Err(crate::error::Error::InvalidArgument(format!(
-                "Invalid protocol {val}"
-            ))),
+            val => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("invalid protocol:{val}"),
+            )),
         }
     }
 }

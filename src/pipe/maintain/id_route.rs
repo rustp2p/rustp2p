@@ -5,6 +5,7 @@ use crate::protocol::protocol_type::ProtocolType;
 use crate::protocol::NetPacket;
 use rand::seq::SliceRandom;
 use std::collections::HashSet;
+use std::io;
 use std::time::Duration;
 
 pub async fn id_route_query_loop(
@@ -23,10 +24,7 @@ pub async fn id_route_query_loop(
     }
 }
 
-async fn id_route_query(
-    pipe_writer: &PipeWriter,
-    query_id_max_num: usize,
-) -> crate::error::Result<()> {
+async fn id_route_query(pipe_writer: &PipeWriter, query_id_max_num: usize) -> io::Result<()> {
     let mut packet =
         if let Ok(packet) = pipe_writer.allocate_send_packet_proto(ProtocolType::IDRouteQuery, 4) {
             packet
@@ -94,7 +92,7 @@ async fn poll_route_table_peer_node(
     let mut sent_ids = HashSet::with_capacity(route_table.len());
 
     if route_table.len() > query_id_max_num {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         route_table.shuffle(&mut rng);
         route_table.truncate(query_id_max_num);
     }

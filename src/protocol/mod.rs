@@ -18,10 +18,10 @@
 */
 
 use std::fmt::Debug;
+use std::io;
 
 use node_id::NodeID;
 
-use crate::error::{Error, Result};
 use crate::protocol::node_id::GroupCode;
 use crate::protocol::protocol_type::ProtocolType;
 
@@ -43,21 +43,21 @@ impl<B: AsRef<[u8]>> NetPacket<B> {
     pub fn unchecked(buffer: B) -> NetPacket<B> {
         Self { buffer }
     }
-    pub fn new(buffer: B) -> Result<NetPacket<B>> {
+    pub fn new(buffer: B) -> io::Result<NetPacket<B>> {
         let len = buffer.as_ref().len();
         if len < HEAD_LEN {
-            return Err(Error::Overflow {
-                cap: len,
-                required: 16,
-            });
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "overflow"));
         }
         let packet = Self::unchecked(buffer);
         if packet.data_length() as usize != len {
-            return Err(Error::InvalidArgument("packet len invalid".into()));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "packet len invalid",
+            ));
         }
         Ok(packet)
     }
-    pub fn protocol(&self) -> Result<ProtocolType> {
+    pub fn protocol(&self) -> io::Result<ProtocolType> {
         (self.buffer.as_ref()[0] & 0x7F).try_into()
     }
 

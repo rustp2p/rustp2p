@@ -11,7 +11,7 @@ pub(crate) async fn nat_test_loop(
 ) {
     let pipe_context = pipe_writer.pipe_context();
     loop {
-        udp_stun_servers.shuffle(&mut rand::thread_rng());
+        udp_stun_servers.shuffle(&mut rand::rng());
         let udp_stun_servers = if udp_stun_servers.len() > 3 {
             &udp_stun_servers[..3]
         } else {

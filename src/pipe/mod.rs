@@ -1,5 +1,4 @@
 use crate::config::PipeConfig;
-use crate::error::{Error, Result};
 use crate::extend::byte_pool::{Block, BufferPool};
 use crate::pipe::pipe_context::PipeContext;
 use crate::protocol::broadcast::RangeBroadcastPacket;
@@ -21,6 +20,7 @@ use rust_p2p_core::route::route_table::RouteTable;
 use rust_p2p_core::route::{ConnectProtocol, Route, RouteKey};
 pub use send_packet::SendPacket;
 use std::collections::HashMap;
+use std::io;
 use std::net::SocketAddr;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
@@ -46,7 +46,7 @@ pub struct Pipe {
 }
 
 impl Pipe {
-    pub async fn new(mut config: PipeConfig) -> Result<Pipe> {
+    pub async fn new(mut config: PipeConfig) -> io::Result<Pipe> {
         let multi_pipeline = config.multi_pipeline;
         let send_buffer_size = config.send_buffer_size;
         let recv_buffer_size = config.recv_buffer_size;
@@ -187,6 +187,7 @@ impl Pipe {
         }
     }
 }
+
 impl Drop for Pipe {
     fn drop(&mut self) {
         _ = self.shutdown_manager.trigger_shutdown(());
@@ -194,12 +195,12 @@ impl Drop for Pipe {
 }
 
 impl Pipe {
-    pub async fn accept(&mut self) -> Result<PipeLine> {
+    pub async fn accept(&mut self) -> io::Result<PipeLine> {
         if self.shutdown_manager.is_shutdown_triggered() {
-            return Err(Error::Shutdown);
+            return Err(io::Error::new(io::ErrorKind::BrokenPipe, "shutdown"));
         }
         let Ok(pipe_line) = self.shutdown_manager.wrap_cancel(self.pipe.accept()).await else {
-            return Err(Error::Shutdown);
+            return Err(io::Error::new(io::ErrorKind::BrokenPipe, "shutdown"));
         };
         let pipe_line = pipe_line?;
         let recv_buff = Vec::with_capacity(BUF_SIZE);
@@ -235,9 +236,9 @@ impl PipeWriter {
     pub fn pipe_context(&self) -> &PipeContext {
         &self.pipe_context
     }
-    pub fn switch_model(&self, nat_type: NatType) -> Result<()> {
+    pub fn switch_model(&self, nat_type: NatType) -> io::Result<()> {
         if self.shutdown_manager.is_shutdown_triggered() {
-            return Err(Error::Shutdown);
+            return Err(io::Error::new(io::ErrorKind::BrokenPipe, "shutdown"));
         }
         use rust_p2p_core::pipe::udp_pipe::Model;
         match nat_type {
@@ -304,7 +305,7 @@ impl PipeWriter {
         buf: &NetPacket<B>,
         group_code: &GroupCode,
         id: &NodeID,
-    ) -> Result<()> {
+    ) -> io::Result<()> {
         let code = self.pipe_context.load_group_code();
         if &code == group_code {
             self.send_to_id(buf, id).await
@@ -312,7 +313,10 @@ impl PipeWriter {
             let route = if let Some(v) = self.pipe_context.other_route_table.get(group_code) {
                 v.get_route_by_id(id)?
             } else {
-                return Err(Error::NodeIDNotAvailable);
+                return Err(io::Error::new(
+                    io::ErrorKind::AddrNotAvailable,
+                    "group_code not found",
+                ));
             };
             self.send_to_route(buf.buffer(), &route.route_key()).await
         }
@@ -321,11 +325,11 @@ impl PipeWriter {
         &self,
         buf: &NetPacket<B>,
         id: &NodeID,
-    ) -> Result<()> {
+    ) -> io::Result<()> {
         self.pipe_writer.send_to_id(buf.buffer().into(), id).await?;
         Ok(())
     }
-    pub(crate) async fn send_to_route(&self, buf: &[u8], route_key: &RouteKey) -> Result<()> {
+    pub(crate) async fn send_to_route(&self, buf: &[u8], route_key: &RouteKey) -> io::Result<()> {
         self.pipe_writer.send_to(buf.into(), route_key).await?;
         Ok(())
     }
@@ -335,7 +339,7 @@ impl PipeWriter {
         group_code: &GroupCode,
         src_id: &NodeID,
         dest_id: &NodeID,
-    ) -> Result<()> {
+    ) -> io::Result<()> {
         if dest_id.is_broadcast() {
             self.send_broadcast0(&buf, group_code, src_id).await;
             return Ok(());
@@ -353,12 +357,18 @@ impl PipeWriter {
                 if let Some(v) = self.pipe_context().other_route_table.get(&relay_group_code) {
                     route = v.get_route_by_id(&relay_node_id)?;
                 } else {
-                    return Err(Error::NodeIDNotAvailable);
+                    return Err(io::Error::new(
+                        io::ErrorKind::AddrNotAvailable,
+                        "group_code not found",
+                    ));
                 }
                 self.pipe_writer.send_to(buf, &route.route_key()).await?
             }
         } else {
-            Err(Error::NodeIDNotAvailable)?
+            return Err(io::Error::new(
+                io::ErrorKind::AddrNotAvailable,
+                "group_code not found",
+            ));
         };
         Ok(())
     }
@@ -419,10 +429,10 @@ impl PipeWriter {
         }
     }
 
-    pub async fn broadcast_packet(&self, packet: SendPacket) -> Result<()> {
+    pub async fn broadcast_packet(&self, packet: SendPacket) -> io::Result<()> {
         self.send_packet_to(packet, &NodeID::broadcast()).await
     }
-    pub async fn send_packet_to(&self, mut packet: SendPacket, dest_id: &NodeID) -> Result<()> {
+    pub async fn send_packet_to(&self, mut packet: SendPacket, dest_id: &NodeID) -> io::Result<()> {
         let group_code = self.pipe_context.load_group_code();
         if let Some(src_id) = self.pipe_context.load_id() {
             packet.set_group_code(&group_code);
@@ -441,7 +451,7 @@ impl PipeWriter {
             self.send_to0(packet.into_buf(), &group_code, &src_id, dest_id)
                 .await
         } else {
-            Err(Error::NoIDSpecified)
+            Err(io::Error::new(io::ErrorKind::Other, "no id specified"))
         }
     }
 
@@ -462,12 +472,12 @@ impl PipeWriter {
         &self,
         protocol_type: ProtocolType,
         payload_size: usize,
-    ) -> Result<SendPacket> {
+    ) -> io::Result<SendPacket> {
         let group_code = self.pipe_context.load_group_code();
         let src_id = if let Some(src_id) = self.pipe_context.load_id() {
             src_id
         } else {
-            return Err(Error::NoIDSpecified);
+            return Err(io::Error::new(io::ErrorKind::Other, "no id specified"));
         };
         let mut send_packet = SendPacket::with_capacity(payload_size);
         unsafe {
@@ -483,10 +493,10 @@ impl PipeWriter {
         packet.reset_data_len();
         Ok(send_packet)
     }
-    pub fn shutdown(&self) -> Result<()> {
+    pub fn shutdown(&self) -> io::Result<()> {
         self.shutdown_manager
             .trigger_shutdown(())
-            .map_err(|_| Error::AlreadyShutdown)?;
+            .map_err(|_| io::Error::new(io::ErrorKind::Other, "already shutdown"))?;
         Ok(())
     }
 }
@@ -505,19 +515,20 @@ pub struct PipeLine {
     recv_sizes: Vec<usize>,
     recv_addrs: Vec<RouteKey>,
 }
+
 const BUF_SIZE: usize = 16;
-type RecvRs = core::result::Result<core::result::Result<RecvUserData, HandleError>, RecvError>;
+
+type RecvRs = Result<Result<RecvUserData, HandleError>, RecvError>;
+
 impl PipeLine {
-    pub async fn next(
-        &mut self,
-    ) -> core::result::Result<core::result::Result<RecvUserData, HandleError>, RecvError> {
+    pub async fn next(&mut self) -> Result<Result<RecvUserData, HandleError>, RecvError> {
         self.next_process::<crate::config::DefaultInterceptor>(None)
             .await
     }
     pub async fn recv_multi(
         &mut self,
         data_vec: &mut Vec<RecvUserData>,
-    ) -> core::result::Result<core::result::Result<(), HandleError>, RecvError> {
+    ) -> Result<Result<(), HandleError>, RecvError> {
         self.recv_multi_process::<crate::config::DefaultInterceptor>(None, data_vec)
             .await
     }
@@ -657,7 +668,7 @@ impl PipeLine {
         interceptor: Option<&I>,
         mut block: Data,
         route_key: RouteKey,
-    ) -> core::result::Result<RecvRs, Data> {
+    ) -> Result<RecvRs, Data> {
         if rust_p2p_core::stun::is_stun_response(&block) {
             if let Some(pub_addr) = rust_p2p_core::stun::recv_stun_response(&block) {
                 self.pipe_context
@@ -684,11 +695,14 @@ impl PipeLine {
                         if rs.is_encrypt != self.pipe_context.cipher.is_some() {
                             return Ok(Ok(Err(HandleError::new(
                                 route_key,
-                                Error::Any(anyhow::anyhow!(
+                                io::Error::new(
+                                    io::ErrorKind::Other,
+                                    format!(
                                     "Inconsistent encryption status: data tag-{} current tag-{}",
                                     rs.is_encrypt,
                                     self.pipe_context.cipher.is_some()
-                                )),
+                                ),
+                                ),
                             ))));
                         }
                         if let Some(cipher) = self.pipe_context.cipher.as_ref() {
@@ -696,9 +710,7 @@ impl PipeLine {
                                 .decrypt(tag(&rs.src_id, &rs.dest_id), &mut block[rs.start..rs.end])
                             {
                                 Ok(_len) => rs.end -= cipher.reserved_len(),
-                                Err(e) => {
-                                    return Ok(Ok(Err(HandleError::new(route_key, Error::Any(e)))))
-                                }
+                                Err(e) => return Ok(Ok(Err(HandleError::new(route_key, e)))),
                             }
                         }
                     }
@@ -729,10 +741,10 @@ impl PipeLine {
         &self,
         buf: &NetPacket<B>,
         id: &NodeID,
-    ) -> Result<()> {
+    ) -> io::Result<()> {
         self.pipe_writer.send_to_id(buf, id).await
     }
-    pub(crate) async fn send_to_route(&self, buf: &[u8], route_key: &RouteKey) -> Result<()> {
+    pub(crate) async fn send_to_route(&self, buf: &[u8], route_key: &RouteKey) -> io::Result<()> {
         self.pipe_writer.send_to_route(buf, route_key).await
     }
     async fn other_group_handle(
@@ -741,7 +753,7 @@ impl PipeLine {
         route_key: RouteKey,
         self_group_code: GroupCode,
         self_id: NodeID,
-    ) -> Result<()> {
+    ) -> io::Result<()> {
         let metric = packet.max_ttl() - packet.ttl();
         let src_group_code = GroupCode::try_from(packet.group_code())?;
         let src_id = NodeID::try_from(packet.src_id())?;
@@ -809,12 +821,10 @@ impl PipeLine {
                     // update rtt
                     let time = packet.payload();
                     if time.len() != 4 {
-                        return Err(Error::InvalidArgument("time error".into()));
+                        return Err(io::Error::new(io::ErrorKind::InvalidData, "time error"));
                     }
                     let time = u32::from_be_bytes(time.try_into().unwrap());
-                    let now = std::time::SystemTime::now()
-                        .duration_since(UNIX_EPOCH)?
-                        .as_millis() as u32;
+                    let now = now()?;
                     let rtt = now.saturating_sub(time);
                     self.pipe_context
                         .other_route_table
@@ -854,10 +864,13 @@ impl PipeLine {
         }
         Ok(())
     }
-    async fn handle(&mut self, recv_result: RecvResult<'_>) -> Result<Option<HandleResultInner>> {
+    async fn handle(
+        &mut self,
+        recv_result: RecvResult<'_>,
+    ) -> io::Result<Option<HandleResultInner>> {
         let mut packet = NetPacket::new(recv_result.buf)?;
         if packet.max_ttl() < packet.ttl() {
-            return Err(Error::InvalidArgument("ttl error".into()));
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "ttl error"));
         }
         if packet.ttl() == 0 {
             return Ok(None);
@@ -865,12 +878,18 @@ impl PipeLine {
         let src_id = NodeID::try_from(packet.src_id())?;
 
         if src_id.is_unspecified() || src_id.is_broadcast() {
-            return Err(Error::InvalidArgument("src id is unspecified".into()));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "src id is unspecified",
+            ));
         }
         let self_id = if let Some(self_id) = self.pipe_context.load_id() {
             self_id
         } else {
-            return Err(Error::InvalidArgument("self id is none".into()));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "self id is none",
+            ));
         };
         let group_code = self.pipe_context.load_group_code();
         let route_key = recv_result.route_key;
@@ -886,7 +905,7 @@ impl PipeLine {
 
         if self_id == src_id {
             log::debug!("{packet:?}");
-            return Err(Error::InvalidArgument("id loop error".into()));
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "id loop error"));
         }
         if self_id != dest_id && !dest_id.is_unspecified() && !dest_id.is_broadcast() {
             if packet.incr_ttl() {
@@ -929,12 +948,10 @@ impl PipeLine {
                 // update rtt
                 let time = packet.payload();
                 if time.len() != 4 {
-                    return Err(Error::InvalidArgument("time error".into()));
+                    return Err(io::Error::new(io::ErrorKind::InvalidData, "time error"));
                 }
                 let time = u32::from_be_bytes(time.try_into().unwrap());
-                let now = std::time::SystemTime::now()
-                    .duration_since(UNIX_EPOCH)?
-                    .as_millis() as u32;
+                let now = now()?;
                 let rtt = now.saturating_sub(time);
                 self.route_table
                     .add_route(src_id, Route::from(route_key, metric, rtt));
@@ -993,12 +1010,17 @@ impl PipeLine {
                 }
             }
             ProtocolType::PunchConsultRequest => {
-                let punch_info = rmp_serde::from_slice::<PunchConsultInfo>(packet.payload())?;
+                let punch_info = rmp_serde::from_slice::<PunchConsultInfo>(packet.payload())
+                    .map_err(|e| {
+                        io::Error::new(io::ErrorKind::Other, format!("RmpDecodeError: {e:?}"))
+                    })?;
                 log::debug!("PunchConsultRequest {:?}", punch_info);
                 let consult_info = self
                     .pipe_context
                     .gen_punch_info(punch_info.peer_nat_info.seq);
-                let data = rmp_serde::to_vec(&consult_info)?;
+                let data = rmp_serde::to_vec(&consult_info).map_err(|e| {
+                    io::Error::new(io::ErrorKind::Other, format!("RmpEncodeError: {e:?}"))
+                })?;
                 let mut send_packet = self
                     .pipe_writer
                     .allocate_send_packet_proto(ProtocolType::PunchConsultReply, data.len())?;
@@ -1022,7 +1044,10 @@ impl PipeLine {
                 }
             }
             ProtocolType::PunchConsultReply => {
-                let punch_info = rmp_serde::from_slice::<PunchConsultInfo>(packet.payload())?;
+                let punch_info = rmp_serde::from_slice::<PunchConsultInfo>(packet.payload())
+                    .map_err(|e| {
+                        io::Error::new(io::ErrorKind::Other, format!("RmpDecodeError: {e:?}"))
+                    })?;
                 log::debug!("PunchConsultReply {:?}", punch_info);
 
                 if self
@@ -1047,10 +1072,13 @@ impl PipeLine {
         self_id: NodeID,
         src_group_code: GroupCode,
         src_id: NodeID,
-    ) -> Result<()> {
+    ) -> io::Result<()> {
         let payload = packet.payload();
         if payload.len() != 4 {
-            return Err(Error::InvalidArgument("IDRouteQuery error".into()));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "IDRouteQuery packet error",
+            ));
         }
         let query_id = u16::from_be_bytes(payload[2..].try_into().unwrap());
         // reply reachable node id
@@ -1109,7 +1137,7 @@ impl PipeLine {
         self_id: NodeID,
         src_group_code: GroupCode,
         src_id: NodeID,
-    ) -> Result<()> {
+    ) -> io::Result<()> {
         let reply_packet = IDRouteReplyPacket::new(packet.payload())?;
         let reachable_group_code = GroupCode::try_from(reply_packet.group_code())?;
 
@@ -1142,7 +1170,7 @@ async fn id_route_reply(
     self_id: NodeID,
     src_group_code: GroupCode,
     src_id: NodeID,
-) -> Result<()> {
+) -> io::Result<()> {
     let mut list = Vec::with_capacity(other_route_table.len());
     for x in other_route_table.iter() {
         let mut table: Vec<_> = if &src_group_code == x.key() {
@@ -1196,10 +1224,10 @@ impl<'a> RecvResult<'a> {
     pub fn remote_addr(&self) -> SocketAddr {
         self.route_key.addr()
     }
-    pub fn net_packet(&self) -> Result<NetPacket<&[u8]>> {
+    pub fn net_packet(&self) -> io::Result<NetPacket<&[u8]>> {
         NetPacket::new(self.buf)
     }
-    pub fn net_packet_mut(&mut self) -> Result<NetPacket<&mut [u8]>> {
+    pub fn net_packet_mut(&mut self) -> io::Result<NetPacket<&mut [u8]>> {
         NetPacket::new(self.buf)
     }
 }
@@ -1257,6 +1285,7 @@ impl DerefMut for Data {
         }
     }
 }
+
 impl RecvUserData {
     pub fn offset(&self) -> usize {
         self._offset
@@ -1274,6 +1303,7 @@ impl RecvUserData {
         }
     }
 }
+
 impl RecvUserData {
     pub fn ttl(&self) -> u8 {
         self._ttl
@@ -1313,17 +1343,17 @@ pub enum RecvError {
 #[error("handle error {route_key:?},err={err:?}")]
 pub struct HandleError {
     route_key: RouteKey,
-    err: Error,
+    err: io::Error,
 }
 
 impl HandleError {
-    pub(crate) fn new(route_key: RouteKey, err: Error) -> Self {
+    pub(crate) fn new(route_key: RouteKey, err: io::Error) -> Self {
         Self { route_key, err }
     }
     pub fn addr(&self) -> SocketAddr {
         self.route_key.addr()
     }
-    pub fn err(&self) -> &Error {
+    pub fn err(&self) -> &io::Error {
         &self.err
     }
 }
@@ -1334,4 +1364,11 @@ fn tag(src_id: &NodeID, dest_id: &NodeID) -> [u8; 12] {
     tmp[..4].copy_from_slice(src_id.as_ref());
     tmp[4..8].copy_from_slice(dest_id.as_ref());
     tmp
+}
+fn now() -> io::Result<u32> {
+    let time = std::time::SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_e| io::Error::new(io::ErrorKind::Other, "system time error"))?
+        .as_millis() as u32;
+    Ok(time)
 }

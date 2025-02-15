@@ -3,10 +3,8 @@
 #[cfg(any(feature = "aes-gcm", feature = "chacha20-poly1305"))]
 use crate::cipher::Cipher;
 use crate::config::punch_info::NodePunchInfo;
-use crate::error::Error;
 use crate::extend::dns_query::{dns_query_all, dns_query_txt};
 use crate::protocol::node_id::{GroupCode, NodeID};
-use anyhow::Context;
 use crossbeam_utils::atomic::AtomicCell;
 use dashmap::DashMap;
 use parking_lot::RwLock;
@@ -16,6 +14,7 @@ use rust_p2p_core::route::route_table::RouteTable;
 use rust_p2p_core::route::Index;
 use rust_p2p_core::socket::LocalInterface;
 use std::fmt::Display;
+use std::io;
 use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -63,16 +62,22 @@ impl PipeContext {
             cipher,
         }
     }
-    pub fn store_self_id(&self, node_id: NodeID) -> crate::error::Result<()> {
+    pub fn store_self_id(&self, node_id: NodeID) -> io::Result<()> {
         if node_id.is_unspecified() || node_id.is_broadcast() {
-            return Err(Error::InvalidArgument("invalid node id".into()));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "invalid node id",
+            ));
         }
         self.self_node_id.store(Some(node_id));
         Ok(())
     }
-    pub fn store_group_code(&self, group_code: GroupCode) -> crate::error::Result<()> {
+    pub fn store_group_code(&self, group_code: GroupCode) -> io::Result<()> {
         if group_code.is_unspecified() {
-            return Err(Error::InvalidArgument("invalid group code".into()));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "invalid group code",
+            ));
         }
         self.group_code.store(group_code);
         Ok(())
@@ -86,7 +91,7 @@ impl PipeContext {
     pub fn set_direct_nodes(&self, direct_node: Vec<PeerNodeAddress>) {
         let mut addrs = Vec::new();
         let mut ids: Vec<u16> = (10..u16::MAX).collect();
-        ids.shuffle(&mut rand::thread_rng());
+        ids.shuffle(&mut rand::rng());
         let mut guard = self.direct_node_address_list.write();
         self.direct_node_id_map.clear();
         for (index, addr) in direct_node.into_iter().enumerate() {
@@ -128,7 +133,7 @@ impl PipeContext {
             .get(id)
             .map(|v| (v.value().0, v.value().1))
     }
-    pub async fn update_direct_nodes(&self) -> crate::error::Result<()> {
+    pub async fn update_direct_nodes(&self) -> io::Result<()> {
         let mut addrs = self.direct_node_address_list.read().clone();
         for (peer_addr, _id, addr) in &mut addrs {
             *addr = peer_addr
@@ -268,7 +273,7 @@ impl PeerNodeAddress {
         &self,
         name_servers: &Vec<String>,
         default_interface: &Option<LocalInterface>,
-    ) -> crate::error::Result<Vec<NodeAddress>> {
+    ) -> io::Result<Vec<NodeAddress>> {
         let addrs = match self {
             PeerNodeAddress::Tcp(addr) => vec![NodeAddress::Tcp(*addr)],
             PeerNodeAddress::Udp(addr) => vec![NodeAddress::Udp(*addr)],
@@ -286,18 +291,26 @@ impl PeerNodeAddress {
                 for x in txt {
                     let x = x.to_lowercase();
                     let addr = if let Some(v) = x.strip_prefix("udp://") {
-                        NodeAddress::Udp(
-                            SocketAddr::from_str(v).context("record type txt is not SocketAddr")?,
-                        )
+                        NodeAddress::Udp(SocketAddr::from_str(v).map_err(|_| {
+                            io::Error::new(
+                                io::ErrorKind::Other,
+                                "record type txt is not SocketAddr",
+                            )
+                        })?)
                     } else if let Some(v) = x.strip_prefix("tcp://") {
-                        NodeAddress::Tcp(
-                            SocketAddr::from_str(v).context("record type txt is not SocketAddr")?,
-                        )
+                        NodeAddress::Tcp(SocketAddr::from_str(v).map_err(|_| {
+                            io::Error::new(
+                                io::ErrorKind::Other,
+                                "record type txt is not SocketAddr",
+                            )
+                        })?)
                     } else {
-                        NodeAddress::Tcp(
-                            SocketAddr::from_str(&x)
-                                .context("record type txt is not SocketAddr")?,
-                        )
+                        NodeAddress::Tcp(SocketAddr::from_str(&x).map_err(|_| {
+                            io::Error::new(
+                                io::ErrorKind::Other,
+                                "record type txt is not SocketAddr",
+                            )
+                        })?)
                     };
                     addrs.push(addr);
                 }
@@ -308,7 +321,7 @@ impl PeerNodeAddress {
     }
 }
 impl FromStr for PeerNodeAddress {
-    type Err = crate::error::Error;
+    type Err = io::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let domain = s.to_lowercase();

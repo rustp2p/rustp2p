@@ -9,7 +9,7 @@ use windows_sys::Win32::Networking::WinSock::{
 use crate::socket::{LocalInterface, VntSocketTrait};
 
 impl VntSocketTrait for socket2::Socket {
-    fn set_ip_unicast_if(&self, interface: &LocalInterface) -> crate::error::Result<()> {
+    fn set_ip_unicast_if(&self, interface: &LocalInterface) -> io::Result<()> {
         let index = interface.index;
         let raw_socket = self.as_raw_socket();
         let result = unsafe {

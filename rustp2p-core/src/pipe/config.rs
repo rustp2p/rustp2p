@@ -1,10 +1,10 @@
+use std::io;
 use std::time::Duration;
 
 use crate::pipe::recycle::RecycleBuf;
 use crate::pipe::tcp_pipe::{BytesInitCodec, InitCodec};
 use crate::pipe::udp_pipe::Model;
 use crate::socket::LocalInterface;
-use anyhow::{anyhow, Context};
 
 pub(crate) const MAX_SYMMETRIC_PIPELINE_NUM: usize = 200;
 pub(crate) const MAX_MAIN_PIPELINE_NUM: usize = 10;
@@ -86,7 +86,7 @@ impl PipeConfig {
         self.tcp_pipe_config.replace(tcp_pipe_config);
         self
     }
-    pub fn check(&self) -> anyhow::Result<()> {
+    pub fn check(&self) -> io::Result<()> {
         if let Some(udp_pipe_config) = self.udp_pipe_config.as_ref() {
             udp_pipe_config.check()?;
         }
@@ -134,16 +134,21 @@ impl TcpPipeConfig {
             recycle_buf: None,
         }
     }
-    pub fn check(&self) -> anyhow::Result<()> {
+    pub fn check(&self) -> io::Result<()> {
         if self.tcp_multiplexing_limit == 0 {
-            return Err(anyhow!("tcp_multiplexing_limit cannot be 0"));
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                "tcp_multiplexing_limit cannot be 0",
+            ));
         }
         if self.tcp_multiplexing_limit > MAX_MAIN_PIPELINE_NUM {
-            return Err(anyhow!("tcp_multiplexing_limit cannot too large"));
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                "tcp_multiplexing_limit cannot too large",
+            ));
         }
         if self.use_v6 {
-            socket2::Socket::new(socket2::Domain::IPV6, socket2::Type::STREAM, None)
-                .context("Does not support IPV6")?;
+            socket2::Socket::new(socket2::Domain::IPV6, socket2::Type::STREAM, None)?;
         }
         Ok(())
     }
@@ -195,19 +200,27 @@ impl Default for UdpPipeConfig {
 }
 
 impl UdpPipeConfig {
-    pub fn check(&self) -> anyhow::Result<()> {
+    pub fn check(&self) -> io::Result<()> {
         if self.main_pipeline_num == 0 {
-            return Err(anyhow!("main_pipeline_num cannot be 0"));
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                "main_pipeline_num cannot be 0",
+            ));
         }
         if self.main_pipeline_num > MAX_MAIN_PIPELINE_NUM {
-            return Err(anyhow!("main_pipeline_num cannot too large"));
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                "main_pipeline_num is too large",
+            ));
         }
         if self.sub_pipeline_num > MAX_SYMMETRIC_PIPELINE_NUM {
-            return Err(anyhow!("symmetric_pipeline_num is too large"));
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                "symmetric_pipeline_num is too large",
+            ));
         }
         if self.use_v6 {
-            socket2::Socket::new(socket2::Domain::IPV6, socket2::Type::DGRAM, None)
-                .context("Does not support IPV6")?;
+            socket2::Socket::new(socket2::Domain::IPV6, socket2::Type::DGRAM, None)?;
         }
         Ok(())
     }

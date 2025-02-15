@@ -42,7 +42,7 @@ pub async fn punch_consult_loop(pipe_writer: PipeWriter, puncher: Puncher<NodeID
         send_packet.set_payload(&data);
 
         let mut node_ids = route_table.route_table_ids();
-        node_ids.shuffle(&mut rand::thread_rng());
+        node_ids.shuffle(&mut rand::rng());
         let mut count = 0;
         for node_id in node_ids {
             if node_id <= self_id {

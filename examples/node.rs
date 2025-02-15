@@ -1,3 +1,4 @@
+use std::io;
 use std::net::Ipv4Addr;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -9,7 +10,6 @@ use pnet_packet::ip::IpNextHeaderProtocols;
 use pnet_packet::Packet;
 use rustp2p::cipher::Algorithm;
 use rustp2p::config::{PipeConfig, TcpPipeConfig, UdpPipeConfig};
-use rustp2p::error::*;
 use rustp2p::pipe::{PeerNodeAddress, Pipe, PipeLine, PipeWriter, RecvUserData};
 use rustp2p::protocol::node_id::GroupCode;
 use tachyonix::{channel, Sender};
@@ -36,19 +36,19 @@ struct Args {
 
 #[cfg(feature = "use-tokio")]
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> io::Result<()> {
     main0().await
 }
 
 #[cfg(feature = "use-async-std")]
 #[::async_std::main]
-async fn main() -> Result<()> {
+async fn main() -> io::Result<()> {
     use futures_util::FutureExt;
     main0().boxed().await
 }
 
 #[allow(unused_mut)]
-pub async fn main0() -> Result<()> {
+pub async fn main0() -> io::Result<()> {
     let Args {
         peer,
         local,
@@ -119,7 +119,7 @@ pub async fn main0() -> Result<()> {
             rust_p2p_core::async_compat::spawn(recv(line, sender1.clone(), writer));
         }
         #[allow(unreachable_code)]
-        Ok::<(), Error>(())
+        Ok::<(), io::Error>(())
     });
 
     quit.recv().await.expect("quit error");
@@ -182,7 +182,7 @@ async fn tun_recv(
     pipe_writer: PipeWriter,
     device: Arc<AsyncDevice>,
     _self_id: Ipv4Addr,
-) -> Result<()> {
+) -> io::Result<()> {
     let mut buf = [0; 2048];
     loop {
         let payload_len = device.recv(&mut buf).await?;
@@ -223,7 +223,7 @@ async fn tun_recv(
 }
 
 #[allow(dead_code)]
-async fn process_myself(payload: &[u8], device: &Arc<AsyncDevice>) -> Result<()> {
+async fn process_myself(payload: &[u8], device: &Arc<AsyncDevice>) -> io::Result<()> {
     if let Some(ip_packet) = pnet_packet::ipv4::Ipv4Packet::new(payload) {
         match ip_packet.get_next_level_protocol() {
             IpNextHeaderProtocols::Icmp => {

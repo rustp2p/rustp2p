@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::hash::Hash;
+use std::io;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::ops::{Div, Mul};
 use std::sync::Arc;
@@ -49,7 +50,7 @@ impl<PeerID> Puncher<PeerID> {
         tcp_pipe_writer: Option<TcpPipeWriter>,
     ) -> Puncher<PeerID> {
         let mut port_vec: Vec<u16> = (1..=65535).collect();
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         port_vec.shuffle(&mut rng);
         Self {
             route_table,
@@ -99,7 +100,7 @@ impl<PeerID: Hash + Eq + Clone> Puncher<PeerID> {
         peer_id: PeerID,
         buf: &[u8],
         punch_info: PunchInfo,
-    ) -> anyhow::Result<()> {
+    ) -> io::Result<()> {
         if !self.need_punch(&peer_id) {
             return Ok(());
         }
@@ -110,7 +111,7 @@ impl<PeerID: Hash + Eq + Clone> Puncher<PeerID> {
         peer_id: PeerID,
         buf: &[u8],
         punch_info: PunchInfo,
-    ) -> anyhow::Result<()> {
+    ) -> io::Result<()> {
         let (_, count) = *self
             .count_record
             .lock()
@@ -190,7 +191,7 @@ impl<PeerID: Hash + Eq + Clone> Puncher<PeerID> {
         buf: &[u8],
         peer_nat_info: &NatInfo,
         punch_model: &PunchModelBoxes,
-    ) -> anyhow::Result<()> {
+    ) -> io::Result<()> {
         let udp_pipe_writer = if let Some(udp_pipe_writer) = self.udp_pipe_writer.as_ref() {
             udp_pipe_writer
         } else {
@@ -239,7 +240,7 @@ impl<PeerID: Hash + Eq + Clone> Puncher<PeerID> {
                 //预测范围内最多发送max_k1个包
                 let max_k1 = 60;
                 //全局最多发送max_k2个包
-                let mut max_k2: usize = rand::thread_rng().gen_range(600..800);
+                let mut max_k2: usize = rand::rng().random_range(600..800);
                 if count > 8 {
                     //递减探测规模
                     max_k2 = max_k2.mul(8).div(count).max(max_k1 as usize);
@@ -261,7 +262,7 @@ impl<PeerID: Hash + Eq + Clone> Puncher<PeerID> {
                         (max_port - min_port + 1) as usize
                     };
                     let mut nums: Vec<u16> = (min_port..=max_port).collect();
-                    nums.shuffle(&mut rand::thread_rng());
+                    nums.shuffle(&mut rand::rng());
                     self.punch_symmetric(
                         udp_pipe_writer,
                         &nums[..k],
@@ -316,7 +317,7 @@ impl<PeerID: Hash + Eq + Clone> Puncher<PeerID> {
         buf: &[u8],
         ips: &Vec<Ipv4Addr>,
         max: usize,
-    ) -> anyhow::Result<usize> {
+    ) -> io::Result<usize> {
         let mut count = 0;
         for (index, port) in ports.iter().enumerate() {
             for pub_ip in ips {

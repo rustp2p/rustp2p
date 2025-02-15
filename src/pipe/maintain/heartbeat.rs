@@ -1,11 +1,11 @@
-use crate::error::*;
 use crate::pipe::pipe_context::NodeAddress;
 use crate::pipe::PipeWriter;
 use crate::protocol::node_id::{GroupCode, NodeID};
 use crate::protocol::protocol_type::ProtocolType;
 use crate::protocol::NetPacket;
 use std::collections::HashSet;
-use std::time::{Duration, UNIX_EPOCH};
+use std::io;
+use std::time::Duration;
 
 pub async fn heartbeat_loop(pipe_writer: PipeWriter, heartbeat_interval: Duration) {
     let mut count = 0;
@@ -23,7 +23,7 @@ pub async fn heartbeat_loop(pipe_writer: PipeWriter, heartbeat_interval: Duratio
     }
 }
 
-async fn heartbeat_request(pipe_writer: &PipeWriter) -> Result<()> {
+async fn heartbeat_request(pipe_writer: &PipeWriter) -> io::Result<()> {
     let mut packet =
         if let Ok(packet) = pipe_writer.allocate_send_packet_proto(ProtocolType::EchoRequest, 0) {
             packet
@@ -40,7 +40,7 @@ async fn heartbeat_request(pipe_writer: &PipeWriter) -> Result<()> {
     Ok(())
 }
 
-async fn timestamp_request(pipe_writer: &PipeWriter) -> Result<()> {
+async fn timestamp_request(pipe_writer: &PipeWriter) -> io::Result<()> {
     let mut packet = if let Ok(packet) =
         pipe_writer.allocate_send_packet_proto(ProtocolType::TimestampRequest, 4)
     {
@@ -52,9 +52,7 @@ async fn timestamp_request(pipe_writer: &PipeWriter) -> Result<()> {
         packet.set_payload_len(4);
     }
     let mut packet = NetPacket::new(packet.buf_mut())?;
-    let now = std::time::SystemTime::now()
-        .duration_since(UNIX_EPOCH)?
-        .as_millis() as u32;
+    let now = crate::pipe::now()?;
     packet.payload_mut().copy_from_slice(&now.to_be_bytes());
     let direct_nodes = pipe_writer.pipe_context.get_direct_nodes();
     let (sent_ids, _) = route_table_heartbeat_request(pipe_writer, &mut packet).await;

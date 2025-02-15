@@ -5,7 +5,6 @@ use crate::pipe::config::TcpPipeConfig;
 use crate::pipe::recycle::RecycleBuf;
 use crate::route::{Index, RouteKey};
 use crate::socket::{connect_tcp, create_tcp_listener, LocalInterface};
-use anyhow::Context;
 use async_lock::Mutex;
 use async_trait::async_trait;
 use bytes::BytesMut;
@@ -32,7 +31,7 @@ pub struct TcpPipe {
 
 impl TcpPipe {
     /// Construct a `TCP` pipe with the specified configuration
-    pub fn new(config: TcpPipeConfig) -> anyhow::Result<TcpPipe> {
+    pub fn new(config: TcpPipeConfig) -> io::Result<TcpPipe> {
         config.check()?;
         let address: SocketAddr = if config.use_v6 {
             format!("[::]:{}", config.tcp_port).parse().unwrap()
@@ -76,10 +75,11 @@ impl TcpPipe {
 
 impl TcpPipe {
     /// Accept `TCP` pipelines from this kind pipe
-    pub async fn accept(&mut self) -> anyhow::Result<TcpPipeLine> {
+    pub async fn accept(&mut self) -> io::Result<TcpPipeLine> {
         crate::select! {
             rs=self.connect_receiver.recv()=>{
-                let (route_key,read_half) = rs.context("connect_receiver done")?;
+                let (route_key,read_half) = rs.
+                    map_err(|_| io::Error::new(io::ErrorKind::Other,"connect_receiver done"))?;
                 Ok(TcpPipeLine::new(self.route_idle_time,route_key,read_half,self.write_half_collect.clone()))
             },
             rs=self.tcp_listener.accept()=>{
@@ -138,7 +138,7 @@ impl Drop for TcpPipeLine {
 
 impl TcpPipeLine {
     /// Writing `buf` to the target denoted by `route_key` via this pipeline
-    pub async fn send(&self, buf: BytesMut) -> crate::error::Result<()> {
+    pub async fn send(&self, buf: BytesMut) -> io::Result<()> {
         self.write_half_collect.send_to(buf, &self.route_key).await
     }
 
@@ -159,7 +159,7 @@ impl TcpPipeLine {
         sizes: &mut [usize],
     ) -> io::Result<usize> {
         if bufs.is_empty() || bufs.len() != sizes.len() {
-            return Err(io::Error::new(io::ErrorKind::Other, "bufs error"));
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "bufs error"));
         }
         match crate::async_compat::time::timeout(
             self.route_idle_time,
@@ -367,11 +367,11 @@ impl WriteHalfCollect {
         }
         None
     }
-    pub async fn send_to(&self, buf: BytesMut, route_key: &RouteKey) -> crate::error::Result<()> {
+    pub async fn send_to(&self, buf: BytesMut, route_key: &RouteKey) -> io::Result<()> {
         match route_key.index() {
             Index::Tcp(index) => {
                 let write_half = self.get(&index).ok_or_else(|| {
-                    crate::error::Error::RouteNotFound(format!("not found {route_key:?}"))
+                    io::Error::new(io::ErrorKind::Other, format!("not found {route_key:?}"))
                 })?;
                 if let Err(_e) = write_half.send(buf).await {
                     Err(io::Error::from(io::ErrorKind::WriteZero))?
@@ -379,7 +379,7 @@ impl WriteHalfCollect {
                     Ok(())
                 }
             }
-            _ => Err(crate::error::Error::InvalidProtocol),
+            _ => Err(io::Error::from(io::ErrorKind::InvalidInput)),
         }
     }
 }
@@ -424,7 +424,7 @@ impl SocketLayer {
         &self,
         addr: SocketAddr,
         index_offset: usize,
-    ) -> crate::error::Result<RouteKey> {
+    ) -> io::Result<RouteKey> {
         self.multi_connect0(addr, index_offset, None).await
     }
     pub(crate) async fn multi_connect0(
@@ -432,13 +432,13 @@ impl SocketLayer {
         addr: SocketAddr,
         index_offset: usize,
         ttl: Option<u32>,
-    ) -> crate::error::Result<RouteKey> {
+    ) -> io::Result<RouteKey> {
         let len = self.tcp_multiplexing_limit;
         if index_offset >= len {
-            return Err(crate::error::Error::IndexOutOfBounds {
-                len,
-                index: index_offset,
-            });
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "index out of bounds",
+            ));
         }
         let _guard = self.lock.lock().await;
         if let Some(route_key) = self
@@ -450,7 +450,7 @@ impl SocketLayer {
         self.connect0(0, addr, index_offset, ttl).await
     }
     /// Initiate a connection.
-    pub async fn connect(&self, addr: SocketAddr) -> crate::error::Result<RouteKey> {
+    pub async fn connect(&self, addr: SocketAddr) -> io::Result<RouteKey> {
         let _guard = self.lock.lock().await;
         if let Some(route_key) = self.write_half_collect.get_one_route_key(&addr) {
             return Ok(route_key);
@@ -458,17 +458,14 @@ impl SocketLayer {
         self.connect0(0, addr, 0, None).await
     }
     /// Reuse the bound port to initiate a connection, which can be used to penetrate NAT1 network type.
-    pub async fn connect_reuse_port(&self, addr: SocketAddr) -> crate::error::Result<RouteKey> {
+    pub async fn connect_reuse_port(&self, addr: SocketAddr) -> io::Result<RouteKey> {
         let _guard = self.lock.lock().await;
         if let Some(route_key) = self.write_half_collect.get_one_route_key(&addr) {
             return Ok(route_key);
         }
         self.connect0(self.local_addr.port(), addr, 0, None).await
     }
-    pub async fn connect_reuse_port_raw(
-        &self,
-        addr: SocketAddr,
-    ) -> crate::error::Result<TcpStream> {
+    pub async fn connect_reuse_port_raw(&self, addr: SocketAddr) -> io::Result<TcpStream> {
         let stream = connect_tcp(
             addr,
             self.local_addr.port(),
@@ -484,7 +481,7 @@ impl SocketLayer {
         addr: SocketAddr,
         index_offset: usize,
         ttl: Option<u32>,
-    ) -> crate::error::Result<RouteKey> {
+    ) -> io::Result<RouteKey> {
         let stream = connect_tcp(addr, bind_port, self.default_interface.as_ref(), ttl).await?;
         let route_key = stream.route_key()?;
         let (read_half, write_half) = stream.into_split();
@@ -493,7 +490,10 @@ impl SocketLayer {
         self.write_half_collect
             .add_write_half(route_key, index_offset, write_half, encoder);
         if let Err(_e) = self.connect_sender.send((route_key, read_half)).await {
-            Err(crate::error::Error::Eof)?
+            Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "connect close",
+            ))?
         }
         Ok(route_key)
     }
@@ -504,7 +504,7 @@ impl TcpPipeWriter {
         &self,
         buf: BytesMut,
         addr: A,
-    ) -> crate::error::Result<()> {
+    ) -> io::Result<()> {
         self.send_to_addr_multi0(buf, addr, None).await
     }
     pub(crate) async fn send_to_addr_multi0<A: Into<SocketAddr>>(
@@ -512,8 +512,8 @@ impl TcpPipeWriter {
         buf: BytesMut,
         addr: A,
         ttl: Option<u32>,
-    ) -> crate::error::Result<()> {
-        let index_offset = rand::thread_rng().gen_range(0..self.tcp_multiplexing_limit);
+    ) -> io::Result<()> {
+        let index_offset = rand::rng().random_range(0..self.tcp_multiplexing_limit);
         let route_key = self.multi_connect0(addr.into(), index_offset, ttl).await?;
         self.send_to(buf, &route_key).await
     }
@@ -522,7 +522,7 @@ impl TcpPipeWriter {
         &self,
         buf: BytesMut,
         addr: A,
-    ) -> crate::error::Result<()> {
+    ) -> io::Result<()> {
         let route_key = self.connect_reuse_port(addr.into()).await?;
         self.send_to(buf, &route_key).await
     }
@@ -530,24 +530,25 @@ impl TcpPipeWriter {
         &self,
         buf: BytesMut,
         addr: A,
-    ) -> crate::error::Result<()> {
+    ) -> io::Result<()> {
         let route_key = self.connect(addr.into()).await?;
         self.send_to(buf, &route_key).await
     }
     /// Writing `buf` to the target denoted by `route_key`
-    pub async fn send_to(&self, buf: BytesMut, route_key: &RouteKey) -> crate::error::Result<()> {
+    pub async fn send_to(&self, buf: BytesMut, route_key: &RouteKey) -> io::Result<()> {
         self.write_half_collect.send_to(buf, route_key).await
     }
-    pub async fn get(
-        &self,
-        addr: SocketAddr,
-        index: usize,
-    ) -> anyhow::Result<TcpPipeWriterIndex<'_>> {
+    pub async fn get(&self, addr: SocketAddr, index: usize) -> io::Result<TcpPipeWriterIndex<'_>> {
         let route_key = self.multi_connect(addr, index).await?;
         let write_half = self
             .write_half_collect
             .get(&route_key.index_usize())
-            .with_context(|| format!("not found with index={index}"))?;
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("not found with index={index}"),
+                )
+            })?;
 
         Ok(TcpPipeWriterIndex {
             shadow: write_half,
@@ -603,7 +604,7 @@ pub struct TcpPipeWriterIndex<'a> {
 }
 
 impl TcpPipeWriterIndex<'_> {
-    pub async fn send(&self, buf: BytesMut) -> crate::error::Result<()> {
+    pub async fn send(&self, buf: BytesMut) -> io::Result<()> {
         if let Err(_e) = self.shadow.send(buf).await {
             Err(io::Error::from(io::ErrorKind::WriteZero))?
         } else {
@@ -613,12 +614,12 @@ impl TcpPipeWriterIndex<'_> {
 }
 
 pub trait TcpStreamIndex {
-    fn route_key(&self) -> crate::error::Result<RouteKey>;
+    fn route_key(&self) -> io::Result<RouteKey>;
     fn index(&self) -> Index;
 }
 
 impl TcpStreamIndex for TcpStream {
-    fn route_key(&self) -> crate::error::Result<RouteKey> {
+    fn route_key(&self) -> io::Result<RouteKey> {
         let addr = self.peer_addr()?;
 
         Ok(RouteKey::new(self.index(), addr))

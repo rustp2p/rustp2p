@@ -15,7 +15,7 @@ pub use ::tokio::spawn;
 use ::async_std::task::JoinHandle;
 
 #[cfg(feature = "use-async-std")]
-pub fn spawn<F>(f: F) -> JoinHandle<Result<F::Output, anyhow::Error>>
+pub fn spawn<F>(f: F) -> JoinHandle<Result<F::Output, std::io::Error>>
 where
     F: Future + Send + 'static,
     F::Output: Send + 'static,

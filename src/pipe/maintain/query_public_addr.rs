@@ -1,6 +1,7 @@
 use crate::pipe::PipeWriter;
 use rust_p2p_core::async_compat::net::tcp::TcpStream;
 use std::collections::HashMap;
+use std::io;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::time::Duration;
 
@@ -149,7 +150,7 @@ pub(crate) async fn query_udp_public_addr_loop(
     }
 }
 
-async fn stun_tcp_read(tcp_stream: &mut TcpStream) -> crate::error::Result<SocketAddr> {
+async fn stun_tcp_read(tcp_stream: &mut TcpStream) -> io::Result<SocketAddr> {
     let mut head = [0; 20];
     match rust_p2p_core::async_compat::time::timeout(
         Duration::from_secs(5),
@@ -158,7 +159,7 @@ async fn stun_tcp_read(tcp_stream: &mut TcpStream) -> crate::error::Result<Socke
     .await
     {
         Ok(rs) => rs?,
-        Err(_) => Err(crate::error::Error::Timeout)?,
+        Err(_) => Err(io::Error::from(io::ErrorKind::TimedOut))?,
     };
     let len = u16::from_be_bytes([head[2], head[3]]) as usize;
     let mut buf = vec![0; len + 20];
@@ -170,12 +171,12 @@ async fn stun_tcp_read(tcp_stream: &mut TcpStream) -> crate::error::Result<Socke
     .await
     {
         Ok(rs) => rs?,
-        Err(_) => Err(crate::error::Error::Timeout)?,
+        Err(_) => Err(io::Error::from(io::ErrorKind::TimedOut))?,
     };
     if let Some(addr) = rust_p2p_core::stun::recv_stun_response(&buf) {
         Ok(addr)
     } else {
         log::debug!("stun_tcp_read {buf:?}");
-        Err(crate::error::Error::InvalidArgument("".into()))
+        Err(io::Error::from(io::ErrorKind::InvalidData))
     }
 }

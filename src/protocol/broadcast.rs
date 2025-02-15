@@ -18,10 +18,10 @@
   protocol = ProtocolType::RangeBroadcast
 */
 
-use crate::error::*;
 use crate::protocol::node_id::{NodeID, ID_LEN};
 use crate::protocol::protocol_type::ProtocolType;
 use crate::protocol::{NetPacket, HEAD_LEN};
+use std::io;
 
 pub struct RangeBroadcastPacket<B> {
     buffer: B,
@@ -31,21 +31,18 @@ impl<B: AsRef<[u8]>> RangeBroadcastPacket<B> {
     pub fn unchecked(buffer: B) -> RangeBroadcastPacket<B> {
         Self { buffer }
     }
-    pub fn new(buffer: B) -> Result<RangeBroadcastPacket<B>> {
+    pub fn new(buffer: B) -> io::Result<RangeBroadcastPacket<B>> {
         let len = buffer.as_ref().len();
         if len == 0 {
-            return Err(Error::Overflow {
-                cap: 0,
-                required: 4,
-            });
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "buf len == 0"));
         }
         let packet = Self::unchecked(buffer);
         let head_len = packet.head_len();
         if len < head_len {
-            return Err(Error::Overflow {
-                cap: len,
-                required: head_len,
-            });
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "buf len < head_len",
+            ));
         }
         Ok(packet)
     }
@@ -99,12 +96,12 @@ impl<B: AsRef<[u8]>> Iterator for RangeBroadcastIter<'_, B> {
 }
 pub struct Builder;
 impl Builder {
-    pub fn calculate_len(list: &[NodeID], payload_len: usize) -> Result<(usize, usize)> {
+    pub fn calculate_len(list: &[NodeID], payload_len: usize) -> io::Result<(usize, usize)> {
         if list.is_empty() {
-            return Err(Error::InvalidArgument("list.is_empty".into()));
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "empty"));
         }
         if list.len() > 255 {
-            return Err(Error::InvalidArgument(format!("{} >255", list.len())));
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "list len > 255"));
         }
 
         let id_num = list.len();
@@ -115,7 +112,7 @@ impl Builder {
     pub fn build_range_broadcast(
         list: &[NodeID],
         broadcast_payload: &[u8],
-    ) -> Result<NetPacket<Vec<u8>>> {
+    ) -> io::Result<NetPacket<Vec<u8>>> {
         let (broadcast_packet_head, len) = Self::calculate_len(list, broadcast_payload.len())?;
         let mut packet = NetPacket::unchecked(vec![0; len]);
         packet.set_high_flag();

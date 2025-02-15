@@ -176,7 +176,7 @@ struct ContextHandler {
 }
 
 impl ContextHandler {
-    async fn handle(&self, mut pipe_line: PipeLine) -> anyhow::Result<()> {
+    async fn handle(&self, mut pipe_line: PipeLine) -> std::io::Result<()> {
         let mut buf = [0; 65536];
         while let Some(rs) = pipe_line.recv_from(&mut buf).await {
             let (len, route_key) = match rs {

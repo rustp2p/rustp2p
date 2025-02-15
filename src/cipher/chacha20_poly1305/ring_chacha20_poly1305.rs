@@ -1,7 +1,7 @@
-use anyhow::anyhow;
 use rand::RngCore;
 use ring::aead;
 use ring::aead::{LessSafeKey, UnboundKey};
+use std::io;
 
 use crate::cipher::chacha20_poly1305::ENCRYPTION_RESERVED;
 
@@ -19,11 +19,13 @@ impl ChaCha20Poly1305Cipher {
     }
 }
 impl ChaCha20Poly1305Cipher {
-    pub fn decrypt(&self, extra_info: [u8; 12], payload: &mut [u8]) -> anyhow::Result<usize> {
+    pub fn decrypt(&self, extra_info: [u8; 12], payload: &mut [u8]) -> io::Result<usize> {
         let data_len = payload.len();
         if data_len < ENCRYPTION_RESERVED {
-            log::error!("Data exception, length too small {}", ENCRYPTION_RESERVED);
-            return Err(anyhow!("data err"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "ChaCha20Poly1305 decryption failed: data length too small",
+            ));
         }
         let mut nonce_raw: [u8; 12] = payload[data_len - 12..].try_into().unwrap();
         for (i, b) in nonce_raw.iter_mut().enumerate() {
@@ -34,17 +36,23 @@ impl ChaCha20Poly1305Cipher {
             self.cipher
                 .open_in_place(nonce, aead::Aad::empty(), &mut payload[..data_len - 12]);
         if let Err(e) = rs {
-            return Err(anyhow!("Decryption failed:{}", e));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("ChaCha20Poly1305 decryption failed: {e:?}"),
+            ));
         }
         Ok(data_len - ENCRYPTION_RESERVED)
     }
-    pub fn encrypt(&self, extra_info: [u8; 12], payload: &mut [u8]) -> anyhow::Result<()> {
+    pub fn encrypt(&self, extra_info: [u8; 12], payload: &mut [u8]) -> io::Result<()> {
         let data_len = payload.len();
         if data_len < ENCRYPTION_RESERVED {
-            return Err(anyhow!("data length too small"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "ChaCha20Poly1305 encryption failed: data length too small",
+            ));
         }
         let mut random = [0u8; 12];
-        rand::thread_rng().fill_bytes(&mut random);
+        rand::rng().fill_bytes(&mut random);
         let mut nonce_raw = random;
         for (i, b) in nonce_raw.iter_mut().enumerate() {
             *b ^= extra_info[i];
@@ -59,14 +67,20 @@ impl ChaCha20Poly1305Cipher {
             Ok(tag) => {
                 let tag = tag.as_ref();
                 if tag.len() != 16 {
-                    return Err(anyhow!("Encryption tag length error:{}", tag.len()));
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "ChaCha20Poly1305 encryption failed: tag length error",
+                    ));
                 }
                 payload[data_len - ENCRYPTION_RESERVED..data_len - ENCRYPTION_RESERVED + 16]
                     .copy_from_slice(tag);
                 payload[data_len - 12..].copy_from_slice(&random);
                 Ok(())
             }
-            Err(e) => Err(anyhow!("Encryption failed:{:?}", e)),
+            Err(e) => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("ChaCha20Poly1305 encryption failed: {e:?}"),
+            )),
         }
     }
 }

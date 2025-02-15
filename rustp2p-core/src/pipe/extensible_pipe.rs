@@ -3,7 +3,6 @@ use std::io::IoSlice;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use anyhow::{anyhow, Context};
 use async_trait::async_trait;
 use bytes::BytesMut;
 use crossbeam_utils::atomic::AtomicCell;
@@ -62,12 +61,12 @@ impl Default for ExtensiblePipe {
 }
 
 impl ExtensiblePipe {
-    pub async fn accept(&mut self) -> anyhow::Result<ExtensiblePipeLine> {
+    pub async fn accept(&mut self) -> io::Result<ExtensiblePipeLine> {
         let (route_key, read_half, write_half) = self
             .connect_receiver
             .recv()
             .await
-            .context("connect_receiver done")?;
+            .map_err(|_| io::Error::new(io::ErrorKind::Other, "connect_receiver done"))?;
         Ok(ExtensiblePipeLine::new(
             route_key,
             read_half,
@@ -117,9 +116,9 @@ impl ExtensiblePipeLine {
             Err(e) => Err(e),
         }
     }
-    pub async fn send_to(&self, buf: BytesMut, route_key: &RouteKey) -> crate::error::Result<()> {
+    pub async fn send_to(&self, buf: BytesMut, route_key: &RouteKey) -> io::Result<()> {
         if &self.line_owned.route_key != route_key {
-            Err(crate::error::Error::RouteNotFound("mismatch".into()))?
+            Err(io::Error::new(io::ErrorKind::Other, "mismatch"))?
         }
         if let Err(_e) = self.w.send(buf).await {
             Err(io::Error::from(io::ErrorKind::WriteZero))?
@@ -195,10 +194,10 @@ impl ExtensiblePipeWriter {
         addr: SocketAddr,
         r: Box<dyn ExtendRead>,
         mut w: Box<dyn ExtendWrite>,
-    ) -> anyhow::Result<()> {
+    ) -> io::Result<()> {
         let id = self.id.load();
         if id == 0 {
-            Err(anyhow!("overflow"))?;
+            Err(io::Error::new(io::ErrorKind::Other, "overflow"))?;
         }
         let index = self.id.fetch_add(1);
         let route_key = RouteKey::new(Index::Extend(index), addr);
@@ -215,19 +214,19 @@ impl ExtensiblePipeWriter {
             }
             collect.remove(&route_key);
         });
-        if let Err(e) = self.connect_sender.send((route_key, reader, sender)).await {
-            Err(anyhow!("{e}"))?
+        if let Err(_e) = self.connect_sender.send((route_key, reader, sender)).await {
+            Err(io::Error::new(io::ErrorKind::Other, "connect close"))?
         }
         Ok(())
     }
 }
 
 impl ExtensiblePipeWriter {
-    pub async fn send_to(&self, buf: BytesMut, route_key: &RouteKey) -> crate::error::Result<()> {
+    pub async fn send_to(&self, buf: BytesMut, route_key: &RouteKey) -> io::Result<()> {
         let w = self
             .write_half_collect
             .get(route_key)
-            .ok_or(crate::error::Error::RouteNotFound("".into()))?;
+            .ok_or(io::Error::new(io::ErrorKind::NotFound, "route not found"))?;
         if let Err(_e) = w.send(buf).await {
             Err(io::Error::from(io::ErrorKind::WriteZero))?
         }

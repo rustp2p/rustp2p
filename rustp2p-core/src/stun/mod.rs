@@ -13,7 +13,7 @@ use stun_format::Attr;
 pub async fn stun_test_nat(
     stun_servers: Vec<String>,
     default_interface: Option<&LocalInterface>,
-) -> anyhow::Result<(NatType, Vec<Ipv4Addr>, u16)> {
+) -> io::Result<(NatType, Vec<Ipv4Addr>, u16)> {
     let mut nat_type = NatType::Cone;
     let mut port_range = 0;
     let mut hash_set = HashSet::new();
@@ -42,7 +42,7 @@ pub async fn stun_test_nat(
 pub(crate) async fn stun_test_nat0(
     stun_servers: Vec<String>,
     default_interface: Option<&LocalInterface>,
-) -> anyhow::Result<(NatType, Vec<Ipv4Addr>, u16)> {
+) -> io::Result<(NatType, Vec<Ipv4Addr>, u16)> {
     let udp = bind_udp("0.0.0.0:0".parse().unwrap(), default_interface)?;
     let udp = UdpSocket::from_std(udp.into())?;
     let mut nat_type = NatType::Cone;
@@ -87,7 +87,7 @@ pub(crate) async fn stun_test_nat0(
 
 async fn test_nat(udp: &UdpSocket, stun_server: &String) -> io::Result<HashSet<SocketAddr>> {
     udp.connect(stun_server).await?;
-    let tid = rand::thread_rng().next_u64() as u128;
+    let tid = rand::rng().next_u64() as u128;
     let mut addr = HashSet::new();
     let (mapped_addr1, changed_addr1) = test_nat_(udp, stun_server, true, true, tid).await?;
     if mapped_addr1.is_ipv4() {
@@ -199,7 +199,7 @@ pub fn send_stun_request() -> Vec<u8> {
     let mut buf = [0u8; 28];
     let mut msg = stun_format::MsgBuilder::from(buf.as_mut_slice());
     msg.typ(stun_format::MsgType::BindingRequest);
-    let id = rand::thread_rng().next_u64() as u128;
+    let id = rand::rng().next_u64() as u128;
     msg.tid(id | TAG);
     msg.add_attr(Attr::ChangeRequest {
         change_ip: false,

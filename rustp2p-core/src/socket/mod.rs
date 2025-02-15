@@ -1,7 +1,7 @@
 #[cfg(windows)]
 use crate::socket::windows::ignore_conn_reset;
-use anyhow::Context;
 use socket2::Protocol;
+use std::io;
 use std::net::SocketAddr;
 
 #[cfg(unix)]
@@ -10,7 +10,7 @@ mod unix;
 mod windows;
 
 pub(crate) trait VntSocketTrait {
-    fn set_ip_unicast_if(&self, _interface: &LocalInterface) -> crate::error::Result<()> {
+    fn set_ip_unicast_if(&self, _interface: &LocalInterface) -> io::Result<()> {
         Ok(())
     }
 }
@@ -39,7 +39,7 @@ pub(crate) async fn connect_tcp(
     bind_port: u16,
     default_interface: Option<&LocalInterface>,
     ttl: Option<u32>,
-) -> crate::error::Result<crate::async_compat::net::TcpStream> {
+) -> io::Result<crate::async_compat::net::TcpStream> {
     let socket = create_tcp0(addr, bind_port, default_interface, ttl)?;
     socket.writable().await?;
     Ok(socket)
@@ -50,7 +50,7 @@ pub(crate) fn create_tcp0(
     bind_port: u16,
     default_interface: Option<&LocalInterface>,
     ttl: Option<u32>,
-) -> crate::error::Result<crate::async_compat::net::TcpStream> {
+) -> io::Result<crate::async_compat::net::TcpStream> {
     let v4 = addr.is_ipv4();
     let socket = if v4 {
         socket2::Socket::new(
@@ -89,29 +89,23 @@ pub(crate) fn create_tcp0(
     let res = socket.connect(&addr.into());
     match res {
         Ok(()) => {}
-        Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+        Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {}
         #[cfg(unix)]
         Err(ref e) if e.raw_os_error() == Some(libc::EINPROGRESS) => {}
         Err(e) => Err(e)?,
     }
-    Ok(crate::async_compat::net::TcpStream::from_std(
-        socket.into(),
-    )?)
+    crate::async_compat::net::TcpStream::from_std(socket.into())
 }
 
-pub(crate) fn create_tcp_listener(addr: SocketAddr) -> anyhow::Result<std::net::TcpListener> {
+pub(crate) fn create_tcp_listener(addr: SocketAddr) -> io::Result<std::net::TcpListener> {
     let socket = if addr.is_ipv6() {
         let socket = socket2::Socket::new(socket2::Domain::IPV6, socket2::Type::STREAM, None)?;
-        socket
-            .set_only_v6(false)
-            .with_context(|| format!("set_only_v6 failed: {}", &addr))?;
+        socket.set_only_v6(false)?;
         socket
     } else {
         socket2::Socket::new(socket2::Domain::IPV4, socket2::Type::STREAM, None)?
     };
-    socket
-        .set_reuse_address(true)
-        .context("set_reuse_address")?;
+    socket.set_reuse_address(true)?;
     #[cfg(unix)]
     if let Err(e) = socket.set_reuse_port(true) {
         log::warn!("set_reuse_port {:?}", e)
@@ -127,7 +121,7 @@ pub(crate) fn bind_udp_ops(
     addr: SocketAddr,
     only_v6: bool,
     default_interface: Option<&LocalInterface>,
-) -> anyhow::Result<socket2::Socket> {
+) -> io::Result<socket2::Socket> {
     let socket = if addr.is_ipv4() {
         let socket = socket2::Socket::new(
             socket2::Domain::IPV4,
@@ -144,9 +138,7 @@ pub(crate) fn bind_udp_ops(
             socket2::Type::DGRAM,
             Some(Protocol::UDP),
         )?;
-        socket
-            .set_only_v6(only_v6)
-            .with_context(|| format!("set_only_v6 failed: {}", &addr))?;
+        socket.set_only_v6(only_v6)?;
         socket
     };
     #[cfg(windows)]
@@ -161,6 +153,6 @@ pub(crate) fn bind_udp_ops(
 pub fn bind_udp(
     addr: SocketAddr,
     default_interface: Option<&LocalInterface>,
-) -> anyhow::Result<socket2::Socket> {
-    bind_udp_ops(addr, true, default_interface).with_context(|| format!("bind_udp {}", addr))
+) -> io::Result<socket2::Socket> {
+    bind_udp_ops(addr, true, default_interface)
 }

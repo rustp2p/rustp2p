@@ -7,7 +7,6 @@ use std::sync::Arc;
 use crate::async_compat::net::udp::UdpSocket;
 #[cfg(any(target_os = "linux", target_os = "android"))]
 use crate::async_compat::net::udp::{read_with, write_with};
-use anyhow::{anyhow, Context};
 use bytes::BytesMut;
 use dashmap::DashMap;
 use parking_lot::{Mutex, RwLock};
@@ -60,7 +59,7 @@ impl UDPIndex {
 }
 
 /// initialize udp pipe by config
-pub(crate) fn udp_pipe(config: UdpPipeConfig) -> anyhow::Result<UdpPipe> {
+pub(crate) fn udp_pipe(config: UdpPipeConfig) -> io::Result<UdpPipe> {
     config.check()?;
     let mut udp_ports = config.udp_ports;
     udp_ports.resize(config.main_pipeline_num, 0);
@@ -153,20 +152,20 @@ impl SocketLayer {
         &self,
         index: usize,
         addr: SocketAddr,
-    ) -> crate::error::Result<RouteKey> {
+    ) -> io::Result<RouteKey> {
         let route_key = if addr.is_ipv4() {
             let len = self.main_udp_v4.len();
             if index >= len {
-                return Err(crate::error::Error::IndexOutOfBounds { len, index });
+                return Err(io::Error::new(io::ErrorKind::Other, "index out of bounds"));
             }
             RouteKey::new(Index::Udp(UDPIndex::MainV4(index)), addr)
         } else {
             let len = self.main_udp_v6.len();
             if len == 0 {
-                return Err(crate::error::Error::NotSupportIPV6);
+                return Err(io::Error::new(io::ErrorKind::Other, "Not support IPV6"));
             }
             if index >= len {
-                return Err(crate::error::Error::IndexOutOfBounds { len, index });
+                return Err(io::Error::new(io::ErrorKind::Other, "index out of bounds"));
             }
             RouteKey::new(Index::Udp(UDPIndex::MainV6(index)), addr)
         };
@@ -182,7 +181,7 @@ impl SocketLayer {
             let _ = sub_close_notify.close();
         }
     }
-    pub(crate) fn switch_high(&self) -> anyhow::Result<()> {
+    pub(crate) fn switch_high(&self) -> io::Result<()> {
         let mut guard = self.sub_udp.write();
         if !guard.is_empty() {
             return Ok(());
@@ -206,7 +205,7 @@ impl SocketLayer {
                 sub_close_notify_receiver.clone(),
             );
             if self.pipe_line_sender.try_send(udp_pipe_line).is_err() {
-                Err(anyhow::anyhow!("pipe channel error"))?
+                Err(io::Error::new(io::ErrorKind::Other, "pipe channel error"))?
             }
         }
         sub_close_notify_guard.replace(sub_close_notify_sender);
@@ -216,43 +215,37 @@ impl SocketLayer {
 
     /// Acquire the underlying `UDP` socket by the index
     #[inline]
-    fn get_sub_udp(&self, index: usize) -> crate::error::Result<Arc<UdpSocket>> {
+    fn get_sub_udp(&self, index: usize) -> io::Result<Arc<UdpSocket>> {
         let guard = self.sub_udp.read();
         let len = guard.len();
         if len <= index {
-            Err(crate::error::Error::IndexOutOfBounds { len, index })
+            Err(io::Error::new(io::ErrorKind::Other, "index out of bounds"))
         } else {
             Ok(guard[index].clone())
         }
     }
     #[inline]
-    fn get_udp(&self, udp_index: UDPIndex) -> crate::error::Result<Arc<UdpSocket>> {
+    fn get_udp(&self, udp_index: UDPIndex) -> io::Result<Arc<UdpSocket>> {
         Ok(match udp_index {
             UDPIndex::MainV4(index) => self
                 .main_udp_v4
                 .get(index)
-                .ok_or(crate::error::Error::IndexOutOfBounds {
-                    len: self.v4_pipeline_len(),
-                    index,
-                })?
+                .ok_or(io::Error::new(io::ErrorKind::Other, "index out of bounds"))?
                 .clone(),
             UDPIndex::MainV6(index) => self
                 .main_udp_v6
                 .get(index)
-                .ok_or(crate::error::Error::IndexOutOfBounds {
-                    len: self.v6_pipeline_len(),
-                    index,
-                })?
+                .ok_or(io::Error::new(io::ErrorKind::Other, "index out of bounds"))?
                 .clone(),
             UDPIndex::SubV4(index) => self.get_sub_udp(index)?,
         })
     }
 
     #[inline]
-    fn get_udp_from_route(&self, route_key: &RouteKey) -> crate::error::Result<Arc<UdpSocket>> {
+    fn get_udp_from_route(&self, route_key: &RouteKey) -> io::Result<Arc<UdpSocket>> {
         Ok(match route_key.index() {
             Index::Udp(index) => self.get_udp(index)?,
-            _ => return Err(crate::error::Error::InvalidProtocol),
+            _ => return Err(io::Error::from(io::ErrorKind::InvalidInput)),
         })
     }
 
@@ -262,7 +255,7 @@ impl SocketLayer {
         buf: &[u8],
         addr: SocketAddr,
         index: usize,
-    ) -> crate::error::Result<()> {
+    ) -> io::Result<()> {
         let key = self.generate_route_key_from_addr(index, addr)?;
         self.send_to(buf, &key).await
     }
@@ -271,7 +264,7 @@ impl SocketLayer {
         buf: BytesMut,
         addr: SocketAddr,
         index: usize,
-    ) -> crate::error::Result<()> {
+    ) -> io::Result<()> {
         let key = self.generate_route_key_from_addr(index, addr)?;
         self.send_buf_to(buf, &key).await
     }
@@ -281,7 +274,7 @@ impl SocketLayer {
         buf: &[u8],
         addr: SocketAddr,
         index: usize,
-    ) -> crate::error::Result<()> {
+    ) -> io::Result<()> {
         let key = self.generate_route_key_from_addr(index, addr)?;
         self.try_send_to(buf, &key)
     }
@@ -309,7 +302,7 @@ impl SocketLayer {
         self.main_udp_v6.len()
     }
 
-    pub fn switch_model(&self, model: Model) -> anyhow::Result<()> {
+    pub fn switch_model(&self, model: Model) -> io::Result<()> {
         match model {
             Model::High => self.switch_high(),
             Model::Low => {
@@ -319,39 +312,33 @@ impl SocketLayer {
         }
     }
     /// Acquire the local ports `UDP` sockets bind on
-    pub fn local_ports(&self) -> anyhow::Result<Vec<u16>> {
+    pub fn local_ports(&self) -> io::Result<Vec<u16>> {
         let mut ports = Vec::with_capacity(self.v4_pipeline_len());
         for udp in &self.main_udp_v4 {
             ports.push(udp.local_addr()?.port());
         }
         Ok(ports)
     }
-    pub async fn send_buf_to(
-        &self,
-        buf: BytesMut,
-        route_key: &RouteKey,
-    ) -> crate::error::Result<()> {
+    pub async fn send_buf_to(&self, buf: BytesMut, route_key: &RouteKey) -> io::Result<()> {
         let sender = if let Some(sender) = self.sender_map.get(&route_key.index()) {
             sender.value().clone()
         } else {
-            return Err(crate::error::Error::RouteNotFound("".into()));
+            return Err(io::Error::new(io::ErrorKind::NotFound, "route not found"));
         };
         if let Err(_e) = sender.send((buf, route_key.addr())).await {
-            Err(io::Error::from(io::ErrorKind::WriteZero))?
+            Err(io::Error::from(io::ErrorKind::WriteZero))
         } else {
             Ok(())
         }
     }
     /// Writing `buf` to the target denoted by `route_key`
-    pub async fn send_to(&self, buf: &[u8], route_key: &RouteKey) -> crate::error::Result<()> {
+    pub async fn send_to(&self, buf: &[u8], route_key: &RouteKey) -> io::Result<()> {
         let len = self
             .get_udp_from_route(route_key)?
             .send_to(buf, route_key.addr())
             .await?;
         if len == 0 {
-            return Err(crate::error::Error::Io(std::io::Error::from(
-                std::io::ErrorKind::WriteZero,
-            )));
+            return Err(std::io::Error::from(io::ErrorKind::WriteZero));
         }
         Ok(())
     }
@@ -359,59 +346,48 @@ impl SocketLayer {
         &self,
         bufs: &[IoSlice<'_>],
         route_key: &RouteKey,
-    ) -> crate::error::Result<()> {
+    ) -> io::Result<()> {
         let udp = self.get_udp_from_route(route_key)?;
         for buf in bufs {
             let len = udp.send_to(buf, route_key.addr()).await?;
             if len == 0 {
-                return Err(crate::error::Error::Io(std::io::Error::from(
-                    std::io::ErrorKind::WriteZero,
-                )));
+                return Err(std::io::Error::from(io::ErrorKind::WriteZero));
             }
         }
 
         Ok(())
     }
     /// Try to write `buf` to the target denoted by `route_key`
-    pub fn try_send_to(&self, buf: &[u8], route_key: &RouteKey) -> crate::error::Result<()> {
+    pub fn try_send_to(&self, buf: &[u8], route_key: &RouteKey) -> io::Result<()> {
         let len = self
             .get_udp_from_route(route_key)?
             .try_send_to(buf, route_key.addr())?;
         if len == 0 {
-            return Err(crate::error::Error::Io(std::io::Error::from(
-                std::io::ErrorKind::WriteZero,
-            )));
+            return Err(std::io::Error::from(io::ErrorKind::WriteZero));
         }
         Ok(())
     }
     /// Writing `buf` to the target denoted by SocketAddr
-    pub async fn send_to_addr<A: Into<SocketAddr>>(
-        &self,
-        buf: &[u8],
-        addr: A,
-    ) -> crate::error::Result<()> {
+    pub async fn send_to_addr<A: Into<SocketAddr>>(&self, buf: &[u8], addr: A) -> io::Result<()> {
         self.send_to_addr_via_index(buf, addr.into(), 0).await
     }
     pub async fn send_buf_to_addr<A: Into<SocketAddr>>(
         &self,
         buf: BytesMut,
         addr: A,
-    ) -> crate::error::Result<()> {
+    ) -> io::Result<()> {
         self.send_buf_to_addr_via_index(buf, addr.into(), 0).await
     }
     /// Try to write `buf` to the target denoted by SocketAddr
-    pub fn try_send_to_addr<A: Into<SocketAddr>>(
-        &self,
-        buf: &[u8],
-        addr: A,
-    ) -> crate::error::Result<()> {
+    pub fn try_send_to_addr<A: Into<SocketAddr>>(&self, buf: &[u8], addr: A) -> io::Result<()> {
         self.try_send_to_addr_via_index(buf, addr.into(), 0)
     }
     /// Acquire the PipeWriter by the index
-    pub fn get(&self, addr: SocketAddr, index: usize) -> anyhow::Result<UdpPipeWriterIndex<'_>> {
+    pub fn get(&self, addr: SocketAddr, index: usize) -> io::Result<UdpPipeWriterIndex<'_>> {
         if index >= self.main_udp_v4.len() && index >= self.main_udp_v6.len() {
-            return Err(anyhow!(
-                "neither in the bound of both the udp_v4 set nor the udp_v6 set"
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                "neither in the bound of both the udp_v4 set nor the udp_v6 set",
             ));
         }
         Ok(UdpPipeWriterIndex {
@@ -426,7 +402,7 @@ impl SocketLayer {
         &self,
         buf: &[u8],
         addr: A,
-    ) -> anyhow::Result<()> {
+    ) -> io::Result<()> {
         let addr: SocketAddr = addr.into();
         for index in 0..self.main_pipeline_len() {
             self.send_to_addr_via_index(buf, addr, index).await?;
@@ -442,7 +418,7 @@ pub struct UdpPipe {
 }
 
 impl UdpPipe {
-    pub(crate) fn init(&self) -> anyhow::Result<()> {
+    pub(crate) fn init(&self) -> io::Result<()> {
         for (index, udp) in self.socket_layer.main_udp_v4.iter().enumerate() {
             let udp = udp.clone();
             let udp_pipe_line = UdpPipeLine::main_new(
@@ -456,7 +432,7 @@ impl UdpPipe {
                 .try_send(udp_pipe_line)
                 .is_err()
             {
-                Err(anyhow::anyhow!("pipe channel error"))?
+                Err(io::Error::new(io::ErrorKind::Other, "pipe channel error"))?
             }
         }
         for (index, udp) in self.socket_layer.main_udp_v6.iter().enumerate() {
@@ -472,7 +448,7 @@ impl UdpPipe {
                 .try_send(udp_pipe_line)
                 .is_err()
             {
-                Err(anyhow::anyhow!("pipe channel error"))?
+                Err(io::Error::new(io::ErrorKind::Other, "pipe channel error"))?
             }
         }
         Ok(())
@@ -481,16 +457,16 @@ impl UdpPipe {
 
 impl UdpPipe {
     /// Construct a `UDP` pipe with the specified configuration
-    pub fn new(config: UdpPipeConfig) -> anyhow::Result<UdpPipe> {
+    pub fn new(config: UdpPipeConfig) -> io::Result<UdpPipe> {
         udp_pipe(config)
     }
     /// Accept `UDP` pipelines from this kind pipe
-    pub async fn accept(&mut self) -> anyhow::Result<UdpPipeLine> {
+    pub async fn accept(&mut self) -> io::Result<UdpPipeLine> {
         let mut line = self
             .pipe_line_receiver
             .recv()
             .await
-            .context("UdpPipe close")?;
+            .map_err(|_| io::Error::new(io::ErrorKind::Other, "UdpPipe close"))?;
         line.active = true;
         if line.socket_layer.is_some() {
             return Ok(line);
@@ -688,12 +664,12 @@ pub struct UdpPipeWriterIndex<'a> {
 }
 
 impl UdpPipeWriterIndex<'_> {
-    pub async fn send(&self, buf: &[u8]) -> crate::error::Result<()> {
+    pub async fn send(&self, buf: &[u8]) -> io::Result<()> {
         self.shadow
             .send_to_addr_via_index(buf, self.addr, self.index)
             .await
     }
-    pub fn try_send(&self, buf: &[u8]) -> crate::error::Result<()> {
+    pub fn try_send(&self, buf: &[u8]) -> io::Result<()> {
         self.shadow
             .try_send_to_addr_via_index(buf, self.addr, self.index)
     }
@@ -790,40 +766,32 @@ impl UdpPipeLine {
 
 impl UdpPipeLine {
     /// Writing `buf` to the target denoted by SocketAddr via this pipeline
-    pub async fn send_to_addr<A: Into<SocketAddr>>(
-        &self,
-        buf: &[u8],
-        addr: A,
-    ) -> anyhow::Result<()> {
+    pub async fn send_to_addr<A: Into<SocketAddr>>(&self, buf: &[u8], addr: A) -> io::Result<()> {
         if let Some(udp) = &self.udp {
             udp.send_to(buf, addr.into()).await?;
             Ok(())
         } else {
-            Err(anyhow!("closed"))
+            Err(io::Error::new(io::ErrorKind::Other, "closed"))
         }
     }
     /// Try to write `buf` to the target denoted by SocketAddr via this pipeline
-    pub fn try_send_to_addr<A: Into<SocketAddr>>(&self, buf: &[u8], addr: A) -> anyhow::Result<()> {
+    pub fn try_send_to_addr<A: Into<SocketAddr>>(&self, buf: &[u8], addr: A) -> io::Result<()> {
         if let Some(udp) = &self.udp {
             udp.try_send_to(buf, addr.into())?;
             Ok(())
         } else {
-            Err(anyhow!("closed"))
+            Err(io::Error::new(io::ErrorKind::Other, "closed"))
         }
     }
 
-    pub async fn send_buf_to(
-        &self,
-        buf: BytesMut,
-        route_key: &RouteKey,
-    ) -> crate::error::Result<()> {
+    pub async fn send_buf_to(&self, buf: BytesMut, route_key: &RouteKey) -> io::Result<()> {
         if self.index != route_key.index() {
-            Err(crate::error::Error::RouteNotFound("mismatch".into()))?
+            Err(io::Error::new(io::ErrorKind::Other, "mismatch"))?
         }
         if let Some(s) = &self.socket_layer {
             s.send_buf_to(buf, route_key).await
         } else {
-            Err(crate::error::Error::RouteNotFound("miss".into()))
+            Err(io::Error::new(io::ErrorKind::Other, "miss"))
         }
     }
 
@@ -1010,7 +978,7 @@ fn sockaddr_to_socket_addr(addr: &sockaddr_storage, _len: socklen_t) -> SocketAd
     }
 }
 
-fn should_ignore_error(e: &std::io::Error) -> bool {
+fn should_ignore_error(e: &io::Error) -> bool {
     #[cfg(windows)]
     {
         // 检查错误码是否为 WSAECONNRESET
