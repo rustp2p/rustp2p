@@ -46,7 +46,10 @@ pub struct Pipe {
 }
 
 impl Pipe {
-    pub async fn new(mut config: PipeConfig) -> io::Result<Pipe> {
+    pub async fn new(config: PipeConfig) -> io::Result<Pipe> {
+        Box::pin(Self::new0(config)).await
+    }
+    async fn new0(mut config: PipeConfig) -> io::Result<Pipe> {
         let multi_pipeline = config.multi_pipeline;
         let send_buffer_size = config.send_buffer_size;
         let recv_buffer_size = config.recv_buffer_size;
