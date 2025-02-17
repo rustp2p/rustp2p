@@ -359,7 +359,7 @@ impl PipeWriter {
                 } else {
                     return Err(io::Error::new(
                         io::ErrorKind::AddrNotAvailable,
-                        "group_code not found",
+                        "group route not found",
                     ));
                 }
                 self.pipe_writer.send_to(buf, &route.route_key()).await?
@@ -367,7 +367,7 @@ impl PipeWriter {
         } else {
             return Err(io::Error::new(
                 io::ErrorKind::AddrNotAvailable,
-                "group_code not found",
+                "node route not found",
             ));
         };
         Ok(())
