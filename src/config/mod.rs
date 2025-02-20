@@ -1,4 +1,3 @@
-#![allow(deprecated)]
 use std::io;
 use std::io::IoSlice;
 use std::net::SocketAddr;
@@ -32,8 +31,6 @@ pub(crate) mod punch_info;
 pub(crate) const ROUTE_IDLE_TIME: Duration = Duration::from_secs(10);
 
 pub struct PipeConfig {
-    #[deprecated(note = "Use `load_balance` instead")]
-    pub first_latency: bool,
     pub load_balance: LoadBalance,
     pub multi_pipeline: usize,
     pub route_idle_time: Duration,
@@ -62,7 +59,6 @@ pub struct PipeConfig {
 impl Default for PipeConfig {
     fn default() -> Self {
         Self {
-            first_latency: false,
             load_balance: LoadBalance::MinHopLowestLatency,
             multi_pipeline: MULTI_PIPELINE,
             enable_extend: false,
@@ -116,11 +112,6 @@ impl PipeConfig {
 impl PipeConfig {
     pub fn empty() -> Self {
         Self::default()
-    }
-    #[deprecated(note = "Use `load_balance` instead")]
-    pub fn set_first_latency(mut self, first_latency: bool) -> Self {
-        self.first_latency = first_latency;
-        self
     }
     pub fn set_load_balance(mut self, load_balance: LoadBalance) -> Self {
         self.load_balance = load_balance;
@@ -313,7 +304,6 @@ impl From<PipeConfig> for rust_p2p_core::pipe::config::PipeConfig {
         });
         rust_p2p_core::pipe::config::PipeConfig {
             load_balance: value.load_balance,
-            first_latency: false,
             multi_pipeline: value.multi_pipeline,
             route_idle_time: value.route_idle_time,
             udp_pipe_config,

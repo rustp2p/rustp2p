@@ -1,4 +1,3 @@
-#![allow(deprecated)]
 use std::io;
 use std::time::Duration;
 
@@ -25,8 +24,6 @@ pub enum LoadBalance {
 #[derive(Clone)]
 pub struct PipeConfig {
     pub load_balance: LoadBalance,
-    #[deprecated(note = "Use `load_balance` instead")]
-    pub first_latency: bool,
     pub multi_pipeline: usize,
     pub route_idle_time: Duration,
     pub udp_pipe_config: Option<UdpPipeConfig>,
@@ -37,7 +34,6 @@ pub struct PipeConfig {
 impl Default for PipeConfig {
     fn default() -> Self {
         Self {
-            first_latency: false,
             load_balance: LoadBalance::MinHopLowestLatency,
             multi_pipeline: MULTI_PIPELINE,
             enable_extend: false,
@@ -56,7 +52,6 @@ impl PipeConfig {
         let udp_pipe_config = Some(UdpPipeConfig::default());
         let tcp_pipe_config = Some(TcpPipeConfig::new(tcp_init_codec));
         Self {
-            first_latency: false,
             load_balance: LoadBalance::MinHopLowestLatency,
             multi_pipeline: MULTI_PIPELINE,
             enable_extend: false,
@@ -74,7 +69,6 @@ impl PipeConfig {
 impl PipeConfig {
     pub fn empty() -> Self {
         Self {
-            first_latency: false,
             load_balance: LoadBalance::MinHopLowestLatency,
             multi_pipeline: MULTI_PIPELINE,
             enable_extend: false,
@@ -82,11 +76,6 @@ impl PipeConfig {
             tcp_pipe_config: None,
             route_idle_time: ROUTE_IDLE_TIME,
         }
-    }
-    #[deprecated(note = "Use `load_balance` instead")]
-    pub fn set_first_latency(mut self, first_latency: bool) -> Self {
-        self.first_latency = first_latency;
-        self
     }
     pub fn set_load_balance(mut self, load_balance: LoadBalance) -> Self {
         self.load_balance = load_balance;
