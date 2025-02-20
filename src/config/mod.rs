@@ -1,3 +1,4 @@
+#![allow(deprecated)]
 use std::io;
 use std::io::IoSlice;
 use std::net::SocketAddr;
@@ -18,6 +19,7 @@ use crate::pipe::{NodeAddress, PeerNodeAddress, RecvResult};
 use crate::protocol::node_id::{GroupCode, NodeID};
 use crate::protocol::{NetPacket, HEAD_LEN};
 pub use rust_p2p_core::nat::*;
+pub use rust_p2p_core::pipe::config::LoadBalance;
 use rust_p2p_core::pipe::recycle::RecycleBuf;
 use rust_p2p_core::pipe::tcp_pipe::{Decoder, Encoder, InitCodec};
 pub use rust_p2p_core::pipe::udp_pipe::Model;
@@ -30,7 +32,9 @@ pub(crate) mod punch_info;
 pub(crate) const ROUTE_IDLE_TIME: Duration = Duration::from_secs(10);
 
 pub struct PipeConfig {
+    #[deprecated(note = "Use `load_balance` instead")]
     pub first_latency: bool,
+    pub load_balance: LoadBalance,
     pub multi_pipeline: usize,
     pub route_idle_time: Duration,
     pub udp_pipe_config: Option<UdpPipeConfig>,
@@ -59,6 +63,7 @@ impl Default for PipeConfig {
     fn default() -> Self {
         Self {
             first_latency: false,
+            load_balance: LoadBalance::MinHopLowestLatency,
             multi_pipeline: MULTI_PIPELINE,
             enable_extend: false,
             udp_pipe_config: Some(Default::default()),
@@ -112,8 +117,13 @@ impl PipeConfig {
     pub fn empty() -> Self {
         Self::default()
     }
+    #[deprecated(note = "Use `load_balance` instead")]
     pub fn set_first_latency(mut self, first_latency: bool) -> Self {
         self.first_latency = first_latency;
+        self
+    }
+    pub fn set_load_balance(mut self, load_balance: LoadBalance) -> Self {
+        self.load_balance = load_balance;
         self
     }
     pub fn set_main_pipeline_num(mut self, main_pipeline_num: usize) -> Self {
@@ -302,7 +312,8 @@ impl From<PipeConfig> for rust_p2p_core::pipe::config::PipeConfig {
             config
         });
         rust_p2p_core::pipe::config::PipeConfig {
-            first_latency: value.first_latency,
+            load_balance: value.load_balance,
+            first_latency: false,
             multi_pipeline: value.multi_pipeline,
             route_idle_time: value.route_idle_time,
             udp_pipe_config,

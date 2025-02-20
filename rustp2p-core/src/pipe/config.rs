@@ -1,3 +1,4 @@
+#![allow(deprecated)]
 use std::io;
 use std::time::Duration;
 
@@ -10,8 +11,21 @@ pub(crate) const MAX_SYMMETRIC_PIPELINE_NUM: usize = 200;
 pub(crate) const MAX_MAIN_PIPELINE_NUM: usize = 10;
 pub(crate) const ROUTE_IDLE_TIME: Duration = Duration::from_secs(10);
 
+#[derive(Clone, Copy, Eq, PartialEq, Debug)]
+pub enum LoadBalance {
+    /// Use the route with the lowest latency among those with the fewest hops.
+    MinHopLowestLatency,
+    /// Round-robin the route list.
+    RoundRobin,
+    /// Use the most recently added route.
+    MostRecent,
+    /// Use the route with the lowest latency.
+    LowestLatency,
+}
 #[derive(Clone)]
 pub struct PipeConfig {
+    pub load_balance: LoadBalance,
+    #[deprecated(note = "Use `load_balance` instead")]
     pub first_latency: bool,
     pub multi_pipeline: usize,
     pub route_idle_time: Duration,
@@ -24,6 +38,7 @@ impl Default for PipeConfig {
     fn default() -> Self {
         Self {
             first_latency: false,
+            load_balance: LoadBalance::MinHopLowestLatency,
             multi_pipeline: MULTI_PIPELINE,
             enable_extend: false,
             udp_pipe_config: Some(Default::default()),
@@ -42,6 +57,7 @@ impl PipeConfig {
         let tcp_pipe_config = Some(TcpPipeConfig::new(tcp_init_codec));
         Self {
             first_latency: false,
+            load_balance: LoadBalance::MinHopLowestLatency,
             multi_pipeline: MULTI_PIPELINE,
             enable_extend: false,
             udp_pipe_config,
@@ -59,6 +75,7 @@ impl PipeConfig {
     pub fn empty() -> Self {
         Self {
             first_latency: false,
+            load_balance: LoadBalance::MinHopLowestLatency,
             multi_pipeline: MULTI_PIPELINE,
             enable_extend: false,
             udp_pipe_config: None,
@@ -66,8 +83,13 @@ impl PipeConfig {
             route_idle_time: ROUTE_IDLE_TIME,
         }
     }
+    #[deprecated(note = "Use `load_balance` instead")]
     pub fn set_first_latency(mut self, first_latency: bool) -> Self {
         self.first_latency = first_latency;
+        self
+    }
+    pub fn set_load_balance(mut self, load_balance: LoadBalance) -> Self {
+        self.load_balance = load_balance;
         self
     }
     pub fn set_main_pipeline_num(mut self, main_pipeline_num: usize) -> Self {

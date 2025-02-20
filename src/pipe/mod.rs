@@ -14,6 +14,7 @@ use dashmap::DashMap;
 pub use pipe_context::NodeAddress;
 pub use pipe_context::PeerNodeAddress;
 use rust_p2p_core::nat::NatType;
+use rust_p2p_core::pipe::config::LoadBalance;
 use rust_p2p_core::pipe::recycle::RecycleBuf;
 use rust_p2p_core::punch::PunchConsultInfo;
 use rust_p2p_core::route::route_table::RouteTable;
@@ -765,7 +766,7 @@ impl PipeLine {
                 .pipe_context
                 .other_route_table
                 .entry(src_group_code)
-                .or_insert_with(|| RouteTable::new(false, 1));
+                .or_insert_with(|| RouteTable::new(LoadBalance::MinHopLowestLatency, 1));
             ref_mut.add_route_if_absent(src_id, Route::from_default_rt(route_key, metric));
         }
         match packet.protocol()? {

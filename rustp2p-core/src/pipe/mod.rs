@@ -28,7 +28,7 @@ pub const DEFAULT_ADDRESS_V6: SocketAddr =
 pub type PipeComponent<PeerID> = (Pipe<PeerID>, Puncher<PeerID>, IdleRouteManager<PeerID>);
 /// Construct the needed components for p2p communication with the given pipe configuration
 pub fn pipe<PeerID: Hash + Eq + Clone>(config: PipeConfig) -> io::Result<PipeComponent<PeerID>> {
-    let route_table = RouteTable::new(config.first_latency, config.multi_pipeline);
+    let route_table = RouteTable::new(config.load_balance, config.multi_pipeline);
     let udp_pipe = if let Some(mut udp_pipe_config) = config.udp_pipe_config {
         udp_pipe_config.main_pipeline_num = config.multi_pipeline;
         Some(UdpPipe::new(udp_pipe_config)?)

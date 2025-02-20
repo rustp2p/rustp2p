@@ -5,17 +5,17 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 use std::time::Instant;
 
+use crate::pipe::config::LoadBalance;
+use crate::route::{Route, RouteKey};
 use crossbeam_utils::atomic::AtomicCell;
 use dashmap::DashMap;
-
-use crate::route::{Route, RouteKey, DEFAULT_RTT};
 
 pub(crate) type RouteTableInner<PeerID> =
     Arc<DashMap<PeerID, (AtomicUsize, Vec<(Route, AtomicCell<Instant>)>)>>;
 pub struct RouteTable<PeerID> {
     pub(crate) route_table: RouteTableInner<PeerID>,
     route_key_table: Arc<DashMap<RouteKey, PeerID>>,
-    first_latency: bool,
+    load_balance: LoadBalance,
     channel_num: usize,
 }
 impl<PeerID> Clone for RouteTable<PeerID> {
@@ -23,17 +23,17 @@ impl<PeerID> Clone for RouteTable<PeerID> {
         Self {
             route_table: self.route_table.clone(),
             route_key_table: self.route_key_table.clone(),
-            first_latency: self.first_latency,
+            load_balance: self.load_balance,
             channel_num: self.channel_num,
         }
     }
 }
 impl<PeerID: Hash + Eq> RouteTable<PeerID> {
-    pub fn new(first_latency: bool, channel_num: usize) -> RouteTable<PeerID> {
+    pub fn new(load_balance: LoadBalance, channel_num: usize) -> RouteTable<PeerID> {
         Self {
             route_table: Arc::new(DashMap::with_capacity(64)),
             route_key_table: Arc::new(DashMap::with_capacity(64)),
-            first_latency,
+            load_balance,
             channel_num,
         }
     }
@@ -50,27 +50,31 @@ impl<PeerID: Hash + Eq> RouteTable<PeerID> {
     }
     pub fn get_route_by_id(&self, id: &PeerID) -> io::Result<Route> {
         if let Some(entry) = self.route_table.get(id) {
-            let (_count, routes) = entry.value();
-            if self.first_latency {
+            let (count, routes) = entry.value();
+            if LoadBalance::LowestLatency == self.load_balance {
                 if let Some((route, _)) = routes.first() {
                     return Ok(*route);
                 }
             } else {
                 let len = routes.len();
                 if len != 0 {
-                    // let index = count.fetch_add(1, Ordering::Relaxed);
-                    // The first route usually has lower latency
-                    let route = &routes[0].0;
-                    // 尝试跳过默认rt的路由(一般是刚加入的)，这有助于提升稳定性
-                    if route.rtt != DEFAULT_RTT {
-                        return Ok(*route);
-                    }
-                    for (route, _) in routes {
-                        if route.rtt != DEFAULT_RTT {
-                            return Ok(*route);
-                        }
-                    }
-                    return Ok(routes[0].0);
+                    let index = if LoadBalance::RoundRobin == self.load_balance {
+                        count.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % len
+                    } else {
+                        0
+                    };
+                    return Ok(routes[index].0);
+                    // let route = &routes[index].0;
+                    // // 尝试跳过默认rt的路由(一般是刚加入的)，这有助于提升稳定性
+                    // if route.rtt != DEFAULT_RTT {
+                    //     return Ok(*route);
+                    // }
+                    // for (route, _) in routes {
+                    //     if route.rtt != DEFAULT_RTT {
+                    //         return Ok(*route);
+                    //     }
+                    // }
+                    // return Ok(routes[0].0);
                 }
             }
         }
@@ -228,8 +232,8 @@ impl<PeerID: Hash + Eq + Clone> RouteTable<PeerID> {
         }
         list
     }
-    /// Return to route_key -> Vec<PeerID>,
-    /// where vec[0] is the owner of the route
+    /// Return to `route_key` -> `Vec<PeerID>`,
+    /// where `vec[0]` is the owner of the route
     pub fn route_key_table(&self) -> HashMap<RouteKey, Vec<PeerID>> {
         let mut map: HashMap<RouteKey, Vec<PeerID>> = HashMap::new();
         let table = self.route_table.iter();
@@ -320,7 +324,7 @@ impl<PeerID: Hash + Eq + Clone> RouteTable<PeerID> {
         let (peer_id, (_, list)) = route_table.pair_mut();
         let mut exist = false;
         for (x, time) in list.iter_mut() {
-            if x.metric < route.metric && !self.first_latency {
+            if x.metric < route.metric && self.load_balance != LoadBalance::LowestLatency {
                 //非优先延迟的情况下 不能比当前的路径更长
                 return false;
             }
@@ -336,18 +340,24 @@ impl<PeerID: Hash + Eq + Clone> RouteTable<PeerID> {
             }
         }
         if exist {
-            list.sort_by_key(|(k, _)| k.rtt);
+            if self.load_balance != LoadBalance::MostRecent {
+                list.sort_by_key(|(k, _)| k.rtt);
+            }
         } else {
-            if !self.first_latency && route.is_direct() {
+            if self.load_balance != LoadBalance::LowestLatency && route.is_direct() {
                 //非优先延迟的情况下 添加了直连的则排除非直连的
                 list.retain(|(k, _)| k.is_direct());
             };
-            list.sort_by_key(|(k, _)| k.rtt);
             if route.is_direct() {
                 self.route_key_table
                     .insert(route.route_key(), peer_id.clone());
             }
-            list.push((route, AtomicCell::new(Instant::now())));
+            if self.load_balance == LoadBalance::MostRecent {
+                list.insert(0, (route, AtomicCell::new(Instant::now())));
+            } else {
+                list.sort_by_key(|(k, _)| k.rtt);
+                list.push((route, AtomicCell::new(Instant::now())));
+            }
         }
         true
     }
