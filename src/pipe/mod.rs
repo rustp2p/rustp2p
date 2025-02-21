@@ -536,11 +536,12 @@ impl PipeLine {
         self.recv_multi_process::<crate::config::DefaultInterceptor>(None, data_vec)
             .await
     }
+    /// Receive a batch of data and use interceptors.
     pub async fn recv_multi_process<I: crate::config::DataInterceptor>(
         &mut self,
         interceptor: Option<&I>,
         data_vec: &mut Vec<RecvUserData>,
-    ) -> core::result::Result<core::result::Result<(), HandleError>, RecvError> {
+    ) -> Result<Result<(), HandleError>, RecvError> {
         self.recv_addrs.resize(BUF_SIZE, RouteKey::default());
         self.recv_sizes.resize(BUF_SIZE, 0);
         self.recv_buff.truncate(BUF_SIZE);
@@ -577,7 +578,7 @@ impl PipeLine {
 
                 if len == 0 {
                     return Err(RecvError::Io(std::io::Error::from(
-                        std::io::ErrorKind::UnexpectedEof,
+                        io::ErrorKind::UnexpectedEof,
                     )));
                 }
                 let mut block = self.recv_buff.swap_remove(index);

@@ -173,6 +173,7 @@ impl PipeConfig {
         self.udp_stun_servers.replace(udp_stun_servers);
         self
     }
+    /// Other nodes will attempt to connect to the current node through this configuration
     pub fn set_mapping_addrs(mut self, mapping_addrs: Vec<NodeAddress>) -> Self {
         self.mapping_addrs.replace(mapping_addrs);
         self
@@ -190,10 +191,12 @@ impl PipeConfig {
         self.encryption.replace(encryption);
         self
     }
+    /// Bind to this network card
     pub fn set_default_interface(mut self, default_interface: LocalInterface) -> Self {
         self.default_interface = Some(default_interface.clone());
         self
     }
+    /// Whether to use IPv6
     pub fn set_use_v6(mut self, use_v6: bool) -> Self {
         self.use_v6 = use_v6;
         self
