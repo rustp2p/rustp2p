@@ -15,6 +15,7 @@ For connecting two peers, all you need to do is to give the configuration as don
 
 - [example/node](https://github.com/rustp2p/rustp2p/blob/master/examples/node.rs)
 - [https://github.com/rustp2p/netlink](https://github.com/rustp2p/netlink)
+- [https://github.com/rustp2p/rustp2p-transport](https://github.com/rustp2p/rustp2p-transport)
 
 
 
