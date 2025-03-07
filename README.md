@@ -19,3 +19,9 @@ For connecting two peers, all you need to do is to give the configuration as don
 
 
 
+### 为什么rustp2p的打洞成功率这么高？
+> Why the rate of successful hole-punching of rustp2p is so high
+
+对比iroh和libp2p这两个库，rustp2p基本上打洞成功率是远超前者的(实测），那么核心原理是什么呢？对于两个再Cone型Nat后的两个主机A和B, rustp2p会分别在A和B上创建一个udp socket并且通过公网服务获取公网地址和对外映射的端口，通过协调服务器向对方发送各自的NAT信息，假设A的公网地址是`10.0.0.1:8080`, B的公网地址是`20.0.0.1:9090`并且各自的NAT类型是Cone, 那么A将收到协调服务器发过来的B的信息`{ipaddr:20.0.0.1:9090,nat_type:Cone}`,同样的B将收到`{ipaddr:10.0.0.1:8080,nat_type:Cone}`,此时A向B的地址发送信息以刷新NAT的过滤规则，同样B向A的地址发送一些信息以刷新B的NAT的规律规则，此后A发送给B的信息以及B发送给A的信息就能顺利的被各自的NAT转发到内网了。这是Cone对Cone的场景，这种网络类型相对来说比较简单。
+
+如果A的NAT是`Cone`而B的NAT是`Symmetric`,这种网络环境就很不利于打洞，不过这也是rustp2p优于其他框架的核心所在。面对这种场景，对于探测出自身NAT类型是A的主机和上面一样只会创建一个udp socket并且公网IP地址是`10.0.0.1:8080`,而B的NAT类型是`Symmetric`除了创建一个用来对外探测出其NAT类型和公网地址为`20.0.0.1:9090`的主要udp socket外，还会再创建若干个备用udp socket, 此时B收到协调服务器发过来的A的信息`{ipaddr:10.0.0.1:8080,nat_type:Cone}`，B会同时通过主要udp和创建的若干个备用udp往A的地址发送消息，此时A收到协调服务器发过来的B的信息`{ipaddr:20.0.0.1:9090,nat_type:Symmetric}`, 那么A除了通过它的唯一的udp往该地址发送消息外，还会通过`9090`这个端口信息猜测以及枚举出B那些备用udp对公网的可能的端口号P，并通过唯一udp往`20.0.0.1:P`这些地址发送信息以碰撞出穿透概率。
