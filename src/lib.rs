@@ -5,8 +5,6 @@ pub mod config;
 pub mod extend;
 pub mod pipe;
 
-use std::net::Ipv4Addr;
-
 use cipher::Algorithm;
 use config::{PipeConfig, TcpPipeConfig, UdpPipeConfig};
 use flume::{Receiver, Sender};
@@ -23,12 +21,10 @@ impl EndPoint {
     pub async fn recv(&self) -> Result<RecvUserData, flume::RecvError> {
         self.receiver.recv_async().await
     }
-    pub async fn send(&self, data: &[u8], node_id: NodeID) {
+    pub async fn send(&self, data: &[u8], node_id: NodeID) -> std::io::Result<()> {
         let mut send_packet = self.sender.allocate_send_packet();
         send_packet.set_payload(data);
-        if let Err(e) = self.sender.send_packet_to(send_packet, &node_id).await {
-            log::warn!("{e:?},{node_id:?}");
-        }
+        self.sender.send_packet_to(send_packet, &node_id).await
     }
 }
 
@@ -41,7 +37,6 @@ impl Drop for EndPoint {
 pub struct Builder {
     udp_ports: Option<Vec<u16>>,
     tcp_port: Option<u16>,
-    local_ip: Option<Ipv4Addr>,
     group_code: Option<GroupCode>,
     encryption: Option<Algorithm>,
     node_id: Option<NodeID>,
@@ -51,7 +46,6 @@ impl Builder {
         Self {
             udp_ports: None,
             tcp_port: None,
-            local_ip: None,
             group_code: None,
             encryption: None,
             node_id: None,
@@ -63,10 +57,6 @@ impl Builder {
     }
     pub fn tcp_port(mut self, port: u16) -> Self {
         self.tcp_port = Some(port);
-        self
-    }
-    pub fn local_ip(mut self, ip: Ipv4Addr) -> Self {
-        self.local_ip = Some(ip);
         self
     }
     pub fn group_code(mut self, group_code: GroupCode) -> Self {
