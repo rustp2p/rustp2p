@@ -199,7 +199,7 @@ impl Drop for Pipe {
 }
 
 impl Pipe {
-    pub async fn accept(&mut self) -> io::Result<PipeLine> {
+    pub async fn dispatch(&mut self) -> io::Result<PipeLine> {
         if self.shutdown_manager.is_shutdown_triggered() {
             return Err(io::Error::new(io::ErrorKind::BrokenPipe, "shutdown"));
         }

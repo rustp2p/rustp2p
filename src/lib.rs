@@ -96,7 +96,7 @@ impl Builder {
         let mut pipe = Pipe::new(config).await?;
         let writer = pipe.writer();
         let handler = rust_p2p_core::async_compat::spawn(async move {
-            while let Ok(line) = pipe.accept().await {
+            while let Ok(line) = pipe.dispatch().await {
                 rust_p2p_core::async_compat::spawn(handle(line, sender.clone()));
             }
         });
