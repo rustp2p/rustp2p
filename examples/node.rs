@@ -20,7 +20,7 @@ struct Args {
     /// Peer node address.
     /// example: --peer tcp://192.168.10.13:23333 --peer udp://192.168.10.23:23333
     #[arg(short, long)]
-    peer: Option<Vec<String>>,
+    peer: Option<Vec<PeerNodeAddress>>,
     /// Local node IP and mask.
     /// example: --local 10.26.0.2/24
     #[arg(short, long)]
@@ -33,21 +33,8 @@ struct Args {
     port: Option<u16>,
 }
 
-#[cfg(feature = "use-tokio")]
 #[tokio::main]
-async fn main() -> io::Result<()> {
-    main0().await
-}
-
-#[cfg(feature = "use-async-std")]
-#[::async_std::main]
-async fn main() -> io::Result<()> {
-    use futures_util::FutureExt;
-    main0().boxed().await
-}
-
-#[allow(unused_mut)]
-pub async fn main0() -> io::Result<()> {
+pub async fn main() -> io::Result<()> {
     let Args {
         peer,
         local,
@@ -58,14 +45,9 @@ pub async fn main0() -> io::Result<()> {
     let mut split = local.split('/');
     let self_id = Ipv4Addr::from_str(split.next().expect("--local error")).expect("--local error");
     let mask = u8::from_str(split.next().expect("--local error")).expect("--local error");
-    let mut addrs = Vec::new();
-    if let Some(peers) = peer {
-        for addr in peers {
-            addrs.push(addr.parse::<PeerNodeAddress>().expect("--peer"))
-        }
-    }
+    let addrs = peer.unwrap_or_default();
 
-    let (tx, mut quit) = rust_p2p_core::async_compat::mpsc::channel::<()>(1);
+    let (tx, mut quit) = tokio::sync::mpsc::channel::<()>(1);
 
     ctrlc::set_handler(move || {
         tx.try_send(()).expect("Could not send signal on channel.");
@@ -75,31 +57,26 @@ pub async fn main0() -> io::Result<()> {
     let dev_builder = tun_rs::DeviceBuilder::new()
         .ipv4(self_id, mask, None)
         .mtu(1400);
-    #[cfg(windows)]
-    let dev_builder = dev_builder.ring_capacity(4 * 1024 * 1024);
-    #[cfg(target_os = "linux")]
-    let dev_builder = dev_builder.tx_queue_len(1000);
 
-    let device = Arc::new(dev_builder.build_async().unwrap());
+    let device = Arc::new(dev_builder.build_async()?);
 
     let port = port.unwrap_or(23333);
 
-    let endpoint = Arc::new(
-        Builder::new()
-            .node_id(self_id.into())
-            .tcp_port(port)
-            .udp_ports(vec![port])
-            .group_code(string_to_group_code(&group_code))
-            .encryption(Algorithm::AesGcm("password".to_string()))
-            .build()
-            .await?,
-    );
+    let endpoint = Builder::new()
+        .node_id(self_id.into())
+        .tcp_port(port)
+        .udp_ports(vec![port])
+        .peers(addrs)
+        .group_code(string_to_group_code(&group_code))
+        .encryption(Algorithm::AesGcm("password".to_string()))
+        .build()
+        .await?;
 
     log::info!("listen local port: {port}");
 
     let endpoint_clone = endpoint.clone();
     let device_clone = device.clone();
-    rust_p2p_core::async_compat::spawn(async move {
+    tokio::spawn(async move {
         while let Ok(data) = endpoint_clone.recv().await {
             log::debug!(
                 "recv from peer from addr: {:?}, {:?} ->{:?} is_relay:{}\n{:?}",
@@ -115,7 +92,7 @@ pub async fn main0() -> io::Result<()> {
         }
     });
 
-    rust_p2p_core::async_compat::spawn(async move {
+    tokio::spawn(async move {
         tun_recv(endpoint, device, self_id).await.unwrap();
     });
 
@@ -132,7 +109,7 @@ fn string_to_group_code(input: &str) -> GroupCode {
 }
 
 async fn tun_recv(
-    endpoint: Arc<EndPoint>,
+    endpoint: EndPoint,
     device: Arc<AsyncDevice>,
     _self_id: Ipv4Addr,
 ) -> io::Result<()> {

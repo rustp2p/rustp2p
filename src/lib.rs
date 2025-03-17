@@ -5,21 +5,31 @@ pub mod config;
 pub mod extend;
 pub mod pipe;
 
+use crate::pipe::PeerNodeAddress;
 use cipher::Algorithm;
 use config::{PipeConfig, TcpPipeConfig, UdpPipeConfig};
 use flume::{Receiver, Sender};
 use pipe::{Pipe, PipeLine, PipeWriter, RecvUserData};
 use protocol::node_id::{GroupCode, NodeID};
 use rust_p2p_core::async_compat::JoinHandle;
+use std::sync::Arc;
+
+#[derive(Clone)]
 pub struct EndPoint {
     receiver: Receiver<RecvUserData>,
     sender: PipeWriter,
-    handler: JoinHandle<()>,
+    _handle: Arc<HandleOwner>,
+}
+struct HandleOwner {
+    handle: JoinHandle<()>,
 }
 
 impl EndPoint {
-    pub async fn recv(&self) -> Result<RecvUserData, flume::RecvError> {
-        self.receiver.recv_async().await
+    pub async fn recv(&self) -> std::io::Result<RecvUserData> {
+        self.receiver
+            .recv_async()
+            .await
+            .map_err(|_| std::io::Error::new(std::io::ErrorKind::Other, "shutdown"))
     }
     pub async fn send(&self, data: &[u8], node_id: NodeID) -> std::io::Result<()> {
         let mut send_packet = self.sender.allocate_send_packet();
@@ -28,15 +38,16 @@ impl EndPoint {
     }
 }
 
-impl Drop for EndPoint {
+impl Drop for HandleOwner {
     fn drop(&mut self) {
-        self.handler.abort();
+        self.handle.abort();
     }
 }
 
 pub struct Builder {
     udp_ports: Option<Vec<u16>>,
     tcp_port: Option<u16>,
+    peers: Option<Vec<PeerNodeAddress>>,
     group_code: Option<GroupCode>,
     encryption: Option<Algorithm>,
     node_id: Option<NodeID>,
@@ -46,6 +57,7 @@ impl Builder {
         Self {
             udp_ports: None,
             tcp_port: None,
+            peers: None,
             group_code: None,
             encryption: None,
             node_id: None,
@@ -57,6 +69,10 @@ impl Builder {
     }
     pub fn tcp_port(mut self, port: u16) -> Self {
         self.tcp_port = Some(port);
+        self
+    }
+    pub fn peers(mut self, peers: Vec<PeerNodeAddress>) -> Self {
+        self.peers = Some(peers);
         self
     }
     pub fn group_code(mut self, group_code: GroupCode) -> Self {
@@ -72,7 +88,7 @@ impl Builder {
         self
     }
     pub async fn build(self) -> std::io::Result<EndPoint> {
-        let config = PipeConfig::empty()
+        let mut config = PipeConfig::empty()
             .set_udp_pipe_config(
                 UdpPipeConfig::default().set_udp_ports(self.udp_ports.unwrap_or_default()),
             )
@@ -85,7 +101,9 @@ impl Builder {
                 std::io::ErrorKind::InvalidInput,
                 "node_id is required",
             ))?);
-
+        if let Some(peers) = self.peers {
+            config = config.set_direct_addrs(peers);
+        }
         #[cfg(any(feature = "aes-gcm", feature = "chacha20-poly1305"))]
         let config = config.set_encryption(self.encryption.ok_or(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -95,7 +113,7 @@ impl Builder {
         let (sender, receiver) = flume::unbounded();
         let mut pipe = Pipe::new(config).await?;
         let writer = pipe.writer();
-        let handler = rust_p2p_core::async_compat::spawn(async move {
+        let handle = rust_p2p_core::async_compat::spawn(async move {
             while let Ok(line) = pipe.dispatch().await {
                 rust_p2p_core::async_compat::spawn(handle(line, sender.clone()));
             }
@@ -103,7 +121,7 @@ impl Builder {
         Ok(EndPoint {
             sender: writer,
             receiver,
-            handler,
+            _handle: Arc::new(HandleOwner { handle }),
         })
     }
 }
