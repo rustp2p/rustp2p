@@ -31,6 +31,7 @@ dns-parser = "0.8"
 
 ring = { version = "0.17", optional = true }
 sha2 = "0.10"
+flume = {version = "0.11.1", features = ["async"]}
 
 [dev-dependencies]
 rustp2p = { path = "../rustp2p", features = ["aes-gcm"] }

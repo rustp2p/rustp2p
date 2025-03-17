@@ -9,64 +9,32 @@ use std::net::Ipv4Addr;
 
 use cipher::Algorithm;
 use config::{PipeConfig, TcpPipeConfig, UdpPipeConfig};
+use flume::{Receiver, Sender};
 use pipe::{Pipe, PipeLine, PipeWriter, RecvUserData};
 use protocol::node_id::{GroupCode, NodeID};
-use rust_p2p_core::async_compat::mpsc::{self, Receiver, Sender};
 use rust_p2p_core::async_compat::JoinHandle;
 pub struct EndPoint {
-    rx: EndPointReceiver,
-    tx: EndPointSender,
-}
-
-impl EndPoint {
-    pub async fn close(&mut self) {
-        self.rx.handler.abort();
-    }
-    pub async fn recv(&mut self) -> Option<RecvUserData> {
-        self.rx.receiver.recv().await
-    }
-    pub async fn send(&mut self, data: &[u8], node_id: NodeID) {
-        let mut send_packet = self.tx.sender.allocate_send_packet();
-        send_packet.set_payload(data);
-        if let Err(e) = self.tx.sender.send_packet_to(send_packet, &node_id).await {
-            log::warn!("{e:?},{node_id:?}");
-        }
-    }
-    pub fn split(self) -> (EndPointReceiver, EndPointSender) {
-        (self.rx, self.tx)
-    }
-}
-
-pub struct EndPointReceiver {
     receiver: Receiver<RecvUserData>,
+    sender: PipeWriter,
     handler: JoinHandle<()>,
 }
 
-impl EndPointReceiver {
-    pub async fn recv(&mut self) -> Option<RecvUserData> {
-        self.receiver.recv().await
+impl EndPoint {
+    pub async fn recv(&self) -> Result<RecvUserData, flume::RecvError> {
+        self.receiver.recv_async().await
     }
-}
-
-impl Drop for EndPointReceiver {
-    fn drop(&mut self) {
-        self.handler.abort();
-    }
-}
-
-#[repr(transparent)]
-#[derive(Clone)]
-pub struct EndPointSender {
-    sender: PipeWriter,
-}
-
-impl EndPointSender {
     pub async fn send(&self, data: &[u8], node_id: NodeID) {
         let mut send_packet = self.sender.allocate_send_packet();
         send_packet.set_payload(data);
         if let Err(e) = self.sender.send_packet_to(send_packet, &node_id).await {
             log::warn!("{e:?},{node_id:?}");
         }
+    }
+}
+
+impl Drop for EndPoint {
+    fn drop(&mut self) {
+        self.handler.abort();
     }
 }
 
@@ -116,22 +84,25 @@ impl Builder {
     pub async fn build(self) -> std::io::Result<EndPoint> {
         let config = PipeConfig::empty()
             .set_udp_pipe_config(
-                UdpPipeConfig::default().set_udp_ports(self.udp_ports.unwrap_or(vec![])),
+                UdpPipeConfig::default().set_udp_ports(self.udp_ports.unwrap_or_default()),
             )
             .set_tcp_pipe_config(TcpPipeConfig::default().set_tcp_port(self.tcp_port.unwrap_or(0)))
             .set_group_code(self.group_code.ok_or(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 "group_code is required",
             ))?)
-            .set_encryption(self.encryption.ok_or(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "encryption is required",
-            ))?)
             .set_node_id(self.node_id.ok_or(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 "node_id is required",
             ))?);
-        let (sender, receiver) = mpsc::channel(1024);
+
+        #[cfg(any(feature = "aes-gcm", feature = "chacha20-poly1305"))]
+        let config = config.set_encryption(self.encryption.ok_or(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "encryption is required",
+        ))?);
+
+        let (sender, receiver) = flume::unbounded();
         let mut pipe = Pipe::new(config).await?;
         let writer = pipe.writer();
         let handler = rust_p2p_core::async_compat::spawn(async move {
@@ -140,9 +111,16 @@ impl Builder {
             }
         });
         Ok(EndPoint {
-            tx: EndPointSender { sender: writer },
-            rx: EndPointReceiver { receiver, handler },
+            sender: writer,
+            receiver,
+            handler,
         })
+    }
+}
+
+impl Default for Builder {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -161,7 +139,7 @@ async fn handle(mut line: PipeLine, sender: Sender<RecvUserData>) {
             continue;
         };
         for x in list.drain(..) {
-            if sender.send(x).await.is_err() {
+            if sender.send_async(x).await.is_err() {
                 break;
             }
         }
