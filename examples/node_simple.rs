@@ -4,8 +4,8 @@ use std::net::Ipv4Addr;
 use clap::Parser;
 use env_logger::Env;
 use rustp2p::cipher::Algorithm;
-use rustp2p::pipe::PeerNodeAddress;
 use rustp2p::protocol::node_id::GroupCode;
+use rustp2p::tunnel::PeerNodeAddress;
 use rustp2p::Builder;
 
 #[derive(Parser, Debug)]

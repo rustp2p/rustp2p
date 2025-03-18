@@ -1,8 +1,8 @@
-use crate::pipe::pipe_context::NodeAddress;
-use crate::pipe::TunnelTransmit;
 use crate::protocol::node_id::{GroupCode, NodeID};
 use crate::protocol::protocol_type::ProtocolType;
 use crate::protocol::NetPacket;
+use crate::tunnel::pipe_context::NodeAddress;
+use crate::tunnel::TunnelTransmit;
 use std::collections::HashSet;
 use std::io;
 use std::time::Duration;
@@ -52,7 +52,7 @@ async fn timestamp_request(pipe_writer: &TunnelTransmit) -> io::Result<()> {
         packet.set_payload_len(4);
     }
     let mut packet = NetPacket::new(packet.buf_mut())?;
-    let now = crate::pipe::now()?;
+    let now = crate::tunnel::now()?;
     packet.payload_mut().copy_from_slice(&now.to_be_bytes());
     let direct_nodes = pipe_writer.pipe_context.get_direct_nodes();
     let (sent_ids, _) = route_table_heartbeat_request(pipe_writer, &mut packet).await;

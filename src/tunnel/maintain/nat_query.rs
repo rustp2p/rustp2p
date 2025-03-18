@@ -1,5 +1,5 @@
-use crate::pipe::pipe_context::PipeContext;
-use crate::pipe::TunnelTransmit;
+use crate::tunnel::pipe_context::PipeContext;
+use crate::tunnel::TunnelTransmit;
 use rand::seq::SliceRandom;
 use rust_p2p_core::socket::LocalInterface;
 use std::time::Duration;

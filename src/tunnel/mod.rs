@@ -1,11 +1,11 @@
 use crate::config::TunnelManagerConfig;
 use crate::extend::byte_pool::{Block, BufferPool};
-use crate::pipe::pipe_context::PipeContext;
 use crate::protocol::broadcast::RangeBroadcastPacket;
 use crate::protocol::id_route::IDRouteReplyPacket;
 use crate::protocol::node_id::{GroupCode, NodeID};
 use crate::protocol::protocol_type::ProtocolType;
 use crate::protocol::{broadcast, NetPacket, HEAD_LEN};
+use crate::tunnel::pipe_context::PipeContext;
 use async_shutdown::ShutdownManager;
 
 use bytes::BytesMut;

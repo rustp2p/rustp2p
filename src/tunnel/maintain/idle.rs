@@ -1,7 +1,7 @@
 use std::time::Duration;
 
-use crate::pipe::pipe_context::PipeContext;
 use crate::protocol::node_id::NodeID;
+use crate::tunnel::pipe_context::PipeContext;
 
 pub async fn idle_check_loop(idle_route_manager: rust_p2p_core::idle::IdleRouteManager<NodeID>) {
     loop {

@@ -1,6 +1,6 @@
-use crate::pipe::TunnelTransmit;
 use crate::protocol::node_id::NodeID;
 use crate::protocol::protocol_type::ProtocolType;
+use crate::tunnel::TunnelTransmit;
 use rand::seq::SliceRandom;
 use rust_p2p_core::punch::{PunchConsultInfo, PunchInfo, Puncher};
 use std::time::Duration;

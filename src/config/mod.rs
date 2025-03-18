@@ -10,9 +10,9 @@ use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-use crate::pipe::{NodeAddress, PeerNodeAddress, RecvResult};
 use crate::protocol::node_id::{GroupCode, NodeID};
 use crate::protocol::{NetPacket, HEAD_LEN};
+use crate::tunnel::{NodeAddress, PeerNodeAddress, RecvResult};
 pub use rust_p2p_core::nat::*;
 pub use rust_p2p_core::pipe::config::LoadBalance;
 use rust_p2p_core::pipe::recycle::RecycleBuf;

@@ -1,5 +1,5 @@
-use crate::pipe::TunnelTransmit;
 use crate::protocol::node_id::NodeID;
+use crate::tunnel::TunnelTransmit;
 use rust_p2p_core::punch::{PunchConsultInfo, Puncher};
 use rust_p2p_core::socket::LocalInterface;
 use std::time::Duration;

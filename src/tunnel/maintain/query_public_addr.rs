@@ -1,4 +1,4 @@
-use crate::pipe::TunnelTransmit;
+use crate::tunnel::TunnelTransmit;
 use std::collections::HashMap;
 use std::io;
 use std::net::{SocketAddr, ToSocketAddrs};

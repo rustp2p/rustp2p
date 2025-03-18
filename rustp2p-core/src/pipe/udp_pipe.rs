@@ -58,7 +58,7 @@ impl UDPIndex {
     }
 }
 
-/// initialize udp pipe by config
+/// initialize udp tunnel by config
 pub(crate) fn udp_pipe(config: UdpPipeConfig) -> io::Result<UdpPipe> {
     config.check()?;
     let mut udp_ports = config.udp_ports;
@@ -205,7 +205,7 @@ impl SocketLayer {
                 sub_close_notify_receiver.clone(),
             );
             if self.pipe_line_sender.try_send(udp_pipe_line).is_err() {
-                Err(io::Error::new(io::ErrorKind::Other, "pipe channel error"))?
+                Err(io::Error::new(io::ErrorKind::Other, "tunnel channel error"))?
             }
         }
         sub_close_notify_guard.replace(sub_close_notify_sender);
@@ -432,7 +432,7 @@ impl UdpPipe {
                 .try_send(udp_pipe_line)
                 .is_err()
             {
-                Err(io::Error::new(io::ErrorKind::Other, "pipe channel error"))?
+                Err(io::Error::new(io::ErrorKind::Other, "tunnel channel error"))?
             }
         }
         for (index, udp) in self.socket_layer.main_udp_v6.iter().enumerate() {
@@ -448,7 +448,7 @@ impl UdpPipe {
                 .try_send(udp_pipe_line)
                 .is_err()
             {
-                Err(io::Error::new(io::ErrorKind::Other, "pipe channel error"))?
+                Err(io::Error::new(io::ErrorKind::Other, "tunnel channel error"))?
             }
         }
         Ok(())
@@ -456,11 +456,11 @@ impl UdpPipe {
 }
 
 impl UdpPipe {
-    /// Construct a `UDP` pipe with the specified configuration
+    /// Construct a `UDP` tunnel with the specified configuration
     pub fn new(config: UdpPipeConfig) -> io::Result<UdpPipe> {
         udp_pipe(config)
     }
-    /// Accept `UDP` pipelines from this kind pipe
+    /// Accept `UDP` pipelines from this kind tunnel
     pub async fn accept(&mut self) -> io::Result<UdpPipeLine> {
         let mut line = self
             .pipe_line_receiver
@@ -555,7 +555,7 @@ impl UdpPipe {
     pub fn v6_pipeline_len(&self) -> usize {
         self.socket_layer.v6_pipeline_len()
     }
-    /// Acquire a shared reference for writing to the pipe
+    /// Acquire a shared reference for writing to the tunnel
     pub fn writer_ref(&self) -> UdpPipeWriterRef<'_> {
         UdpPipeWriterRef {
             socket_layer: &self.socket_layer,

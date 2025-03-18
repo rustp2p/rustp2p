@@ -1,8 +1,8 @@
-use crate::pipe::pipe_context::DirectNodes;
-use crate::pipe::{NodeAddress, TunnelTransmit};
 use crate::protocol::node_id::NodeID;
 use crate::protocol::protocol_type::ProtocolType;
 use crate::protocol::NetPacket;
+use crate::tunnel::pipe_context::DirectNodes;
+use crate::tunnel::{NodeAddress, TunnelTransmit};
 use rand::seq::SliceRandom;
 use std::collections::HashSet;
 use std::io;

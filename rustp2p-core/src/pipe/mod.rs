@@ -26,7 +26,7 @@ pub const DEFAULT_ADDRESS_V6: SocketAddr =
     SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, 0));
 
 pub type PipeComponent<PeerID> = (Pipe<PeerID>, Puncher<PeerID>, IdleRouteManager<PeerID>);
-/// Construct the needed components for p2p communication with the given pipe configuration
+/// Construct the needed components for p2p communication with the given tunnel configuration
 pub fn pipe<PeerID: Hash + Eq + Clone>(config: PipeConfig) -> io::Result<PipeComponent<PeerID>> {
     let route_table = RouteTable::new(config.load_balance, config.multi_pipeline);
     let udp_pipe = if let Some(mut udp_pipe_config) = config.udp_pipe_config {
@@ -89,7 +89,7 @@ pub struct PipeWriterRef<'a, PeerID> {
 }
 
 impl<PeerID> Pipe<PeerID> {
-    /// Accept pipelines from a given `pipe`
+    /// Accept pipelines from a given `tunnel`
     pub async fn accept(&mut self) -> io::Result<PipeLine> {
         tokio::select! {
             rs=accept_udp(self.udp_pipe.as_mut())=>{
@@ -133,11 +133,11 @@ impl<PeerID> Pipe<PeerID> {
     pub fn tcp_pipe_ref(&mut self) -> Option<&mut TcpPipe> {
         self.tcp_pipe.as_mut()
     }
-    /// Acquire the `route_table` associated with the `pipe`
+    /// Acquire the `route_table` associated with the `tunnel`
     pub fn route_table(&self) -> &RouteTable<PeerID> {
         &self.route_table
     }
-    /// Acquire a shared reference for writing to the `pipe`
+    /// Acquire a shared reference for writing to the `tunnel`
     pub fn writer_ref(&self) -> PipeWriterRef<PeerID> {
         PipeWriterRef {
             route_table: &self.route_table,
@@ -157,30 +157,30 @@ impl<PeerID> PipeWriterRef<'_, PeerID> {
             extensible_pipe_writer: self.extensible_pipe_writer.as_ref().map(|v| v.to_owned()),
         }
     }
-    /// Acquire a shared reference for writing to the pipe established by `TCP`
+    /// Acquire a shared reference for writing to the tunnel established by `TCP`
     pub fn tcp_pipe_writer_ref(&self) -> Option<TcpPipeWriterRef<'_>> {
         self.tcp_pipe_writer
     }
-    /// Acquire a shared reference for writing to the pipe established by `UDP`
+    /// Acquire a shared reference for writing to the tunnel established by `UDP`
     pub fn udp_pipe_writer_ref(&self) -> Option<UdpPipeWriterRef<'_>> {
         self.udp_pipe_writer
     }
-    /// Acquire a shared reference for writing to the pipe established by other extended protocols
+    /// Acquire a shared reference for writing to the tunnel established by other extended protocols
     pub fn extensible_pipe_writer_ref(&self) -> Option<ExtensiblePipeWriterRef<'_>> {
         self.extensible_pipe_writer
     }
 }
 
 impl<PeerID> PipeWriter<PeerID> {
-    /// Acquire a owned `writer` for writing to the pipe established by `TCP`
+    /// Acquire a owned `writer` for writing to the tunnel established by `TCP`
     pub fn udp_pipe_writer(&self) -> Option<&UdpPipeWriter> {
         self.udp_pipe_writer.as_ref()
     }
-    /// Acquire a owned `writer` for writing to the pipe established by `UDP`
+    /// Acquire a owned `writer` for writing to the tunnel established by `UDP`
     pub fn tcp_pipe_writer(&self) -> Option<&TcpPipeWriter> {
         self.tcp_pipe_writer.as_ref()
     }
-    /// Acquire a owned `writer` for writing to the pipe established by other extended protocols
+    /// Acquire a owned `writer` for writing to the tunnel established by other extended protocols
     pub fn extensible_pipe_writer(&self) -> Option<&ExtensiblePipeWriter> {
         self.extensible_pipe_writer.as_ref()
     }

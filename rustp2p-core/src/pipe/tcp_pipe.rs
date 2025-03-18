@@ -30,7 +30,7 @@ pub struct TcpPipe {
 }
 
 impl TcpPipe {
-    /// Construct a `TCP` pipe with the specified configuration
+    /// Construct a `TCP` tunnel with the specified configuration
     pub fn new(config: TcpPipeConfig) -> io::Result<TcpPipe> {
         config.check()?;
         let address: SocketAddr = if config.use_v6 {
@@ -74,7 +74,7 @@ impl TcpPipe {
 }
 
 impl TcpPipe {
-    /// Accept `TCP` pipelines from this kind pipe
+    /// Accept `TCP` pipelines from this kind tunnel
     pub async fn accept(&mut self) -> io::Result<TcpPipeLine> {
         tokio::select! {
             rs=self.connect_receiver.recv()=>{

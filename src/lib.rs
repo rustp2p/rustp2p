@@ -3,16 +3,15 @@ pub mod protocol;
 pub mod cipher;
 pub mod config;
 pub mod extend;
-pub mod pipe;
+pub mod tunnel;
 
-use crate::pipe::PeerNodeAddress;
 use cipher::Algorithm;
-use config::{TunnelManagerConfig, TcpPipeConfig, UdpPipeConfig};
+use config::{TcpPipeConfig, TunnelManagerConfig, UdpPipeConfig};
 use flume::{Receiver, Sender};
-use pipe::{RecvUserData, TunnelManager, TunnelReceive, TunnelTransmit};
 use protocol::node_id::{GroupCode, NodeID};
 use std::sync::Arc;
 use tokio::task::JoinHandle;
+use tunnel::{PeerNodeAddress, RecvUserData, TunnelManager, TunnelReceive, TunnelTransmit};
 
 #[derive(Clone)]
 pub struct EndPoint {
