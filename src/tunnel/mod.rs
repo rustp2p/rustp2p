@@ -681,7 +681,7 @@ impl TunnelReceive {
             }
         }
 
-        return match self.handle(recv_result).await {
+        match self.handle(recv_result).await {
             Ok(handle_result) => {
                 if let Some(rs) = handle_result {
                     #[cfg(any(feature = "aes-gcm", feature = "chacha20-poly1305"))]
@@ -725,7 +725,7 @@ impl TunnelReceive {
                 }
             }
             Err(e) => Ok(Ok(Err(HandleError::new(route_key, e)))),
-        };
+        }
     }
     pub fn protocol(&self) -> ConnectProtocol {
         self.pipe_line.protocol()
