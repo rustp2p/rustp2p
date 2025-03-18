@@ -26,7 +26,7 @@ pub(crate) mod punch_info;
 
 pub(crate) const ROUTE_IDLE_TIME: Duration = Duration::from_secs(10);
 
-pub struct SocketManagerConfig {
+pub struct TunnelManagerConfig {
     pub load_balance: LoadBalance,
     pub multi_pipeline: usize,
     pub route_idle_time: Duration,
@@ -52,7 +52,7 @@ pub struct SocketManagerConfig {
     pub use_v6: bool,
 }
 
-impl Default for SocketManagerConfig {
+impl Default for TunnelManagerConfig {
     fn default() -> Self {
         Self {
             load_balance: LoadBalance::MinHopLowestLatency,
@@ -99,13 +99,13 @@ impl Default for SocketManagerConfig {
 pub(crate) const MULTI_PIPELINE: usize = 2;
 pub(crate) const UDP_SUB_PIPELINE_NUM: usize = 82;
 
-impl SocketManagerConfig {
+impl TunnelManagerConfig {
     pub fn none_tcp(self) -> Self {
         self
     }
 }
 
-impl SocketManagerConfig {
+impl TunnelManagerConfig {
     pub fn empty() -> Self {
         Self::default()
     }
@@ -273,8 +273,8 @@ impl UdpPipeConfig {
     }
 }
 
-impl From<SocketManagerConfig> for rust_p2p_core::pipe::config::PipeConfig {
-    fn from(value: SocketManagerConfig) -> Self {
+impl From<TunnelManagerConfig> for rust_p2p_core::pipe::config::PipeConfig {
+    fn from(value: TunnelManagerConfig) -> Self {
         let recycle_buf = if value.recycle_buf_cap > 0 {
             Some(RecycleBuf::new(
                 value.recycle_buf_cap,

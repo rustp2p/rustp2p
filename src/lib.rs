@@ -7,9 +7,9 @@ pub mod pipe;
 
 use crate::pipe::PeerNodeAddress;
 use cipher::Algorithm;
-use config::{SocketManagerConfig, TcpPipeConfig, UdpPipeConfig};
+use config::{TunnelManagerConfig, TcpPipeConfig, UdpPipeConfig};
 use flume::{Receiver, Sender};
-use pipe::{RecvUserData, SocketManager, TunnelReceive, TunnelTransmit};
+use pipe::{RecvUserData, TunnelManager, TunnelReceive, TunnelTransmit};
 use protocol::node_id::{GroupCode, NodeID};
 use std::sync::Arc;
 use tokio::task::JoinHandle;
@@ -88,7 +88,7 @@ impl Builder {
         self
     }
     pub async fn build(self) -> std::io::Result<EndPoint> {
-        let mut config = SocketManagerConfig::empty()
+        let mut config = TunnelManagerConfig::empty()
             .set_udp_pipe_config(
                 UdpPipeConfig::default().set_udp_ports(self.udp_ports.unwrap_or_default()),
             )
@@ -111,7 +111,7 @@ impl Builder {
         ))?);
 
         let (sender, receiver) = flume::unbounded();
-        let mut socket_manager = SocketManager::new(config).await?;
+        let mut socket_manager = TunnelManager::new(config).await?;
         let writer = socket_manager.tunnel_transmit();
         let handle = tokio::spawn(async move {
             while let Ok(line) = socket_manager.dispatch().await {

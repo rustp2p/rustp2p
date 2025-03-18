@@ -1,4 +1,4 @@
-use crate::config::SocketManagerConfig;
+use crate::config::TunnelManagerConfig;
 use crate::extend::byte_pool::{Block, BufferPool};
 use crate::pipe::pipe_context::PipeContext;
 use crate::protocol::broadcast::RangeBroadcastPacket;
@@ -32,7 +32,7 @@ mod pipe_context;
 
 mod send_packet;
 
-pub struct SocketManager {
+pub struct TunnelManager {
     send_buffer_size: usize,
     recv_buffer_size: usize,
     pipe_context: PipeContext,
@@ -44,11 +44,11 @@ pub struct SocketManager {
     recycle_buf: Option<RecycleBuf>,
 }
 
-impl SocketManager {
-    pub async fn new(config: SocketManagerConfig) -> io::Result<SocketManager> {
+impl TunnelManager {
+    pub async fn new(config: TunnelManagerConfig) -> io::Result<TunnelManager> {
         Box::pin(Self::new0(config)).await
     }
-    async fn new0(mut config: SocketManagerConfig) -> io::Result<SocketManager> {
+    async fn new0(mut config: TunnelManagerConfig) -> io::Result<TunnelManager> {
         let multi_pipeline = config.multi_pipeline;
         let send_buffer_size = config.send_buffer_size;
         let recv_buffer_size = config.recv_buffer_size;
@@ -182,13 +182,13 @@ impl SocketManager {
     }
 }
 
-impl Drop for SocketManager {
+impl Drop for TunnelManager {
     fn drop(&mut self) {
         _ = self.shutdown_manager.trigger_shutdown(());
     }
 }
 
-impl SocketManager {
+impl TunnelManager {
     pub async fn dispatch(&mut self) -> io::Result<TunnelReceive> {
         if self.shutdown_manager.is_shutdown_triggered() {
             return Err(io::Error::new(io::ErrorKind::BrokenPipe, "shutdown"));
