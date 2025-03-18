@@ -382,15 +382,15 @@ impl SocketManager {
     pub fn try_send_to_addr<A: Into<SocketAddr>>(&self, buf: &[u8], addr: A) -> io::Result<()> {
         self.try_send_to_addr_via_index(buf, addr.into(), 0)
     }
-    /// Acquire the PipeWriter by the index
-    pub fn get(&self, addr: SocketAddr, index: usize) -> io::Result<UdpPipeWriterIndex<'_>> {
+    /// Acquire the Udp Socket by the index
+    pub fn get(&self, addr: SocketAddr, index: usize) -> io::Result<IndexedUdpSocket<'_>> {
         if index >= self.main_udp_v4.len() && index >= self.main_udp_v6.len() {
             return Err(io::Error::new(
                 io::ErrorKind::Other,
                 "neither in the bound of both the udp_v4 set nor the udp_v6 set",
             ));
         }
-        Ok(UdpPipeWriterIndex {
+        Ok(IndexedUdpSocket {
             shadow: self,
             addr,
             index,
@@ -413,7 +413,7 @@ impl SocketManager {
 
 pub struct TunnelManager {
     tunnel_receiver: Receiver<Tunnel>,
-    socket_manager: Arc<SocketManager>,
+    pub(crate) socket_manager: Arc<SocketManager>,
     recycle_buf: Option<RecycleBuf>,
 }
 
@@ -555,12 +555,6 @@ impl TunnelManager {
     pub fn v6_pipeline_len(&self) -> usize {
         self.socket_manager.v6_pipeline_len()
     }
-    /// Acquire a shared reference for writing to the tunnel
-    pub fn writer_ref(&self) -> UdpPipeWriterRef<'_> {
-        UdpPipeWriterRef {
-            socket_layer: &self.socket_manager,
-        }
-    }
 }
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -644,26 +638,13 @@ fn socket_addr_to_sockaddr(addr: &SocketAddr) -> sockaddr_storage {
     storage
 }
 
-#[derive(Clone)]
-pub struct UdpPipeWriter {
-    socket_layer: Arc<SocketManager>,
-}
-
-impl Deref for UdpPipeWriter {
-    type Target = SocketManager;
-
-    fn deref(&self) -> &Self::Target {
-        &self.socket_layer
-    }
-}
-
-pub struct UdpPipeWriterIndex<'a> {
+pub struct IndexedUdpSocket<'a> {
     shadow: &'a SocketManager,
     addr: SocketAddr,
     index: usize,
 }
 
-impl UdpPipeWriterIndex<'_> {
+impl IndexedUdpSocket<'_> {
     pub async fn send(&self, buf: &[u8]) -> io::Result<()> {
         self.shadow
             .send_to_addr_via_index(buf, self.addr, self.index)
@@ -672,27 +653,6 @@ impl UdpPipeWriterIndex<'_> {
     pub fn try_send(&self, buf: &[u8]) -> io::Result<()> {
         self.shadow
             .try_send_to_addr_via_index(buf, self.addr, self.index)
-    }
-}
-
-#[derive(Clone, Copy)]
-pub struct UdpPipeWriterRef<'a> {
-    socket_layer: &'a Arc<SocketManager>,
-}
-
-impl UdpPipeWriterRef<'_> {
-    pub fn to_owned(&self) -> UdpPipeWriter {
-        UdpPipeWriter {
-            socket_layer: self.socket_layer.clone(),
-        }
-    }
-}
-
-impl Deref for UdpPipeWriterRef<'_> {
-    type Target = Arc<SocketManager>;
-
-    fn deref(&self) -> &Self::Target {
-        self.socket_layer
     }
 }
 

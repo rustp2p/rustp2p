@@ -2,7 +2,7 @@ use bytes::{BufMut, BytesMut};
 use env_logger::Env;
 
 use rust_p2p_core::pipe::config::{PipeConfig, TcpPipeConfig, UdpTunnelManagerConfig};
-use rust_p2p_core::pipe::tcp_pipe::LengthPrefixedInitCodec;
+use rust_p2p_core::pipe::tcp::LengthPrefixedInitCodec;
 use rust_p2p_core::pipe::{pipe, PipeLine, PipeWriter};
 use rust_p2p_core::route::route_table::RouteTable;
 

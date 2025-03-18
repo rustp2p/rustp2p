@@ -23,7 +23,7 @@ use parking_lot::Mutex;
 
 use rust_p2p_core::nat::NatInfo;
 use rust_p2p_core::pipe::config::{PipeConfig, TcpPipeConfig, UdpTunnelManagerConfig};
-use rust_p2p_core::pipe::tcp_pipe::LengthPrefixedInitCodec;
+use rust_p2p_core::pipe::tcp::LengthPrefixedInitCodec;
 use rust_p2p_core::pipe::{pipe, PipeLine, PipeWriter};
 use rust_p2p_core::punch::{PunchInfo, PunchModelBoxes, Puncher};
 use rust_p2p_core::route::route_table::RouteTable;

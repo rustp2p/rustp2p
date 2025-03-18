@@ -16,7 +16,7 @@ use crate::tunnel::{NodeAddress, PeerNodeAddress, RecvResult};
 pub use rust_p2p_core::nat::*;
 pub use rust_p2p_core::pipe::config::LoadBalance;
 use rust_p2p_core::pipe::recycle::RecycleBuf;
-use rust_p2p_core::pipe::tcp_pipe::{Decoder, Encoder, InitCodec};
+use rust_p2p_core::pipe::tcp::{Decoder, Encoder, InitCodec};
 pub use rust_p2p_core::pipe::udp::Model;
 pub use rust_p2p_core::punch::config::{PunchModel, PunchModelBox};
 pub use rust_p2p_core::route::*;

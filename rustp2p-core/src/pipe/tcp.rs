@@ -20,7 +20,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::{TcpListener, TcpStream};
 
-pub struct TcpPipe {
+pub struct TunnelManager {
     route_idle_time: Duration,
     tcp_listener: TcpListener,
     connect_receiver: Receiver<(RouteKey, ReadHalfBox)>,
@@ -29,9 +29,9 @@ pub struct TcpPipe {
     init_codec: Arc<Box<dyn InitCodec>>,
 }
 
-impl TcpPipe {
+impl TunnelManager {
     /// Construct a `TCP` tunnel with the specified configuration
-    pub fn new(config: TcpPipeConfig) -> io::Result<TcpPipe> {
+    pub fn new(config: TcpPipeConfig) -> io::Result<TunnelManager> {
         config.check()?;
         let address: SocketAddr = if config.use_v6 {
             format!("[::]:{}", config.tcp_port).parse().unwrap()
@@ -47,7 +47,7 @@ impl TcpPipe {
             WriteHalfCollect::new(config.tcp_multiplexing_limit, config.recycle_buf);
         let init_codec = Arc::new(config.init_codec);
         let tcp_pipe_writer = TcpPipeWriter {
-            socket_layer: Arc::new(SocketLayer::new(
+            socket_layer: Arc::new(SocketManager::new(
                 local_addr,
                 config.tcp_multiplexing_limit,
                 write_half_collect.clone(),
@@ -56,7 +56,7 @@ impl TcpPipe {
                 init_codec.clone(),
             )),
         };
-        Ok(TcpPipe {
+        Ok(TunnelManager {
             route_idle_time: config.route_idle_time,
             tcp_listener,
             connect_receiver,
@@ -73,7 +73,7 @@ impl TcpPipe {
     }
 }
 
-impl TcpPipe {
+impl TunnelManager {
     /// Accept `TCP` pipelines from this kind tunnel
     pub async fn accept(&mut self) -> io::Result<TcpPipeLine> {
         tokio::select! {
@@ -384,7 +384,7 @@ impl WriteHalfCollect {
     }
 }
 
-pub struct SocketLayer {
+pub struct SocketManager {
     lock: Mutex<()>,
     local_addr: SocketAddr,
     tcp_multiplexing_limit: usize,
@@ -394,7 +394,7 @@ pub struct SocketLayer {
     init_codec: Arc<Box<dyn InitCodec>>,
 }
 
-impl SocketLayer {
+impl SocketManager {
     pub(crate) fn new(
         local_addr: SocketAddr,
         tcp_multiplexing_limit: usize,
@@ -418,7 +418,7 @@ impl SocketLayer {
     }
 }
 
-impl SocketLayer {
+impl SocketManager {
     /// Multiple connections can be initiated to the target address.
     pub async fn multi_connect(
         &self,
@@ -559,11 +559,11 @@ impl TcpPipeWriter {
 
 #[derive(Clone)]
 pub struct TcpPipeWriter {
-    socket_layer: Arc<SocketLayer>,
+    socket_layer: Arc<SocketManager>,
 }
 
 impl Deref for TcpPipeWriter {
-    type Target = Arc<SocketLayer>;
+    type Target = Arc<SocketManager>;
 
     fn deref(&self) -> &Self::Target {
         &self.socket_layer
@@ -571,7 +571,7 @@ impl Deref for TcpPipeWriter {
 }
 
 pub struct TcpPipeWriterRef<'a> {
-    shadow: &'a Arc<SocketLayer>,
+    shadow: &'a Arc<SocketManager>,
 }
 
 impl Clone for TcpPipeWriterRef<'_> {
@@ -591,7 +591,7 @@ impl TcpPipeWriterRef<'_> {
 }
 
 impl Deref for TcpPipeWriterRef<'_> {
-    type Target = Arc<SocketLayer>;
+    type Target = Arc<SocketManager>;
 
     fn deref(&self) -> &Self::Target {
         self.shadow
@@ -737,19 +737,19 @@ mod tests {
     use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 
     use crate::pipe::config::TcpPipeConfig;
-    use crate::pipe::tcp_pipe::{Decoder, Encoder, InitCodec, TcpPipe};
+    use crate::pipe::tcp::{Decoder, Encoder, InitCodec, TunnelManager};
 
     #[tokio::test]
     pub async fn create_tcp_pipe() {
         let config: TcpPipeConfig = TcpPipeConfig::default();
-        let tcp_pipe = TcpPipe::new(config).unwrap();
+        let tcp_pipe = TunnelManager::new(config).unwrap();
         drop(tcp_pipe)
     }
 
     #[tokio::test]
     pub async fn create_codec_tcp_pipe() {
         let config = TcpPipeConfig::new(Box::new(MyInitCodeC));
-        let tcp_pipe = TcpPipe::new(config).unwrap();
+        let tcp_pipe = TunnelManager::new(config).unwrap();
         drop(tcp_pipe)
     }
 

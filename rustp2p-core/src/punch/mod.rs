@@ -11,8 +11,8 @@ use rand::seq::SliceRandom;
 use rand::Rng;
 
 use crate::nat::{NatInfo, NatType};
-use crate::pipe::tcp_pipe::TcpPipeWriter;
-use crate::pipe::udp::UdpPipeWriter;
+use crate::pipe::tcp::TcpPipeWriter;
+use crate::pipe::udp;
 use crate::pipe::Pipe;
 use crate::route::route_table::RouteTable;
 pub use config::*;
@@ -26,18 +26,17 @@ pub struct Puncher<PeerID> {
     // 指定IP的打洞记录
     sym_record: Arc<Mutex<HashMap<PeerID, usize>>>,
     count_record: Arc<Mutex<HashMap<PeerID, (usize, usize)>>>,
-    udp_pipe_writer: Option<UdpPipeWriter>,
+    udp_socket_manager: Option<Arc<udp::SocketManager>>,
     tcp_pipe_writer: Option<TcpPipeWriter>,
 }
 
 impl<PeerID> From<&Pipe<PeerID>> for Puncher<PeerID> {
     fn from(value: &Pipe<PeerID>) -> Self {
-        let writer_ref = value.writer_ref();
-        let tcp_pipe_writer = writer_ref.tcp_pipe_writer_ref().map(|v| v.to_owned());
-        let udp_pipe_writer = writer_ref.udp_pipe_writer_ref().map(|v| v.to_owned());
+        let tcp_pipe_writer = value.shared_tcp_socket_manager();
+        let udp_socket_manager = value.shared_udp_socket_manager();
         Self::new(
             value.route_table().clone(),
-            udp_pipe_writer,
+            udp_socket_manager,
             tcp_pipe_writer,
         )
     }
@@ -46,7 +45,7 @@ impl<PeerID> From<&Pipe<PeerID>> for Puncher<PeerID> {
 impl<PeerID> Puncher<PeerID> {
     pub fn new(
         route_table: RouteTable<PeerID>,
-        udp_pipe_writer: Option<UdpPipeWriter>,
+        udp_socket_manager: Option<Arc<udp::SocketManager>>,
         tcp_pipe_writer: Option<TcpPipeWriter>,
     ) -> Puncher<PeerID> {
         let mut port_vec: Vec<u16> = (1..=65535).collect();
@@ -57,7 +56,7 @@ impl<PeerID> Puncher<PeerID> {
             port_vec,
             sym_record: Arc::new(Mutex::new(HashMap::new())),
             count_record: Arc::new(Mutex::new(HashMap::new())),
-            udp_pipe_writer,
+            udp_socket_manager,
             tcp_pipe_writer,
         }
     }
@@ -190,7 +189,7 @@ impl<PeerID: Hash + Eq + Clone> Puncher<PeerID> {
         peer_nat_info: &NatInfo,
         punch_model: &PunchModelBoxes,
     ) -> io::Result<()> {
-        let udp_pipe_writer = if let Some(udp_pipe_writer) = self.udp_pipe_writer.as_ref() {
+        let udp_pipe_writer = if let Some(udp_pipe_writer) = self.udp_socket_manager.as_ref() {
             udp_pipe_writer
         } else {
             return Ok(());

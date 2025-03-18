@@ -2,7 +2,7 @@ use std::io;
 use std::time::Duration;
 
 use crate::pipe::recycle::RecycleBuf;
-use crate::pipe::tcp_pipe::{BytesInitCodec, InitCodec};
+use crate::pipe::tcp::{BytesInitCodec, InitCodec};
 use crate::pipe::udp::Model;
 use crate::socket::LocalInterface;
 

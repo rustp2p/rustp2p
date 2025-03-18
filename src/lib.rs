@@ -110,10 +110,10 @@ impl Builder {
         ))?);
 
         let (sender, receiver) = flume::unbounded();
-        let mut socket_manager = TunnelManager::new(config).await?;
-        let writer = socket_manager.tunnel_transmit();
+        let mut tunnel_manager = TunnelManager::new(config).await?;
+        let writer = tunnel_manager.tunnel_transmit();
         let handle = tokio::spawn(async move {
-            while let Ok(line) = socket_manager.dispatch().await {
+            while let Ok(line) = tunnel_manager.dispatch().await {
                 tokio::spawn(handle(line, sender.clone()));
             }
         });
