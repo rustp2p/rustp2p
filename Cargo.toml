@@ -8,9 +8,9 @@ description = "A decentralized p2p library powered by Rust, which is devoted to 
 repository = "https://github.com/rustp2p/rustp2p"
 
 [dependencies]
-rust-p2p-core = { path = "rustp2p-core", version = "0.2", default-features = false }
+rust-p2p-core = { path = "rustp2p-core", version = "0.2"}
 async-trait = { workspace = true }
-tokio = { workspace = true, optional = true }
+tokio = { workspace = true }
 log = { workspace = true }
 thiserror = { workspace = true }
 bytes = { workspace = true }
@@ -73,8 +73,6 @@ crossbeam-utils = "0.8"
 crossbeam-queue = "0.3"
 
 [features]
-default = ["use-tokio"]
+default = []
 aes-gcm = ["ring"]
 chacha20-poly1305 = ["ring"]
-use-tokio = ["rust-p2p-core/use-tokio", "tokio"]
-use-async-std = ["rust-p2p-core/use-async-std", "async-std", "async-io", "futures-util"]

@@ -11,8 +11,8 @@ use config::{SocketManagerConfig, TcpPipeConfig, UdpPipeConfig};
 use flume::{Receiver, Sender};
 use pipe::{RecvUserData, SocketManager, TunnelReceive, TunnelTransmit};
 use protocol::node_id::{GroupCode, NodeID};
-use rust_p2p_core::async_compat::JoinHandle;
 use std::sync::Arc;
+use tokio::task::JoinHandle;
 
 #[derive(Clone)]
 pub struct EndPoint {
@@ -113,9 +113,9 @@ impl Builder {
         let (sender, receiver) = flume::unbounded();
         let mut socket_manager = SocketManager::new(config).await?;
         let writer = socket_manager.tunnel_transmit();
-        let handle = rust_p2p_core::async_compat::spawn(async move {
+        let handle = tokio::spawn(async move {
             while let Ok(line) = socket_manager.dispatch().await {
-                rust_p2p_core::async_compat::spawn(handle(line, sender.clone()));
+                tokio::spawn(handle(line, sender.clone()));
             }
         });
         Ok(EndPoint {

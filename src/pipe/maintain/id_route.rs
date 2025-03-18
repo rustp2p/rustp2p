@@ -17,7 +17,7 @@ pub async fn id_route_query_loop(
         if let Err(e) = id_route_query(&pipe_writer, query_id_max_num).await {
             log::warn!("poll_peer_node, e={e:?}");
         }
-        rust_p2p_core::async_compat::time::sleep(query_id_interval).await;
+        tokio::time::sleep(query_id_interval).await;
         pipe_writer
             .pipe_context()
             .clear_timeout_reachable_nodes(query_id_interval);
@@ -76,7 +76,7 @@ async fn poll_direct_peer_node(
                 }
             },
         }
-        rust_p2p_core::async_compat::time::sleep(Duration::from_millis(10)).await;
+        tokio::time::sleep(Duration::from_millis(10)).await;
     }
 }
 
@@ -102,7 +102,7 @@ async fn poll_route_table_peer_node(
         } else {
             sent_ids.insert(peer_id);
         }
-        rust_p2p_core::async_compat::time::sleep(Duration::from_millis(10)).await;
+        tokio::time::sleep(Duration::from_millis(10)).await;
     }
     sent_ids
 }

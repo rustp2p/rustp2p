@@ -91,7 +91,7 @@ pub struct PipeWriterRef<'a, PeerID> {
 impl<PeerID> Pipe<PeerID> {
     /// Accept pipelines from a given `pipe`
     pub async fn accept(&mut self) -> io::Result<PipeLine> {
-        crate::select! {
+        tokio::select! {
             rs=accept_udp(self.udp_pipe.as_mut())=>{
                 rs
             }

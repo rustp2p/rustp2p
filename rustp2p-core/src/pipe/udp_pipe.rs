@@ -4,13 +4,13 @@ use std::net::SocketAddr;
 use std::ops::Deref;
 use std::sync::Arc;
 
-use crate::async_compat::net::udp::UdpSocket;
 #[cfg(any(target_os = "linux", target_os = "android"))]
 use crate::async_compat::net::udp::{read_with, write_with};
 use bytes::BytesMut;
 use dashmap::DashMap;
 use parking_lot::{Mutex, RwLock};
 use tachyonix::{Receiver, Sender, TrySendError};
+use tokio::net::UdpSocket;
 
 use crate::pipe::config::UdpPipeConfig;
 use crate::pipe::recycle::RecycleBuf;
@@ -478,7 +478,7 @@ impl UdpPipe {
         let socket_layer = self.socket_layer.clone();
         let udp = line.udp.clone().unwrap();
         let recycle_buf = self.recycle_buf.clone();
-        crate::async_compat::spawn(async move {
+        tokio::spawn(async move {
             #[cfg(any(target_os = "linux", target_os = "android"))]
             let mut vec_buf = Vec::with_capacity(16);
 
@@ -806,7 +806,7 @@ impl UdpPipeLine {
         };
         loop {
             if let Some(close_notify) = &mut self.close_notify {
-                crate::select! {
+                tokio::select! {
                     _rs=close_notify.recv()=>{
                          self.done();
                          return None

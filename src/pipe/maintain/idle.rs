@@ -21,6 +21,6 @@ pub async fn other_group_idle_check_loop(pipe_context: PipeContext, timeout: Dur
             }
         }
         pipe_context.other_route_table.retain(|_k, v| !v.is_empty());
-        rust_p2p_core::async_compat::time::sleep(timeout).await;
+        tokio::time::sleep(timeout).await;
     }
 }

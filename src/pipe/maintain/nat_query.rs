@@ -25,9 +25,9 @@ pub(crate) async fn nat_test_loop(
         )
         .await;
         if pipe_context.exists_nat_info() {
-            rust_p2p_core::async_compat::time::sleep(Duration::from_secs(10 * 60)).await;
+            tokio::time::sleep(Duration::from_secs(10 * 60)).await;
         } else {
-            rust_p2p_core::async_compat::time::sleep(Duration::from_secs(10)).await;
+            tokio::time::sleep(Duration::from_secs(10)).await;
         }
     }
 }

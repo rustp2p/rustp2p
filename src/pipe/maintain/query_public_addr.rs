@@ -1,14 +1,10 @@
 use crate::pipe::TunnelTransmit;
-use rust_p2p_core::async_compat::net::tcp::TcpStream;
 use std::collections::HashMap;
 use std::io;
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::time::Duration;
+use tokio::net::TcpStream;
 
-#[cfg(feature = "use-async-std")]
-use async_std::prelude::*;
-
-#[cfg(feature = "use-tokio")]
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 pub(crate) async fn query_tcp_public_addr_loop(
@@ -33,7 +29,7 @@ pub(crate) async fn query_tcp_public_addr_loop(
                 Ok(mut addr) => {
                     if let Some(addr) = addr.next() {
                         if let Some(w) = pipe_writer.pipe_writer.tcp_pipe_writer() {
-                            match rust_p2p_core::async_compat::time::timeout(
+                            match tokio::time::timeout(
                                 Duration::from_secs(5),
                                 w.connect_reuse_port_raw(addr),
                             )
@@ -62,11 +58,8 @@ pub(crate) async fn query_tcp_public_addr_loop(
         let cur_index = tcp_count % stun_num;
         let stun = &tcp_stun_servers[cur_index];
         if let Some(mut tcp_stream) = tcp_stream_owner.remove(&cur_index) {
-            match rust_p2p_core::async_compat::time::timeout(
-                Duration::from_secs(5),
-                tcp_stream.write_all(&stun_request),
-            )
-            .await
+            match tokio::time::timeout(Duration::from_secs(5), tcp_stream.write_all(&stun_request))
+                .await
             {
                 Ok(rs) => {
                     if let Err(e) = rs {
@@ -78,10 +71,7 @@ pub(crate) async fn query_tcp_public_addr_loop(
                                 pipe_writer.pipe_context().update_tcp_public_addr(addr);
                                 let mut buf = [0; 1024];
                                 loop {
-                                    rust_p2p_core::async_compat::time::sleep(Duration::from_secs(
-                                        10,
-                                    ))
-                                    .await;
+                                    tokio::time::sleep(Duration::from_secs(10)).await;
                                     if let Err(e) = tcp_stream.try_write(b"1") {
                                         if std::io::ErrorKind::WouldBlock != e.kind() {
                                             log::debug!(
@@ -112,7 +102,7 @@ pub(crate) async fn query_tcp_public_addr_loop(
                 }
             }
         }
-        rust_p2p_core::async_compat::time::sleep(Duration::from_secs(5)).await;
+        tokio::time::sleep(Duration::from_secs(5)).await;
     }
 }
 
@@ -146,25 +136,20 @@ pub(crate) async fn query_udp_public_addr_loop(
                 }
             }
         }
-        rust_p2p_core::async_compat::time::sleep(Duration::from_secs(12)).await;
+        tokio::time::sleep(Duration::from_secs(12)).await;
     }
 }
 
 async fn stun_tcp_read(tcp_stream: &mut TcpStream) -> io::Result<SocketAddr> {
     let mut head = [0; 20];
-    match rust_p2p_core::async_compat::time::timeout(
-        Duration::from_secs(5),
-        tcp_stream.read_exact(&mut head),
-    )
-    .await
-    {
+    match tokio::time::timeout(Duration::from_secs(5), tcp_stream.read_exact(&mut head)).await {
         Ok(rs) => rs?,
         Err(_) => Err(io::Error::from(io::ErrorKind::TimedOut))?,
     };
     let len = u16::from_be_bytes([head[2], head[3]]) as usize;
     let mut buf = vec![0; len + 20];
     buf[..20].copy_from_slice(&head);
-    match rust_p2p_core::async_compat::time::timeout(
+    match tokio::time::timeout(
         Duration::from_secs(5),
         tcp_stream.read_exact(&mut buf[20..]),
     )

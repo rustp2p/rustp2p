@@ -205,7 +205,7 @@ impl ExtensiblePipeWriter {
         let (sender, mut receiver) = tachyonix::channel::<BytesMut>(32);
         let collect = self.write_half_collect.clone();
         collect.insert(route_key, sender.clone());
-        crate::async_compat::spawn(async move {
+        tokio::spawn(async move {
             while let Ok(data) = receiver.recv().await {
                 if let Err(e) = w.write_all(&data).await {
                     log::debug!("ExtendWrite {route_key:?},{e:?}");

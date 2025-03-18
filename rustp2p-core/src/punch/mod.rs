@@ -125,9 +125,7 @@ impl<PeerID: Hash + Eq + Clone> Puncher<PeerID> {
         };
         let peer_nat_info = punch_info.peer_nat_info;
         let punch_model = punch_info.punch_model;
-        #[cfg(feature = "use-async-std")]
-        type Scope<'a, T> = async_scoped::AsyncStdScope<'a, T>;
-        #[cfg(feature = "use-tokio")]
+
         type Scope<'a, T> = async_scoped::TokioScope<'a, T>;
         Scope::scope_and_block(|s| {
             if let Some(tcp_pipe_writer) = self.tcp_pipe_writer.as_ref() {
@@ -168,7 +166,7 @@ impl<PeerID: Hash + Eq + Clone> Puncher<PeerID> {
         addr: SocketAddr,
         ttl: Option<u32>,
     ) {
-        match crate::async_compat::time::timeout(
+        match tokio::time::timeout(
             Duration::from_secs(3),
             tcp_pipe_writer.send_to_addr_multi0(buf.into(), addr, ttl),
         )
@@ -329,7 +327,7 @@ impl<PeerID: Hash + Eq + Clone> Puncher<PeerID> {
                 if let Err(e) = udp_pipe_writer.try_send_to_addr(buf, addr) {
                     log::info!("{addr},{e:?}");
                 }
-                crate::async_compat::time::sleep(Duration::from_millis(2)).await
+                tokio::time::sleep(Duration::from_millis(2)).await
             }
         }
         Ok(ports.len())

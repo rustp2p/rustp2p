@@ -18,9 +18,7 @@ rand = { workspace = true }
 crossbeam-utils = { workspace = true }
 crossbeam-queue = { workspace = true }
 tachyonix = { workspace = true }
-tokio = { workspace = true, optional = true }
-async-std = { workspace = true, optional = true }
-async-io = { workspace = true, optional = true }
+tokio = { workspace = true }
 futures-util = { workspace = true, optional = true }
 
 async-broadcast = "0.7"
@@ -30,7 +28,7 @@ network-interface = "2.0"
 futures = "0.3"
 stun-format = { version = "1.0", features = ["fmt", "rfc3489"] }
 serde = { version = "1.0", features = ["derive"] }
-async-scoped = { version = "0.9", optional = true }
+async-scoped = { version = "0.9", features = ["use-tokio"] }
 async-lock = "3.4"
 libc = "0.2"
 dyn-clone = "1.0"
@@ -45,10 +43,6 @@ windows-sys = { version = "0.59.0", features = ["Win32_Foundation",
     "Win32_System_Threading",
     "Win32_System_WindowsProgramming", ] }
 
-[features]
-default = ["use-tokio"]
-use-tokio = ["tokio", "async-scoped/use-tokio"]
-use-async-std = ["async-std", "async-io", "futures-util", "async-scoped/use-async-std"]
 
 [dev-dependencies]
 tokio = { version = "1.42", features = ["full"] }

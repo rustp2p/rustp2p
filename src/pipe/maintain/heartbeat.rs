@@ -18,7 +18,7 @@ pub async fn heartbeat_loop(pipe_writer: TunnelTransmit, heartbeat_interval: Dur
             log::warn!("heartbeat_request e={e:?}");
         }
 
-        rust_p2p_core::async_compat::time::sleep(heartbeat_interval).await;
+        tokio::time::sleep(heartbeat_interval).await;
         count += 1;
     }
 }
@@ -92,7 +92,7 @@ async fn direct_heartbeat_request(
                 }
             },
         }
-        rust_p2p_core::async_compat::time::sleep(Duration::from_millis(3)).await;
+        tokio::time::sleep(Duration::from_millis(3)).await;
     }
 }
 
@@ -119,7 +119,7 @@ async fn route_table_heartbeat_request(
             } else {
                 sent_relay_ids.insert(node_id);
             }
-            rust_p2p_core::async_compat::time::sleep(Duration::from_millis(3)).await;
+            tokio::time::sleep(Duration::from_millis(3)).await;
         }
     }
     (sent_p2p_ids, sent_relay_ids)

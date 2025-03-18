@@ -1,4 +1,3 @@
-pub mod async_compat;
 pub mod extend;
 pub mod idle;
 pub mod nat;

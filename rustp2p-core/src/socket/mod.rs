@@ -39,7 +39,7 @@ pub(crate) async fn connect_tcp(
     bind_port: u16,
     default_interface: Option<&LocalInterface>,
     ttl: Option<u32>,
-) -> io::Result<crate::async_compat::net::TcpStream> {
+) -> io::Result<tokio::net::TcpStream> {
     let socket = create_tcp0(addr, bind_port, default_interface, ttl)?;
     socket.writable().await?;
     Ok(socket)
@@ -50,7 +50,7 @@ pub(crate) fn create_tcp0(
     bind_port: u16,
     default_interface: Option<&LocalInterface>,
     ttl: Option<u32>,
-) -> io::Result<crate::async_compat::net::TcpStream> {
+) -> io::Result<tokio::net::TcpStream> {
     let v4 = addr.is_ipv4();
     let socket = if v4 {
         socket2::Socket::new(
@@ -94,7 +94,7 @@ pub(crate) fn create_tcp0(
         Err(ref e) if e.raw_os_error() == Some(libc::EINPROGRESS) => {}
         Err(e) => Err(e)?,
     }
-    crate::async_compat::net::TcpStream::from_std(socket.into())
+    tokio::net::TcpStream::from_std(socket.into())
 }
 
 pub(crate) fn create_tcp_listener(addr: SocketAddr) -> io::Result<std::net::TcpListener> {

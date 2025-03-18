@@ -7,8 +7,7 @@ use crate::protocol::node_id::{GroupCode, NodeID};
 use crate::protocol::protocol_type::ProtocolType;
 use crate::protocol::{broadcast, NetPacket, HEAD_LEN};
 use async_shutdown::ShutdownManager;
-#[cfg(feature = "use-async-std")]
-use async_std::channel::Sender;
+
 use bytes::BytesMut;
 use dashmap::DashMap;
 pub use pipe_context::NodeAddress;
@@ -26,7 +25,6 @@ use std::net::SocketAddr;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 use std::time::UNIX_EPOCH;
-#[cfg(feature = "use-tokio")]
 use tokio::sync::mpsc::Sender;
 
 mod maintain;
@@ -137,10 +135,8 @@ impl SocketManager {
             shutdown_manager: shutdown_manager.clone(),
             recycle_buf: recycle_buf.clone(),
         };
-        let (active_punch_sender, active_punch_receiver) =
-            rust_p2p_core::async_compat::mpsc::channel(3);
-        let (passive_punch_sender, passive_punch_receiver) =
-            rust_p2p_core::async_compat::mpsc::channel(3);
+        let (active_punch_sender, active_punch_receiver) = tokio::sync::mpsc::channel(3);
+        let (passive_punch_sender, passive_punch_receiver) = tokio::sync::mpsc::channel(3);
         let join_set = maintain::start_task(
             &pipe_writer,
             idle_route_manager,
@@ -155,16 +151,10 @@ impl SocketManager {
             active_punch_receiver,
             passive_punch_receiver,
         );
-        #[cfg(feature = "use-tokio")]
         let mut join_set = join_set;
-        #[cfg(feature = "use-tokio")]
         let fut = shutdown_manager
             .wrap_cancel(async move { while join_set.join_next().await.is_some() {} });
-        #[cfg(feature = "use-async-std")]
-        let fut = shutdown_manager.wrap_cancel(async move {
-            join_set.await;
-        });
-        rust_p2p_core::async_compat::spawn(async move {
+        tokio::spawn(async move {
             if fut.await.is_err() {
                 log::debug!("recv shutdown signal: built-in maintain tasks are shutdown");
             }
@@ -1030,22 +1020,11 @@ impl TunnelReceive {
                     .tunnel_transmit
                     .allocate_send_packet_proto(ProtocolType::PunchConsultReply, data.len())?;
                 send_packet.set_payload(&data);
-                #[cfg(feature = "use-tokio")]
                 if let Ok(sender) = self.passive_punch_sender.try_reserve() {
                     self.tunnel_transmit
                         .send_packet_to(send_packet, &src_id)
                         .await?;
                     sender.send((src_id, punch_info))
-                }
-                #[cfg(feature = "use-async-std")]
-                if self
-                    .passive_punch_sender
-                    .try_send((src_id, punch_info))
-                    .is_ok()
-                {
-                    self.pipe_writer
-                        .send_packet_to(send_packet, &src_id)
-                        .await?;
                 }
             }
             ProtocolType::PunchConsultReply => {
@@ -1117,7 +1096,7 @@ impl TunnelReceive {
             // Reply to reachable nodes of other groups
             let pipe_writer = self.tunnel_transmit.clone();
             let other_route_table = self.pipe_context.other_route_table.clone();
-            rust_p2p_core::async_compat::spawn(async move {
+            tokio::spawn(async move {
                 if let Err(e) = id_route_reply(
                     pipe_writer,
                     other_route_table,

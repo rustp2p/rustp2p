@@ -3,9 +3,7 @@ use crate::protocol::node_id::NodeID;
 use rust_p2p_core::punch::{PunchConsultInfo, Puncher};
 use rust_p2p_core::socket::LocalInterface;
 use std::time::Duration;
-#[cfg(feature = "use-tokio")]
 use tokio::sync::mpsc::Receiver;
-#[cfg(feature = "use-tokio")]
 use tokio::task::JoinSet;
 
 mod heartbeat;
@@ -16,7 +14,6 @@ mod punch_consult;
 mod query_public_addr;
 
 #[allow(clippy::too_many_arguments)]
-#[cfg(feature = "use-tokio")]
 pub(crate) fn start_task(
     pipe_writer: &TunnelTransmit,
     idle_route_manager: rust_p2p_core::idle::IdleRouteManager<NodeID>,
@@ -76,54 +73,4 @@ pub(crate) fn start_task(
         puncher,
     ));
     join_set
-}
-#[cfg(feature = "use-async-std")]
-use async_std::channel::Receiver;
-#[cfg(feature = "use-async-std")]
-use futures_util::future::BoxFuture;
-#[cfg(feature = "use-async-std")]
-use futures_util::FutureExt;
-#[cfg(feature = "use-async-std")]
-use rust_p2p_core::async_compat::futures;
-
-#[allow(clippy::too_many_arguments)]
-#[cfg(feature = "use-async-std")]
-pub(crate) fn start_task(
-    pipe_writer: &TunnelTransmit,
-    idle_route_manager: rust_p2p_core::idle::IdleRouteManager<NodeID>,
-    puncher: Puncher<NodeID>,
-    query_id_interval: Duration,
-    query_id_max_num: usize,
-    heartbeat_interval: Duration,
-    route_idle_time: Duration,
-    tcp_stun_servers: Vec<String>,
-    udp_stun_servers: Vec<String>,
-    default_interface: Option<LocalInterface>,
-    active_receiver: Receiver<(NodeID, PunchConsultInfo)>,
-    passive_receiver: Receiver<(NodeID, PunchConsultInfo)>,
-) -> futures::future::JoinAll<BoxFuture<'static, ()>> {
-    let join_set = vec![
-        heartbeat::heartbeat_loop(pipe_writer.clone(), heartbeat_interval).boxed(),
-        idle::idle_check_loop(idle_route_manager).boxed(),
-        idle::other_group_idle_check_loop(pipe_writer.pipe_context.clone(), route_idle_time)
-            .boxed(),
-        id_route::id_route_query_loop(pipe_writer.clone(), query_id_interval, query_id_max_num)
-            .boxed(),
-        nat_query::nat_test_loop(
-            pipe_writer.clone(),
-            udp_stun_servers.clone(),
-            default_interface,
-        )
-        .boxed(),
-        query_public_addr::query_tcp_public_addr_loop(pipe_writer.clone(), tcp_stun_servers)
-            .boxed(),
-        query_public_addr::query_udp_public_addr_loop(pipe_writer.clone(), udp_stun_servers)
-            .boxed(),
-        punch_consult::punch_consult_loop(pipe_writer.clone(), puncher.clone()).boxed(),
-        punch_consult::punch_loop(true, active_receiver, pipe_writer.clone(), puncher.clone())
-            .boxed(),
-        punch_consult::punch_loop(false, passive_receiver, pipe_writer.clone(), puncher).boxed(),
-    ];
-
-    futures::future::join_all(join_set)
 }

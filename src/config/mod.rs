@@ -6,12 +6,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use bytes::{Buf, BytesMut};
 
-use rust_p2p_core::async_compat::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
+use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 
-#[cfg(feature = "use-async-std")]
-use async_std::prelude::*;
-
-#[cfg(feature = "use-tokio")]
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::pipe::{NodeAddress, PeerNodeAddress, RecvResult};
@@ -385,7 +381,6 @@ impl Decoder for LengthPrefixedDecoder {
         }
     }
 
-    #[cfg(feature = "use-tokio")]
     fn try_decode(&mut self, read: &mut OwnedReadHalf, src: &mut [u8]) -> io::Result<usize> {
         if src.len() < HEAD_LEN {
             return Err(io::Error::new(io::ErrorKind::Other, "too short"));

@@ -1,6 +1,3 @@
-use crate::async_compat::net::tcp::{AsyncReadExt, AsyncWriteExt};
-use crate::async_compat::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
-use crate::async_compat::net::{TcpListener, TcpStream};
 use crate::pipe::config::TcpPipeConfig;
 use crate::pipe::recycle::RecycleBuf;
 use crate::route::{Index, RouteKey};
@@ -19,6 +16,9 @@ use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Duration;
 use tachyonix::{Receiver, Sender};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
+use tokio::net::{TcpListener, TcpStream};
 
 pub struct TcpPipe {
     route_idle_time: Duration,
@@ -76,7 +76,7 @@ impl TcpPipe {
 impl TcpPipe {
     /// Accept `TCP` pipelines from this kind pipe
     pub async fn accept(&mut self) -> io::Result<TcpPipeLine> {
-        crate::select! {
+        tokio::select! {
             rs=self.connect_receiver.recv()=>{
                 let (route_key,read_half) = rs.
                     map_err(|_| io::Error::new(io::ErrorKind::Other,"connect_receiver done"))?;
@@ -143,7 +143,7 @@ impl TcpPipeLine {
     }
 
     pub(crate) async fn recv(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        match crate::async_compat::time::timeout(
+        match tokio::time::timeout(
             self.route_idle_time,
             self.decoder.decode(&mut self.tcp_read, buf),
         )
@@ -161,7 +161,7 @@ impl TcpPipeLine {
         if bufs.is_empty() || bufs.len() != sizes.len() {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "bufs error"));
         }
-        match crate::async_compat::time::timeout(
+        match tokio::time::timeout(
             self.route_idle_time,
             self.decoder.decode(&mut self.tcp_read, bufs[0].as_mut()),
         )
@@ -266,7 +266,7 @@ impl WriteHalfCollect {
         self.write_half_map.insert(index, s);
         let collect = self.clone();
         let recycle_buf = self.recycle_buf.clone();
-        crate::async_compat::spawn(async move {
+        tokio::spawn(async move {
             let mut vec_buf = Vec::with_capacity(16);
             const IO_SLICE_CAPACITY: usize = 16;
             let mut io_buffer: Vec<IoSlice> = Vec::with_capacity(IO_SLICE_CAPACITY);
