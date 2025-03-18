@@ -1,5 +1,5 @@
 use crate::pipe::pipe_context::DirectNodes;
-use crate::pipe::{NodeAddress, PipeWriter};
+use crate::pipe::{NodeAddress, TunnelTransmit};
 use crate::protocol::node_id::NodeID;
 use crate::protocol::protocol_type::ProtocolType;
 use crate::protocol::NetPacket;
@@ -9,7 +9,7 @@ use std::io;
 use std::time::Duration;
 
 pub async fn id_route_query_loop(
-    pipe_writer: PipeWriter,
+    pipe_writer: TunnelTransmit,
     query_id_interval: Duration,
     query_id_max_num: usize,
 ) {
@@ -24,7 +24,7 @@ pub async fn id_route_query_loop(
     }
 }
 
-async fn id_route_query(pipe_writer: &PipeWriter, query_id_max_num: usize) -> io::Result<()> {
+async fn id_route_query(pipe_writer: &TunnelTransmit, query_id_max_num: usize) -> io::Result<()> {
     let mut packet =
         if let Ok(packet) = pipe_writer.allocate_send_packet_proto(ProtocolType::IDRouteQuery, 4) {
             packet
@@ -46,7 +46,7 @@ async fn id_route_query(pipe_writer: &PipeWriter, query_id_max_num: usize) -> io
 async fn poll_direct_peer_node(
     direct_nodes: DirectNodes,
     sent_ids: HashSet<NodeID>,
-    pipe_writer: &PipeWriter,
+    pipe_writer: &TunnelTransmit,
     buf: &mut [u8],
 ) {
     let self_group_code = pipe_writer.pipe_context().load_group_code();
@@ -81,7 +81,7 @@ async fn poll_direct_peer_node(
 }
 
 async fn poll_route_table_peer_node(
-    pipe_writer: &PipeWriter,
+    pipe_writer: &TunnelTransmit,
     buf: &[u8],
     query_id_max_num: usize,
 ) -> HashSet<NodeID> {

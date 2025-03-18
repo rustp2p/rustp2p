@@ -1,5 +1,5 @@
 use crate::pipe::pipe_context::NodeAddress;
-use crate::pipe::PipeWriter;
+use crate::pipe::TunnelTransmit;
 use crate::protocol::node_id::{GroupCode, NodeID};
 use crate::protocol::protocol_type::ProtocolType;
 use crate::protocol::NetPacket;
@@ -7,7 +7,7 @@ use std::collections::HashSet;
 use std::io;
 use std::time::Duration;
 
-pub async fn heartbeat_loop(pipe_writer: PipeWriter, heartbeat_interval: Duration) {
+pub async fn heartbeat_loop(pipe_writer: TunnelTransmit, heartbeat_interval: Duration) {
     let mut count = 0;
     loop {
         if count % 3 == 2 {
@@ -23,7 +23,7 @@ pub async fn heartbeat_loop(pipe_writer: PipeWriter, heartbeat_interval: Duratio
     }
 }
 
-async fn heartbeat_request(pipe_writer: &PipeWriter) -> io::Result<()> {
+async fn heartbeat_request(pipe_writer: &TunnelTransmit) -> io::Result<()> {
     let mut packet =
         if let Ok(packet) = pipe_writer.allocate_send_packet_proto(ProtocolType::EchoRequest, 0) {
             packet
@@ -40,7 +40,7 @@ async fn heartbeat_request(pipe_writer: &PipeWriter) -> io::Result<()> {
     Ok(())
 }
 
-async fn timestamp_request(pipe_writer: &PipeWriter) -> io::Result<()> {
+async fn timestamp_request(pipe_writer: &TunnelTransmit) -> io::Result<()> {
     let mut packet = if let Ok(packet) =
         pipe_writer.allocate_send_packet_proto(ProtocolType::TimestampRequest, 4)
     {
@@ -64,7 +64,7 @@ async fn timestamp_request(pipe_writer: &PipeWriter) -> io::Result<()> {
 async fn direct_heartbeat_request(
     direct_nodes: Vec<(NodeAddress, Option<(GroupCode, NodeID)>)>,
     sent_ids: &HashSet<NodeID>,
-    pipe_writer: &PipeWriter,
+    pipe_writer: &TunnelTransmit,
     buf: &[u8],
 ) {
     let self_group_code = pipe_writer.pipe_context().load_group_code();
@@ -97,7 +97,7 @@ async fn direct_heartbeat_request(
 }
 
 async fn route_table_heartbeat_request(
-    pipe_writer: &PipeWriter,
+    pipe_writer: &TunnelTransmit,
     packet: &mut NetPacket<&mut [u8]>,
 ) -> (HashSet<NodeID>, HashSet<NodeID>) {
     let table = pipe_writer.pipe_writer.route_table().route_table();
@@ -126,7 +126,7 @@ async fn route_table_heartbeat_request(
 }
 async fn relay_heartbeat_request(
     sent_ids: HashSet<NodeID>,
-    pipe_writer: &PipeWriter,
+    pipe_writer: &TunnelTransmit,
     packet: &mut NetPacket<&mut [u8]>,
 ) {
     let group_code = pipe_writer.pipe_context().load_group_code();

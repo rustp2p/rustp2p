@@ -1,4 +1,4 @@
-use crate::pipe::PipeWriter;
+use crate::pipe::TunnelTransmit;
 use rust_p2p_core::async_compat::net::tcp::TcpStream;
 use std::collections::HashMap;
 use std::io;
@@ -12,7 +12,7 @@ use async_std::prelude::*;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 pub(crate) async fn query_tcp_public_addr_loop(
-    pipe_writer: PipeWriter,
+    pipe_writer: TunnelTransmit,
     tcp_stun_servers: Vec<String>,
 ) {
     log::debug!("tcp_stun_servers = {tcp_stun_servers:?}");
@@ -117,7 +117,7 @@ pub(crate) async fn query_tcp_public_addr_loop(
 }
 
 pub(crate) async fn query_udp_public_addr_loop(
-    pipe_writer: PipeWriter,
+    pipe_writer: TunnelTransmit,
     udp_stun_servers: Vec<String>,
 ) {
     log::debug!("udp_stun_servers = {udp_stun_servers:?}");

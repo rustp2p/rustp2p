@@ -1,4 +1,4 @@
-use crate::pipe::PipeWriter;
+use crate::pipe::TunnelTransmit;
 use crate::protocol::node_id::NodeID;
 use rust_p2p_core::punch::{PunchConsultInfo, Puncher};
 use rust_p2p_core::socket::LocalInterface;
@@ -18,7 +18,7 @@ mod query_public_addr;
 #[allow(clippy::too_many_arguments)]
 #[cfg(feature = "use-tokio")]
 pub(crate) fn start_task(
-    pipe_writer: &PipeWriter,
+    pipe_writer: &TunnelTransmit,
     idle_route_manager: rust_p2p_core::idle::IdleRouteManager<NodeID>,
     puncher: Puncher<NodeID>,
     query_id_interval: Duration,
@@ -89,7 +89,7 @@ use rust_p2p_core::async_compat::futures;
 #[allow(clippy::too_many_arguments)]
 #[cfg(feature = "use-async-std")]
 pub(crate) fn start_task(
-    pipe_writer: &PipeWriter,
+    pipe_writer: &TunnelTransmit,
     idle_route_manager: rust_p2p_core::idle::IdleRouteManager<NodeID>,
     puncher: Puncher<NodeID>,
     query_id_interval: Duration,

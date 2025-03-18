@@ -7,9 +7,9 @@ pub mod pipe;
 
 use crate::pipe::PeerNodeAddress;
 use cipher::Algorithm;
-use config::{PipeConfig, TcpPipeConfig, UdpPipeConfig};
+use config::{SocketManagerConfig, TcpPipeConfig, UdpPipeConfig};
 use flume::{Receiver, Sender};
-use pipe::{Pipe, PipeLine, PipeWriter, RecvUserData};
+use pipe::{RecvUserData, SocketManager, TunnelReceive, TunnelTransmit};
 use protocol::node_id::{GroupCode, NodeID};
 use rust_p2p_core::async_compat::JoinHandle;
 use std::sync::Arc;
@@ -17,7 +17,7 @@ use std::sync::Arc;
 #[derive(Clone)]
 pub struct EndPoint {
     receiver: Receiver<RecvUserData>,
-    sender: PipeWriter,
+    sender: TunnelTransmit,
     _handle: Arc<HandleOwner>,
 }
 struct HandleOwner {
@@ -88,7 +88,7 @@ impl Builder {
         self
     }
     pub async fn build(self) -> std::io::Result<EndPoint> {
-        let mut config = PipeConfig::empty()
+        let mut config = SocketManagerConfig::empty()
             .set_udp_pipe_config(
                 UdpPipeConfig::default().set_udp_ports(self.udp_ports.unwrap_or_default()),
             )
@@ -111,10 +111,10 @@ impl Builder {
         ))?);
 
         let (sender, receiver) = flume::unbounded();
-        let mut pipe = Pipe::new(config).await?;
-        let writer = pipe.writer();
+        let mut socket_manager = SocketManager::new(config).await?;
+        let writer = socket_manager.tunnel_transmit();
         let handle = rust_p2p_core::async_compat::spawn(async move {
-            while let Ok(line) = pipe.dispatch().await {
+            while let Ok(line) = socket_manager.dispatch().await {
                 rust_p2p_core::async_compat::spawn(handle(line, sender.clone()));
             }
         });
@@ -132,7 +132,7 @@ impl Default for Builder {
     }
 }
 
-async fn handle(mut line: PipeLine, sender: Sender<RecvUserData>) {
+async fn handle(mut line: TunnelReceive, sender: Sender<RecvUserData>) {
     let mut list = Vec::with_capacity(16);
     loop {
         let rs = match line.recv_multi(&mut list).await {

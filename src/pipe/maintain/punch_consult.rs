@@ -1,4 +1,4 @@
-use crate::pipe::PipeWriter;
+use crate::pipe::TunnelTransmit;
 use crate::protocol::node_id::NodeID;
 use crate::protocol::protocol_type::ProtocolType;
 use rand::seq::SliceRandom;
@@ -10,7 +10,7 @@ use tokio::sync::mpsc::Receiver;
 #[cfg(feature = "use-async-std")]
 use async_std::channel::Receiver;
 
-pub async fn punch_consult_loop(pipe_writer: PipeWriter, puncher: Puncher<NodeID>) {
+pub async fn punch_consult_loop(pipe_writer: TunnelTransmit, puncher: Puncher<NodeID>) {
     let mut seq = 0;
     rust_p2p_core::async_compat::time::sleep(Duration::from_secs(1)).await;
     let route_table = pipe_writer.pipe_writer.route_table();
@@ -69,7 +69,7 @@ pub async fn punch_consult_loop(pipe_writer: PipeWriter, puncher: Puncher<NodeID
 pub async fn punch_loop(
     active: bool,
     mut receiver: Receiver<(NodeID, PunchConsultInfo)>,
-    pipe_writer: PipeWriter,
+    pipe_writer: TunnelTransmit,
     puncher: Puncher<NodeID>,
 ) {
     #[cfg(feature = "use-tokio")]

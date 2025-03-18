@@ -1,4 +1,4 @@
-use crate::config::PipeConfig;
+use crate::config::SocketManagerConfig;
 use crate::extend::byte_pool::{Block, BufferPool};
 use crate::pipe::pipe_context::PipeContext;
 use crate::protocol::broadcast::RangeBroadcastPacket;
@@ -34,7 +34,7 @@ mod pipe_context;
 
 mod send_packet;
 
-pub struct Pipe {
+pub struct SocketManager {
     send_buffer_size: usize,
     recv_buffer_size: usize,
     pipe_context: PipeContext,
@@ -46,11 +46,11 @@ pub struct Pipe {
     recycle_buf: Option<RecycleBuf>,
 }
 
-impl Pipe {
-    pub async fn new(config: PipeConfig) -> io::Result<Pipe> {
+impl SocketManager {
+    pub async fn new(config: SocketManagerConfig) -> io::Result<SocketManager> {
         Box::pin(Self::new0(config)).await
     }
-    async fn new0(mut config: PipeConfig) -> io::Result<Pipe> {
+    async fn new0(mut config: SocketManagerConfig) -> io::Result<SocketManager> {
         let multi_pipeline = config.multi_pipeline;
         let send_buffer_size = config.send_buffer_size;
         let recv_buffer_size = config.recv_buffer_size;
@@ -130,7 +130,7 @@ impl Pipe {
             pipe_context.set_mapping_addrs(addrs);
         }
         let shutdown_manager = ShutdownManager::<()>::new();
-        let pipe_writer = PipeWriter {
+        let pipe_writer = TunnelTransmit {
             send_buffer_size,
             pipe_context: pipe_context.clone(),
             pipe_writer: pipe.writer_ref().to_owned(),
@@ -181,8 +181,8 @@ impl Pipe {
             recycle_buf,
         })
     }
-    pub fn writer(&self) -> PipeWriter {
-        PipeWriter {
+    pub fn tunnel_transmit(&self) -> TunnelTransmit {
+        TunnelTransmit {
             send_buffer_size: self.send_buffer_size,
             pipe_context: self.pipe_context.clone(),
             pipe_writer: self.pipe.writer_ref().to_owned(),
@@ -192,14 +192,14 @@ impl Pipe {
     }
 }
 
-impl Drop for Pipe {
+impl Drop for SocketManager {
     fn drop(&mut self) {
         _ = self.shutdown_manager.trigger_shutdown(());
     }
 }
 
-impl Pipe {
-    pub async fn dispatch(&mut self) -> io::Result<PipeLine> {
+impl SocketManager {
+    pub async fn dispatch(&mut self) -> io::Result<TunnelReceive> {
         if self.shutdown_manager.is_shutdown_triggered() {
             return Err(io::Error::new(io::ErrorKind::BrokenPipe, "shutdown"));
         }
@@ -210,11 +210,11 @@ impl Pipe {
         let recv_buff = Vec::with_capacity(BUF_SIZE);
         let recv_sizes = Vec::with_capacity(BUF_SIZE);
         let recv_addrs = Vec::with_capacity(BUF_SIZE);
-        Ok(PipeLine {
+        Ok(TunnelReceive {
             shutdown_manager: self.shutdown_manager.clone(),
             pipe_context: self.pipe_context.clone(),
             pipe_line,
-            pipe_writer: self.writer(),
+            tunnel_transmit: self.tunnel_transmit(),
             route_table: self.pipe.route_table().clone(),
             active_punch_sender: self.active_punch_sender.clone(),
             passive_punch_sender: self.passive_punch_sender.clone(),
@@ -228,7 +228,7 @@ impl Pipe {
 }
 
 #[derive(Clone)]
-pub struct PipeWriter {
+pub struct TunnelTransmit {
     send_buffer_size: usize,
     pipe_context: PipeContext,
     pipe_writer: rust_p2p_core::pipe::PipeWriter<NodeID>,
@@ -236,7 +236,7 @@ pub struct PipeWriter {
     recycle_buf: Option<RecycleBuf>,
 }
 
-impl PipeWriter {
+impl TunnelTransmit {
     pub fn pipe_context(&self) -> &PipeContext {
         &self.pipe_context
     }
@@ -505,11 +505,11 @@ impl PipeWriter {
     }
 }
 
-pub struct PipeLine {
+pub struct TunnelReceive {
     shutdown_manager: ShutdownManager<()>,
     pipe_context: PipeContext,
     pipe_line: rust_p2p_core::pipe::PipeLine,
-    pipe_writer: PipeWriter,
+    tunnel_transmit: TunnelTransmit,
     route_table: RouteTable<NodeID>,
     active_punch_sender: Sender<(NodeID, PunchConsultInfo)>,
     passive_punch_sender: Sender<(NodeID, PunchConsultInfo)>,
@@ -524,7 +524,7 @@ const BUF_SIZE: usize = 16;
 
 type RecvRs = Result<Result<RecvUserData, HandleError>, RecvError>;
 
-impl PipeLine {
+impl TunnelReceive {
     pub async fn next(&mut self) -> Result<Result<RecvUserData, HandleError>, RecvError> {
         self.next_process::<crate::config::DefaultInterceptor>(None)
             .await
@@ -747,10 +747,10 @@ impl PipeLine {
         buf: &NetPacket<B>,
         id: &NodeID,
     ) -> io::Result<()> {
-        self.pipe_writer.send_to_id(buf, id).await
+        self.tunnel_transmit.send_to_id(buf, id).await
     }
     pub(crate) async fn send_to_route(&self, buf: &[u8], route_key: &RouteKey) -> io::Result<()> {
-        self.pipe_writer.send_to_route(buf, route_key).await
+        self.tunnel_transmit.send_to_route(buf, route_key).await
     }
     async fn other_group_handle(
         &mut self,
@@ -1027,12 +1027,12 @@ impl PipeLine {
                     io::Error::new(io::ErrorKind::Other, format!("RmpEncodeError: {e:?}"))
                 })?;
                 let mut send_packet = self
-                    .pipe_writer
+                    .tunnel_transmit
                     .allocate_send_packet_proto(ProtocolType::PunchConsultReply, data.len())?;
                 send_packet.set_payload(&data);
                 #[cfg(feature = "use-tokio")]
                 if let Ok(sender) = self.passive_punch_sender.try_reserve() {
-                    self.pipe_writer
+                    self.tunnel_transmit
                         .send_packet_to(send_packet, &src_id)
                         .await?;
                     sender.send((src_id, punch_info))
@@ -1115,7 +1115,7 @@ impl PipeLine {
 
         if !self.pipe_context.other_route_table.is_empty() {
             // Reply to reachable nodes of other groups
-            let pipe_writer = self.pipe_writer.clone();
+            let pipe_writer = self.tunnel_transmit.clone();
             let other_route_table = self.pipe_context.other_route_table.clone();
             rust_p2p_core::async_compat::spawn(async move {
                 if let Err(e) = id_route_reply(
@@ -1168,7 +1168,7 @@ impl PipeLine {
 }
 
 async fn id_route_reply(
-    pipe_writer: PipeWriter,
+    pipe_writer: TunnelTransmit,
     other_route_table: Arc<DashMap<GroupCode, RouteTable<NodeID>>>,
     route_key: RouteKey,
     self_group_code: GroupCode,

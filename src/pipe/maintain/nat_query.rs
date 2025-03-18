@@ -1,11 +1,11 @@
 use crate::pipe::pipe_context::PipeContext;
-use crate::pipe::PipeWriter;
+use crate::pipe::TunnelTransmit;
 use rand::seq::SliceRandom;
 use rust_p2p_core::socket::LocalInterface;
 use std::time::Duration;
 
 pub(crate) async fn nat_test_loop(
-    pipe_writer: PipeWriter,
+    pipe_writer: TunnelTransmit,
     mut udp_stun_servers: Vec<String>,
     default_interface: Option<LocalInterface>,
 ) {
@@ -33,7 +33,7 @@ pub(crate) async fn nat_test_loop(
 }
 
 async fn nat_test(
-    pipe_writer: &PipeWriter,
+    pipe_writer: &TunnelTransmit,
     pipe_context: &PipeContext,
     udp_stun_servers: &[String],
     default_interface: Option<&LocalInterface>,
