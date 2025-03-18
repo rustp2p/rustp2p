@@ -10,7 +10,7 @@ use crate::pipe::extensible_pipe::{
     ExtensiblePipe, ExtensiblePipeLine, ExtensiblePipeWriter, ExtensiblePipeWriterRef,
 };
 use crate::pipe::tcp_pipe::{TcpPipe, TcpPipeLine, TcpPipeWriter};
-use crate::pipe::udp_pipe::{UdpPipe, UdpPipeLine, UdpPipeWriter, UdpPipeWriterRef};
+use crate::pipe::udp::{Tunnel, TunnelManager, UdpPipeWriter, UdpPipeWriterRef};
 use crate::punch::Puncher;
 use crate::route::route_table::RouteTable;
 use crate::route::{ConnectProtocol, RouteKey};
@@ -19,7 +19,7 @@ pub mod config;
 pub mod extensible_pipe;
 pub mod recycle;
 pub mod tcp_pipe;
-pub mod udp_pipe;
+pub mod udp;
 pub const DEFAULT_ADDRESS_V4: SocketAddr =
     SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0));
 pub const DEFAULT_ADDRESS_V6: SocketAddr =
@@ -31,7 +31,7 @@ pub fn pipe<PeerID: Hash + Eq + Clone>(config: PipeConfig) -> io::Result<PipeCom
     let route_table = RouteTable::new(config.load_balance, config.multi_pipeline);
     let udp_pipe = if let Some(mut udp_pipe_config) = config.udp_pipe_config {
         udp_pipe_config.main_pipeline_num = config.multi_pipeline;
-        Some(UdpPipe::new(udp_pipe_config)?)
+        Some(TunnelManager::new(udp_pipe_config)?)
     } else {
         None
     };
@@ -62,13 +62,13 @@ pub fn pipe<PeerID: Hash + Eq + Clone>(config: PipeConfig) -> io::Result<PipeCom
 
 pub struct Pipe<PeerID> {
     route_table: RouteTable<PeerID>,
-    udp_pipe: Option<UdpPipe>,
+    udp_pipe: Option<TunnelManager>,
     tcp_pipe: Option<TcpPipe>,
     extensible_pipe: Option<ExtensiblePipe>,
 }
 
 pub enum PipeLine {
-    Udp(UdpPipeLine),
+    Udp(Tunnel),
     Tcp(TcpPipeLine),
     Extend(ExtensiblePipeLine),
 }
@@ -111,9 +111,9 @@ async fn accept_tcp(tcp: Option<&mut TcpPipe>) -> io::Result<PipeLine> {
         futures::future::pending().await
     }
 }
-async fn accept_udp(udp: Option<&mut UdpPipe>) -> io::Result<PipeLine> {
+async fn accept_udp(udp: Option<&mut TunnelManager>) -> io::Result<PipeLine> {
     if let Some(udp_pipe) = udp {
-        Ok(PipeLine::Udp(udp_pipe.accept().await?))
+        Ok(PipeLine::Udp(udp_pipe.dispatch().await?))
     } else {
         futures::future::pending().await
     }
@@ -127,7 +127,7 @@ async fn accept_extend(extend: Option<&mut ExtensiblePipe>) -> io::Result<PipeLi
 }
 
 impl<PeerID> Pipe<PeerID> {
-    pub fn udp_pipe_ref(&mut self) -> Option<&mut UdpPipe> {
+    pub fn udp_pipe_ref(&mut self) -> Option<&mut TunnelManager> {
         self.udp_pipe.as_mut()
     }
     pub fn tcp_pipe_ref(&mut self) -> Option<&mut TcpPipe> {

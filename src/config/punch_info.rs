@@ -1,5 +1,5 @@
 use rust_p2p_core::nat::{NatInfo, NatType};
-use rust_p2p_core::pipe::udp_pipe::UDPIndex;
+use rust_p2p_core::pipe::udp::UDPIndex;
 use rust_p2p_core::punch::{PunchConsultInfo, PunchModelBox};
 use rust_p2p_core::route::Index;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};

@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use crate::pipe::recycle::RecycleBuf;
 use crate::pipe::tcp_pipe::{BytesInitCodec, InitCodec};
-use crate::pipe::udp_pipe::Model;
+use crate::pipe::udp::Model;
 use crate::socket::LocalInterface;
 
 pub(crate) const MAX_SYMMETRIC_PIPELINE_NUM: usize = 200;
@@ -26,7 +26,7 @@ pub struct PipeConfig {
     pub load_balance: LoadBalance,
     pub multi_pipeline: usize,
     pub route_idle_time: Duration,
-    pub udp_pipe_config: Option<UdpPipeConfig>,
+    pub udp_pipe_config: Option<UdpTunnelManagerConfig>,
     pub tcp_pipe_config: Option<TcpPipeConfig>,
     pub enable_extend: bool,
 }
@@ -49,7 +49,7 @@ pub(crate) const UDP_SUB_PIPELINE_NUM: usize = 82;
 
 impl PipeConfig {
     pub fn new(tcp_init_codec: Box<dyn InitCodec>) -> PipeConfig {
-        let udp_pipe_config = Some(UdpPipeConfig::default());
+        let udp_pipe_config = Some(UdpTunnelManagerConfig::default());
         let tcp_pipe_config = Some(TcpPipeConfig::new(tcp_init_codec));
         Self {
             load_balance: LoadBalance::MinHopLowestLatency,
@@ -89,7 +89,7 @@ impl PipeConfig {
         self.enable_extend = enable_extend;
         self
     }
-    pub fn set_udp_pipe_config(mut self, udp_pipe_config: UdpPipeConfig) -> Self {
+    pub fn set_udp_pipe_config(mut self, udp_pipe_config: UdpTunnelManagerConfig) -> Self {
         self.udp_pipe_config.replace(udp_pipe_config);
         self
     }
@@ -186,7 +186,7 @@ impl TcpPipeConfig {
 }
 
 #[derive(Clone)]
-pub struct UdpPipeConfig {
+pub struct UdpTunnelManagerConfig {
     pub main_pipeline_num: usize,
     pub sub_pipeline_num: usize,
     pub model: Model,
@@ -196,7 +196,7 @@ pub struct UdpPipeConfig {
     pub recycle_buf: Option<RecycleBuf>,
 }
 
-impl Default for UdpPipeConfig {
+impl Default for UdpTunnelManagerConfig {
     fn default() -> Self {
         Self {
             main_pipeline_num: MULTI_PIPELINE,
@@ -210,7 +210,7 @@ impl Default for UdpPipeConfig {
     }
 }
 
-impl UdpPipeConfig {
+impl UdpTunnelManagerConfig {
     pub fn check(&self) -> io::Result<()> {
         if self.main_pipeline_num == 0 {
             return Err(io::Error::new(

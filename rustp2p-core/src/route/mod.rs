@@ -60,7 +60,7 @@ impl From<(RouteKey, u8)> for Route {
     }
 }
 
-use crate::pipe::udp_pipe::UDPIndex;
+use crate::pipe::udp::UDPIndex;
 #[non_exhaustive]
 #[derive(Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash, Debug)]
 pub enum Index {

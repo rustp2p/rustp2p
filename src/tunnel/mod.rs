@@ -234,7 +234,7 @@ impl TunnelTransmit {
         if self.shutdown_manager.is_shutdown_triggered() {
             return Err(io::Error::new(io::ErrorKind::BrokenPipe, "shutdown"));
         }
-        use rust_p2p_core::pipe::udp_pipe::Model;
+        use rust_p2p_core::pipe::udp::Model;
         match nat_type {
             NatType::Cone => {
                 if let Some(writer) = self.pipe_writer.udp_pipe_writer() {

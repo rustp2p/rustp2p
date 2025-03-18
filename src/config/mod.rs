@@ -17,7 +17,7 @@ pub use rust_p2p_core::nat::*;
 pub use rust_p2p_core::pipe::config::LoadBalance;
 use rust_p2p_core::pipe::recycle::RecycleBuf;
 use rust_p2p_core::pipe::tcp_pipe::{Decoder, Encoder, InitCodec};
-pub use rust_p2p_core::pipe::udp_pipe::Model;
+pub use rust_p2p_core::pipe::udp::Model;
 pub use rust_p2p_core::punch::config::{PunchModel, PunchModelBox};
 pub use rust_p2p_core::route::*;
 pub use rust_p2p_core::socket::LocalInterface;
@@ -88,7 +88,7 @@ impl Default for TunnelManagerConfig {
             #[cfg(any(feature = "aes-gcm", feature = "chacha20-poly1305"))]
             encryption: None,
             default_interface: None,
-            use_v6: rust_p2p_core::pipe::config::UdpPipeConfig::default()
+            use_v6: rust_p2p_core::pipe::config::UdpTunnelManagerConfig::default()
                 .set_use_v6(true)
                 .check()
                 .is_ok(),
@@ -284,7 +284,7 @@ impl From<TunnelManagerConfig> for rust_p2p_core::pipe::config::PipeConfig {
             None
         };
         let udp_pipe_config = value.udp_pipe_config.map(|v| {
-            let mut config: rust_p2p_core::pipe::config::UdpPipeConfig = v.into();
+            let mut config: rust_p2p_core::pipe::config::UdpTunnelManagerConfig = v.into();
             config.recycle_buf.clone_from(&recycle_buf);
             config.use_v6 = value.use_v6;
             config
@@ -312,9 +312,9 @@ impl From<TunnelManagerConfig> for rust_p2p_core::pipe::config::PipeConfig {
     }
 }
 
-impl From<UdpPipeConfig> for rust_p2p_core::pipe::config::UdpPipeConfig {
+impl From<UdpPipeConfig> for rust_p2p_core::pipe::config::UdpTunnelManagerConfig {
     fn from(value: UdpPipeConfig) -> Self {
-        rust_p2p_core::pipe::config::UdpPipeConfig {
+        rust_p2p_core::pipe::config::UdpTunnelManagerConfig {
             main_pipeline_num: value.main_pipeline_num,
             sub_pipeline_num: value.sub_pipeline_num,
             model: value.model,

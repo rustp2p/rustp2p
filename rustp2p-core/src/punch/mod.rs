@@ -12,7 +12,7 @@ use rand::Rng;
 
 use crate::nat::{NatInfo, NatType};
 use crate::pipe::tcp_pipe::TcpPipeWriter;
-use crate::pipe::udp_pipe::UdpPipeWriter;
+use crate::pipe::udp::UdpPipeWriter;
 use crate::pipe::Pipe;
 use crate::route::route_table::RouteTable;
 pub use config::*;

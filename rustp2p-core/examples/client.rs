@@ -22,7 +22,7 @@ use env_logger::Env;
 use parking_lot::Mutex;
 
 use rust_p2p_core::nat::NatInfo;
-use rust_p2p_core::pipe::config::{PipeConfig, TcpPipeConfig, UdpPipeConfig};
+use rust_p2p_core::pipe::config::{PipeConfig, TcpPipeConfig, UdpTunnelManagerConfig};
 use rust_p2p_core::pipe::tcp_pipe::LengthPrefixedInitCodec;
 use rust_p2p_core::pipe::{pipe, PipeLine, PipeWriter};
 use rust_p2p_core::punch::{PunchInfo, PunchModelBoxes, Puncher};
@@ -68,7 +68,7 @@ async fn main() {
         ConnectProtocol::UDP
     };
     log::info!("my_id:{my_id},server:{server}");
-    let udp_config = UdpPipeConfig::default();
+    let udp_config = UdpTunnelManagerConfig::default();
     let tcp_config = TcpPipeConfig::new(Box::new(LengthPrefixedInitCodec));
     let config = PipeConfig::empty()
         .set_udp_pipe_config(udp_config)

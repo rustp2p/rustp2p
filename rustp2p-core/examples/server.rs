@@ -1,7 +1,7 @@
 use bytes::{BufMut, BytesMut};
 use env_logger::Env;
 
-use rust_p2p_core::pipe::config::{PipeConfig, TcpPipeConfig, UdpPipeConfig};
+use rust_p2p_core::pipe::config::{PipeConfig, TcpPipeConfig, UdpTunnelManagerConfig};
 use rust_p2p_core::pipe::tcp_pipe::LengthPrefixedInitCodec;
 use rust_p2p_core::pipe::{pipe, PipeLine, PipeWriter};
 use rust_p2p_core::route::route_table::RouteTable;
@@ -35,7 +35,7 @@ pub const MY_SERVER_ID: u32 = 0;
 #[tokio::main]
 async fn main() {
     env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
-    let udp_config = UdpPipeConfig::default().set_simple_udp_port(3000);
+    let udp_config = UdpTunnelManagerConfig::default().set_simple_udp_port(3000);
     let tcp_config = TcpPipeConfig::new(Box::new(LengthPrefixedInitCodec)).set_tcp_port(3000);
     let config = PipeConfig::empty()
         .set_main_pipeline_num(1)
