@@ -1,10 +1,10 @@
 use std::io;
 use std::time::Duration;
 
-use crate::pipe::recycle::RecycleBuf;
-use crate::pipe::tcp::{BytesInitCodec, InitCodec};
-use crate::pipe::udp::Model;
 use crate::socket::LocalInterface;
+use crate::tunnel::recycle::RecycleBuf;
+use crate::tunnel::tcp::{BytesInitCodec, InitCodec};
+use crate::tunnel::udp::Model;
 
 pub(crate) const MAX_SYMMETRIC_PIPELINE_NUM: usize = 200;
 pub(crate) const MAX_MAIN_PIPELINE_NUM: usize = 10;
@@ -27,7 +27,7 @@ pub struct PipeConfig {
     pub multi_pipeline: usize,
     pub route_idle_time: Duration,
     pub udp_pipe_config: Option<UdpTunnelManagerConfig>,
-    pub tcp_pipe_config: Option<TcpPipeConfig>,
+    pub tcp_pipe_config: Option<TcpTunnelManagerConfig>,
     pub enable_extend: bool,
 }
 
@@ -50,7 +50,7 @@ pub(crate) const UDP_SUB_PIPELINE_NUM: usize = 82;
 impl PipeConfig {
     pub fn new(tcp_init_codec: Box<dyn InitCodec>) -> PipeConfig {
         let udp_pipe_config = Some(UdpTunnelManagerConfig::default());
-        let tcp_pipe_config = Some(TcpPipeConfig::new(tcp_init_codec));
+        let tcp_pipe_config = Some(TcpTunnelManagerConfig::new(tcp_init_codec));
         Self {
             load_balance: LoadBalance::MinHopLowestLatency,
             multi_pipeline: MULTI_PIPELINE,
@@ -93,7 +93,7 @@ impl PipeConfig {
         self.udp_pipe_config.replace(udp_pipe_config);
         self
     }
-    pub fn set_tcp_pipe_config(mut self, tcp_pipe_config: TcpPipeConfig) -> Self {
+    pub fn set_tcp_pipe_config(mut self, tcp_pipe_config: TcpTunnelManagerConfig) -> Self {
         self.tcp_pipe_config.replace(tcp_pipe_config);
         self
     }
@@ -109,7 +109,7 @@ impl PipeConfig {
 }
 
 #[derive(Clone)]
-pub struct TcpPipeConfig {
+pub struct TcpTunnelManagerConfig {
     pub route_idle_time: Duration,
     pub tcp_multiplexing_limit: usize,
     pub default_interface: Option<LocalInterface>,
@@ -119,7 +119,7 @@ pub struct TcpPipeConfig {
     pub recycle_buf: Option<RecycleBuf>,
 }
 
-impl Default for TcpPipeConfig {
+impl Default for TcpTunnelManagerConfig {
     fn default() -> Self {
         Self {
             route_idle_time: ROUTE_IDLE_TIME,
@@ -133,8 +133,8 @@ impl Default for TcpPipeConfig {
     }
 }
 
-impl TcpPipeConfig {
-    pub fn new(init_codec: Box<dyn InitCodec>) -> TcpPipeConfig {
+impl TcpTunnelManagerConfig {
+    pub fn new(init_codec: Box<dyn InitCodec>) -> TcpTunnelManagerConfig {
         Self {
             route_idle_time: ROUTE_IDLE_TIME,
             tcp_multiplexing_limit: MULTI_PIPELINE,

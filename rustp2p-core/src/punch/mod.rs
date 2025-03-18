@@ -11,10 +11,10 @@ use rand::seq::SliceRandom;
 use rand::Rng;
 
 use crate::nat::{NatInfo, NatType};
-use crate::pipe::tcp::TcpPipeWriter;
-use crate::pipe::udp;
-use crate::pipe::Pipe;
+
 use crate::route::route_table::RouteTable;
+use crate::tunnel::TunnelManager;
+use crate::tunnel::{tcp, udp};
 pub use config::*;
 pub mod config;
 
@@ -27,17 +27,17 @@ pub struct Puncher<PeerID> {
     sym_record: Arc<Mutex<HashMap<PeerID, usize>>>,
     count_record: Arc<Mutex<HashMap<PeerID, (usize, usize)>>>,
     udp_socket_manager: Option<Arc<udp::SocketManager>>,
-    tcp_pipe_writer: Option<TcpPipeWriter>,
+    tcp_socket_manager: Option<Arc<tcp::SocketManager>>,
 }
 
-impl<PeerID> From<&Pipe<PeerID>> for Puncher<PeerID> {
-    fn from(value: &Pipe<PeerID>) -> Self {
-        let tcp_pipe_writer = value.shared_tcp_socket_manager();
+impl<PeerID> From<&TunnelManager<PeerID>> for Puncher<PeerID> {
+    fn from(value: &TunnelManager<PeerID>) -> Self {
+        let tcp_socket_manager = value.shared_tcp_socket_manager();
         let udp_socket_manager = value.shared_udp_socket_manager();
         Self::new(
             value.route_table().clone(),
             udp_socket_manager,
-            tcp_pipe_writer,
+            tcp_socket_manager,
         )
     }
 }
@@ -46,7 +46,7 @@ impl<PeerID> Puncher<PeerID> {
     pub fn new(
         route_table: RouteTable<PeerID>,
         udp_socket_manager: Option<Arc<udp::SocketManager>>,
-        tcp_pipe_writer: Option<TcpPipeWriter>,
+        tcp_socket_manager: Option<Arc<tcp::SocketManager>>,
     ) -> Puncher<PeerID> {
         let mut port_vec: Vec<u16> = (1..=65535).collect();
         let mut rng = rand::rng();
@@ -57,7 +57,7 @@ impl<PeerID> Puncher<PeerID> {
             sym_record: Arc::new(Mutex::new(HashMap::new())),
             count_record: Arc::new(Mutex::new(HashMap::new())),
             udp_socket_manager,
-            tcp_pipe_writer,
+            tcp_socket_manager,
         }
     }
 }
@@ -127,7 +127,7 @@ impl<PeerID: Hash + Eq + Clone> Puncher<PeerID> {
 
         type Scope<'a, T> = async_scoped::TokioScope<'a, T>;
         Scope::scope_and_block(|s| {
-            if let Some(tcp_pipe_writer) = self.tcp_pipe_writer.as_ref() {
+            if let Some(tcp_pipe_writer) = self.tcp_socket_manager.as_ref() {
                 for addr in &peer_nat_info.mapping_tcp_addr {
                     s.spawn(async move {
                         Self::connect_tcp(tcp_pipe_writer, buf, *addr, ttl).await;
@@ -160,7 +160,7 @@ impl<PeerID: Hash + Eq + Clone> Puncher<PeerID> {
         Ok(())
     }
     async fn connect_tcp(
-        tcp_pipe_writer: &TcpPipeWriter,
+        tcp_pipe_writer: &tcp::SocketManager,
         buf: &[u8],
         addr: SocketAddr,
         ttl: Option<u32>,
@@ -309,7 +309,7 @@ impl<PeerID: Hash + Eq + Clone> Puncher<PeerID> {
 
     async fn punch_symmetric(
         &self,
-        udp_pipe_writer: &UdpPipeWriter,
+        udp_pipe_writer: &udp::SocketManager,
         ports: &[u16],
         buf: &[u8],
         ips: &Vec<Ipv4Addr>,

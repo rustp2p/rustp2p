@@ -2,14 +2,12 @@ use bytes::BytesMut;
 use std::hash::Hash;
 use std::io;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
-use tcp::TcpPipeWriterRef;
 
 use crate::idle::IdleRouteManager;
-use crate::pipe::config::PipeConfig;
-use crate::pipe::extensible_pipe::{
+use crate::tunnel::config::PipeConfig;
+use crate::tunnel::extensible_pipe::{
     ExtensiblePipe, ExtensiblePipeLine, ExtensiblePipeWriter, ExtensiblePipeWriterRef,
 };
-use crate::pipe::tcp::{TcpPipeLine, TcpPipeWriter, TunnelManager};
 
 use crate::punch::Puncher;
 use crate::route::route_table::RouteTable;
@@ -27,7 +25,11 @@ pub const DEFAULT_ADDRESS_V4: SocketAddr =
 pub const DEFAULT_ADDRESS_V6: SocketAddr =
     SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, 0));
 
-pub type PipeComponent<PeerID> = (Pipe<PeerID>, Puncher<PeerID>, IdleRouteManager<PeerID>);
+pub type PipeComponent<PeerID> = (
+    TunnelManager<PeerID>,
+    Puncher<PeerID>,
+    IdleRouteManager<PeerID>,
+);
 /// Construct the needed components for p2p communication with the given tunnel configuration
 pub fn pipe<PeerID: Hash + Eq + Clone>(config: PipeConfig) -> io::Result<PipeComponent<PeerID>> {
     let route_table = RouteTable::new(config.load_balance, config.multi_pipeline);
@@ -37,7 +39,7 @@ pub fn pipe<PeerID: Hash + Eq + Clone>(config: PipeConfig) -> io::Result<PipeCom
     } else {
         None
     };
-    let tcp_pipe = if let Some(mut tcp_pipe_config) = config.tcp_pipe_config {
+    let tcp_tunnel_manager = if let Some(mut tcp_pipe_config) = config.tcp_pipe_config {
         tcp_pipe_config.tcp_multiplexing_limit = config.multi_pipeline;
         Some(tcp::TunnelManager::new(tcp_pipe_config)?)
     } else {
@@ -48,10 +50,10 @@ pub fn pipe<PeerID: Hash + Eq + Clone>(config: PipeConfig) -> io::Result<PipeCom
     } else {
         None
     };
-    let pipe = Pipe {
+    let pipe = TunnelManager {
         route_table: route_table.clone(),
         udp_tunnel_manager,
-        tcp_pipe,
+        tcp_tunnel_manager,
         extensible_pipe,
     };
     let puncher = Puncher::from(&pipe);
@@ -62,35 +64,35 @@ pub fn pipe<PeerID: Hash + Eq + Clone>(config: PipeConfig) -> io::Result<PipeCom
     ))
 }
 
-pub struct Pipe<PeerID> {
+pub struct TunnelManager<PeerID> {
     route_table: RouteTable<PeerID>,
     udp_tunnel_manager: Option<udp::TunnelManager>,
-    tcp_pipe: Option<tcp::TunnelManager>,
+    tcp_tunnel_manager: Option<tcp::TunnelManager>,
     extensible_pipe: Option<ExtensiblePipe>,
 }
 
 pub enum PipeLine {
     Udp(udp::Tunnel),
-    Tcp(TcpPipeLine),
+    Tcp(tcp::Tunnel),
     Extend(ExtensiblePipeLine),
 }
 
 #[derive(Clone)]
-pub struct PipeWriter<PeerID> {
+pub struct SocketManager<PeerID> {
     route_table: RouteTable<PeerID>,
     udp_socket_manager: Option<Arc<udp::SocketManager>>,
-    tcp_pipe_writer: Option<TcpPipeWriter>,
+    tcp_socket_manager: Option<Arc<tcp::SocketManager>>,
     extensible_pipe_writer: Option<ExtensiblePipeWriter>,
 }
 
-impl<PeerID> Pipe<PeerID> {
+impl<PeerID> TunnelManager<PeerID> {
     /// Accept pipelines from a given `tunnel`
     pub async fn accept(&mut self) -> io::Result<PipeLine> {
         tokio::select! {
             rs=accept_udp(self.udp_tunnel_manager.as_mut())=>{
                 rs
             }
-            rs=accept_tcp(self.tcp_pipe.as_mut())=>{
+            rs=accept_tcp(self.tcp_tunnel_manager.as_mut())=>{
                 rs
             }
             rs=accept_extend(self.extensible_pipe.as_mut())=>{
@@ -98,22 +100,32 @@ impl<PeerID> Pipe<PeerID> {
             }
         }
     }
-    pub(crate) fn shared_udp_socket_manager(&self) -> Option<Arc<udp::SocketManager>> {
+    pub fn shared_udp_socket_manager(&self) -> Option<Arc<udp::SocketManager>> {
         self.udp_tunnel_manager
             .as_ref()
             .map(|v| v.socket_manager.clone())
     }
-    pub(crate) fn shared_tcp_socket_manager(&self) -> Option<Arc<tcp::SocketManager>> {
-        todo!()
+    pub fn shared_tcp_socket_manager(&self) -> Option<Arc<tcp::SocketManager>> {
+        self.tcp_tunnel_manager
+            .as_ref()
+            .map(|v| v.socket_manager.clone())
+    }
+    pub fn socket_manager(&self) -> SocketManager<PeerID> {
+        SocketManager {
+            route_table: self.route_table.clone(),
+            udp_socket_manager: self.shared_udp_socket_manager(),
+            tcp_socket_manager: self.shared_tcp_socket_manager(),
+            extensible_pipe_writer: None,
+        }
     }
 }
 
-impl<PeerID> Pipe<PeerID> {
+impl<PeerID> TunnelManager<PeerID> {
     pub fn udp_tunnel_manager_as_mut(&mut self) -> Option<&mut udp::TunnelManager> {
         self.udp_tunnel_manager.as_mut()
     }
-    pub fn tcp_pipe_ref(&mut self) -> Option<&mut tcp::TunnelManager> {
-        self.tcp_pipe.as_mut()
+    pub fn tcp_tunnel_manager_as_mut(&mut self) -> Option<&mut tcp::TunnelManager> {
+        self.tcp_tunnel_manager.as_mut()
     }
     /// Acquire the `route_table` associated with the `tunnel`
     pub fn route_table(&self) -> &RouteTable<PeerID> {
@@ -143,11 +155,7 @@ async fn accept_extend(extend: Option<&mut ExtensiblePipe>) -> io::Result<PipeLi
     }
 }
 
-impl<PeerID> PipeWriter<PeerID> {
-    /// Acquire a owned `writer` for writing to the tunnel established by `UDP`
-    pub fn tcp_pipe_writer(&self) -> Option<&TcpPipeWriter> {
-        self.tcp_pipe_writer.as_ref()
-    }
+impl<PeerID> SocketManager<PeerID> {
     /// Acquire a owned `writer` for writing to the tunnel established by other extended protocols
     pub fn extensible_pipe_writer(&self) -> Option<&ExtensiblePipeWriter> {
         self.extensible_pipe_writer.as_ref()
@@ -157,7 +165,7 @@ impl<PeerID> PipeWriter<PeerID> {
     }
 }
 
-impl<PeerID> PipeWriter<PeerID> {
+impl<PeerID> SocketManager<PeerID> {
     /// Writing `buf` to the target denoted by `route_key`
     pub async fn send_to(&self, buf: BytesMut, route_key: &RouteKey) -> io::Result<()> {
         match route_key.protocol() {
@@ -167,7 +175,7 @@ impl<PeerID> PipeWriter<PeerID> {
                 }
             }
             ConnectProtocol::TCP => {
-                if let Some(w) = self.tcp_pipe_writer.as_ref() {
+                if let Some(w) = self.tcp_socket_manager.as_ref() {
                     return w.send_to(buf, route_key).await;
                 }
             }
@@ -194,7 +202,7 @@ impl<PeerID> PipeWriter<PeerID> {
                 }
             }
             ConnectProtocol::TCP => {
-                if let Some(w) = self.tcp_pipe_writer.as_ref() {
+                if let Some(w) = self.tcp_socket_manager.as_ref() {
                     return w.send_to_addr(buf, addr).await;
                 }
             }
@@ -203,7 +211,7 @@ impl<PeerID> PipeWriter<PeerID> {
         Err(io::Error::from(io::ErrorKind::InvalidInput))
     }
 }
-impl<PeerID: Hash + Eq> PipeWriter<PeerID> {
+impl<PeerID: Hash + Eq> SocketManager<PeerID> {
     /// Writing `buf` to the target named by `peer_id`
     pub async fn send_to_id(&self, buf: BytesMut, peer_id: &PeerID) -> io::Result<()> {
         let route = self.route_table.get_route_by_id(peer_id)?;

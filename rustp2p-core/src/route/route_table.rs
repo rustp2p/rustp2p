@@ -5,8 +5,8 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::pipe::config::LoadBalance;
 use crate::route::{Route, RouteKey};
+use crate::tunnel::config::LoadBalance;
 use crossbeam_utils::atomic::AtomicCell;
 use dashmap::DashMap;
 

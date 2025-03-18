@@ -13,11 +13,11 @@ use dashmap::DashMap;
 pub use pipe_context::NodeAddress;
 pub use pipe_context::PeerNodeAddress;
 use rust_p2p_core::nat::NatType;
-use rust_p2p_core::pipe::config::LoadBalance;
-use rust_p2p_core::pipe::recycle::RecycleBuf;
 use rust_p2p_core::punch::PunchConsultInfo;
 use rust_p2p_core::route::route_table::RouteTable;
 use rust_p2p_core::route::{ConnectProtocol, Route, RouteKey};
+use rust_p2p_core::tunnel::config::LoadBalance;
+use rust_p2p_core::tunnel::recycle::RecycleBuf;
 pub use send_packet::SendPacket;
 use std::collections::HashMap;
 use std::io;
@@ -36,7 +36,7 @@ pub struct TunnelManager {
     send_buffer_size: usize,
     recv_buffer_size: usize,
     pipe_context: PipeContext,
-    pipe: rust_p2p_core::pipe::Pipe<NodeID>,
+    pipe: rust_p2p_core::tunnel::TunnelManager<NodeID>,
     shutdown_manager: ShutdownManager<()>,
     active_punch_sender: Sender<(NodeID, PunchConsultInfo)>,
     passive_punch_sender: Sender<(NodeID, PunchConsultInfo)>,
@@ -86,21 +86,21 @@ impl TunnelManager {
         #[cfg(any(feature = "aes-gcm", feature = "chacha20-poly1305"))]
         let cipher = config.encryption.clone().map(crate::cipher::Cipher::from);
 
-        let config: rust_p2p_core::pipe::config::PipeConfig = config.into();
+        let config: rust_p2p_core::tunnel::config::PipeConfig = config.into();
         let mut recycle_buf: Option<RecycleBuf> = None;
         if let Some(v) = config.tcp_pipe_config.as_ref() {
             recycle_buf.clone_from(&v.recycle_buf);
         } else if let Some(v) = config.udp_pipe_config.as_ref() {
             recycle_buf.clone_from(&v.recycle_buf);
         };
-        let (pipe, puncher, idle_route_manager) = rust_p2p_core::pipe::pipe::<NodeID>(config)?;
-        let writer_ref = pipe.writer_ref();
-        let local_tcp_port = if let Some(v) = writer_ref.tcp_pipe_writer_ref() {
+        let (pipe, puncher, idle_route_manager) = rust_p2p_core::tunnel::pipe::<NodeID>(config)?;
+        let writer_ref = pipe.socket_manager();
+        let local_tcp_port = if let Some(v) = pipe.shared_tcp_socket_manager() {
             v.local_addr().port()
         } else {
             0
         };
-        let local_udp_ports = if let Some(v) = writer_ref.udp_pipe_writer_ref() {
+        let local_udp_ports = if let Some(v) = pipe.shared_udp_socket_manager() {
             v.local_ports()?
         } else {
             vec![]
@@ -131,7 +131,7 @@ impl TunnelManager {
         let pipe_writer = TunnelTransmit {
             send_buffer_size,
             pipe_context: pipe_context.clone(),
-            pipe_writer: pipe.writer_ref().to_owned(),
+            pipe_writer: pipe.socket_manager(),
             shutdown_manager: shutdown_manager.clone(),
             recycle_buf: recycle_buf.clone(),
         };
@@ -175,7 +175,7 @@ impl TunnelManager {
         TunnelTransmit {
             send_buffer_size: self.send_buffer_size,
             pipe_context: self.pipe_context.clone(),
-            pipe_writer: self.pipe.writer_ref().to_owned(),
+            pipe_writer: self.pipe.socket_manager(),
             shutdown_manager: self.shutdown_manager.clone(),
             recycle_buf: self.recycle_buf.clone(),
         }
@@ -221,7 +221,7 @@ impl TunnelManager {
 pub struct TunnelTransmit {
     send_buffer_size: usize,
     pipe_context: PipeContext,
-    pipe_writer: rust_p2p_core::pipe::PipeWriter<NodeID>,
+    pipe_writer: rust_p2p_core::tunnel::SocketManager<NodeID>,
     shutdown_manager: ShutdownManager<()>,
     recycle_buf: Option<RecycleBuf>,
 }
@@ -234,10 +234,10 @@ impl TunnelTransmit {
         if self.shutdown_manager.is_shutdown_triggered() {
             return Err(io::Error::new(io::ErrorKind::BrokenPipe, "shutdown"));
         }
-        use rust_p2p_core::pipe::udp::Model;
+        use rust_p2p_core::tunnel::udp::Model;
         match nat_type {
             NatType::Cone => {
-                if let Some(writer) = self.pipe_writer.udp_pipe_writer() {
+                if let Some(writer) = self.pipe_writer {
                     writer.switch_model(Model::Low)?;
                 }
             }
@@ -498,7 +498,7 @@ impl TunnelTransmit {
 pub struct TunnelReceive {
     shutdown_manager: ShutdownManager<()>,
     pipe_context: PipeContext,
-    pipe_line: rust_p2p_core::pipe::PipeLine,
+    pipe_line: rust_p2p_core::tunnel::PipeLine,
     tunnel_transmit: TunnelTransmit,
     route_table: RouteTable<NodeID>,
     active_punch_sender: Sender<(NodeID, PunchConsultInfo)>,

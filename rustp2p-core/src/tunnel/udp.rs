@@ -12,11 +12,11 @@ use parking_lot::{Mutex, RwLock};
 use tachyonix::{Receiver, Sender, TrySendError};
 use tokio::net::UdpSocket;
 
-use crate::pipe::config::UdpTunnelManagerConfig;
-use crate::pipe::recycle::RecycleBuf;
-use crate::pipe::{DEFAULT_ADDRESS_V4, DEFAULT_ADDRESS_V6};
 use crate::route::{Index, RouteKey};
 use crate::socket::{bind_udp, LocalInterface};
+use crate::tunnel::config::UdpTunnelManagerConfig;
+use crate::tunnel::recycle::RecycleBuf;
+use crate::tunnel::{DEFAULT_ADDRESS_V4, DEFAULT_ADDRESS_V6};
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
 const MAX_MESSAGES: usize = 16;
@@ -955,16 +955,16 @@ fn should_ignore_error(e: &io::Error) -> bool {
 mod tests {
     use std::time::Duration;
 
-    use crate::pipe::udp::{Model, Tunnel};
+    use crate::tunnel::udp::{Model, Tunnel};
 
     #[tokio::test]
     pub async fn create_udp_pipe() {
-        let config = crate::pipe::config::UdpTunnelManagerConfig::default()
+        let config = crate::tunnel::config::UdpTunnelManagerConfig::default()
             .set_main_pipeline_num(2)
             .set_sub_pipeline_num(10)
             .set_model(Model::Low)
             .set_use_v6(false);
-        let mut udp_pipe = crate::pipe::udp::create_tunnel_manager(config).unwrap();
+        let mut udp_pipe = crate::tunnel::udp::create_tunnel_manager(config).unwrap();
         let mut count = 0;
         let mut join = Vec::new();
         while let Ok(rs) = tokio::time::timeout(Duration::from_secs(1), udp_pipe.dispatch()).await {
@@ -976,12 +976,12 @@ mod tests {
 
     #[tokio::test]
     pub async fn create_sub_udp_pipe() {
-        let config = crate::pipe::config::UdpTunnelManagerConfig::default()
+        let config = crate::tunnel::config::UdpTunnelManagerConfig::default()
             .set_main_pipeline_num(2)
             .set_sub_pipeline_num(10)
             .set_use_v6(false)
             .set_model(Model::High);
-        let mut udp_pipe = crate::pipe::udp::create_tunnel_manager(config).unwrap();
+        let mut udp_pipe = crate::tunnel::udp::create_tunnel_manager(config).unwrap();
         let mut count = 0;
         let mut join = Vec::new();
         while let Ok(rs) = tokio::time::timeout(Duration::from_secs(1), udp_pipe.dispatch()).await {

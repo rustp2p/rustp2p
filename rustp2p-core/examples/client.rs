@@ -22,12 +22,12 @@ use env_logger::Env;
 use parking_lot::Mutex;
 
 use rust_p2p_core::nat::NatInfo;
-use rust_p2p_core::pipe::config::{PipeConfig, TcpPipeConfig, UdpTunnelManagerConfig};
-use rust_p2p_core::pipe::tcp::LengthPrefixedInitCodec;
-use rust_p2p_core::pipe::{pipe, PipeLine, PipeWriter};
 use rust_p2p_core::punch::{PunchInfo, PunchModelBoxes, Puncher};
 use rust_p2p_core::route::route_table::RouteTable;
 use rust_p2p_core::route::ConnectProtocol;
+use rust_p2p_core::tunnel::config::{PipeConfig, TcpTunnelManagerConfig, UdpTunnelManagerConfig};
+use rust_p2p_core::tunnel::tcp::LengthPrefixedInitCodec;
+use rust_p2p_core::tunnel::{pipe, PipeLine, SocketManager};
 
 pub const HEAD_LEN: usize = 12;
 //
@@ -69,13 +69,13 @@ async fn main() {
     };
     log::info!("my_id:{my_id},server:{server}");
     let udp_config = UdpTunnelManagerConfig::default();
-    let tcp_config = TcpPipeConfig::new(Box::new(LengthPrefixedInitCodec));
+    let tcp_config = TcpTunnelManagerConfig::new(Box::new(LengthPrefixedInitCodec));
     let config = PipeConfig::empty()
         .set_udp_pipe_config(udp_config)
         .set_tcp_pipe_config(tcp_config)
         .set_main_pipeline_num(2);
     let (mut pipe, puncher, idle_route_manager) = pipe(config).unwrap();
-    let pipe_writer = pipe.writer_ref().to_owned();
+    let pipe_writer = pipe.socket_manager();
     let nat_info = my_nat_info(&pipe_writer).await;
     {
         let mut request = BytesMut::new();
@@ -172,7 +172,7 @@ struct ContextHandler {
     route_table: RouteTable<u32>,
     #[allow(dead_code)]
     server: SocketAddr,
-    pipe_writer: PipeWriter<u32>,
+    pipe_writer: SocketManager<u32>,
 }
 
 impl ContextHandler {
@@ -301,7 +301,7 @@ impl ContextHandler {
     }
 }
 
-async fn my_nat_info(pipe_writer: &PipeWriter<u32>) -> Arc<Mutex<NatInfo>> {
+async fn my_nat_info(pipe_writer: &SocketManager<u32>) -> Arc<Mutex<NatInfo>> {
     let stun_server = vec![
         "stun.miwifi.com:3478".to_string(),
         "stun.chat.bilibili.com:3478".to_string(),
