@@ -94,7 +94,6 @@ impl TunnelManager {
             recycle_buf.clone_from(&v.recycle_buf);
         };
         let (pipe, puncher, idle_route_manager) = rust_p2p_core::tunnel::pipe::<NodeID>(config)?;
-        let writer_ref = pipe.socket_manager();
         let local_tcp_port = if let Some(v) = pipe.shared_tcp_socket_manager() {
             v.local_addr().port()
         } else {
@@ -131,7 +130,7 @@ impl TunnelManager {
         let pipe_writer = TunnelTransmit {
             send_buffer_size,
             pipe_context: pipe_context.clone(),
-            pipe_writer: pipe.socket_manager(),
+            socket_manager: pipe.socket_manager(),
             shutdown_manager: shutdown_manager.clone(),
             recycle_buf: recycle_buf.clone(),
         };
@@ -175,7 +174,7 @@ impl TunnelManager {
         TunnelTransmit {
             send_buffer_size: self.send_buffer_size,
             pipe_context: self.pipe_context.clone(),
-            pipe_writer: self.pipe.socket_manager(),
+            socket_manager: self.pipe.socket_manager(),
             shutdown_manager: self.shutdown_manager.clone(),
             recycle_buf: self.recycle_buf.clone(),
         }
@@ -221,7 +220,7 @@ impl TunnelManager {
 pub struct TunnelTransmit {
     send_buffer_size: usize,
     pipe_context: PipeContext,
-    pipe_writer: rust_p2p_core::tunnel::SocketManager<NodeID>,
+    socket_manager: rust_p2p_core::tunnel::SocketManager<NodeID>,
     shutdown_manager: ShutdownManager<()>,
     recycle_buf: Option<RecycleBuf>,
 }
@@ -237,23 +236,23 @@ impl TunnelTransmit {
         use rust_p2p_core::tunnel::udp::Model;
         match nat_type {
             NatType::Cone => {
-                if let Some(writer) = self.pipe_writer {
-                    writer.switch_model(Model::Low)?;
+                if let Some(socket_manager) = self.socket_manager.udp_socket_manager_as_ref() {
+                    socket_manager.switch_model(Model::Low)?;
                 }
             }
             NatType::Symmetric => {
-                if let Some(writer) = self.pipe_writer.udp_pipe_writer() {
-                    writer.switch_model(Model::High)?;
+                if let Some(socket_manager) = self.socket_manager.udp_socket_manager_as_ref() {
+                    socket_manager.switch_model(Model::High)?;
                 }
             }
         }
         Ok(())
     }
     pub fn lookup_route(&self, node_id: &NodeID) -> Option<Vec<Route>> {
-        self.pipe_writer.route_table().route(node_id)
+        self.socket_manager.route_table().route(node_id)
     }
     pub fn nodes(&self) -> Vec<NodeID> {
-        self.pipe_writer.route_table().route_table_ids()
+        self.socket_manager.route_table().route_table_ids()
     }
     pub fn other_group_codes(&self) -> Vec<GroupCode> {
         self.pipe_context
@@ -282,7 +281,7 @@ impl TunnelTransmit {
         self.pipe_context.load_group_code()
     }
     pub fn route_to_node_id(&self, route: &RouteKey) -> Option<NodeID> {
-        self.pipe_writer.route_table().route_to_id(route)
+        self.socket_manager.route_table().route_to_id(route)
     }
     pub fn other_route_to_node_id(
         &self,
@@ -320,11 +319,13 @@ impl TunnelTransmit {
         buf: &NetPacket<B>,
         id: &NodeID,
     ) -> io::Result<()> {
-        self.pipe_writer.send_to_id(buf.buffer().into(), id).await?;
+        self.socket_manager
+            .send_to_id(buf.buffer().into(), id)
+            .await?;
         Ok(())
     }
     pub(crate) async fn send_to_route(&self, buf: &[u8], route_key: &RouteKey) -> io::Result<()> {
-        self.pipe_writer.send_to(buf.into(), route_key).await?;
+        self.socket_manager.send_to(buf.into(), route_key).await?;
         Ok(())
     }
     async fn send_to0(
@@ -339,13 +340,13 @@ impl TunnelTransmit {
             return Ok(());
         }
 
-        if let Ok(route) = self.pipe_writer.route_table().get_route_by_id(dest_id) {
-            self.pipe_writer.send_to(buf, &route.route_key()).await?
+        if let Ok(route) = self.socket_manager.route_table().get_route_by_id(dest_id) {
+            self.socket_manager.send_to(buf, &route.route_key()).await?
         } else if let Some((relay_group_code, relay_node_id)) =
             self.pipe_context().reachable_node(group_code, dest_id)
         {
             if &relay_group_code == group_code {
-                self.pipe_writer.send_to_id(buf, &relay_node_id).await?
+                self.socket_manager.send_to_id(buf, &relay_node_id).await?
             } else {
                 let route;
                 if let Some(v) = self.pipe_context().other_route_table.get(&relay_group_code) {
@@ -356,7 +357,7 @@ impl TunnelTransmit {
                         "group route not found",
                     ));
                 }
-                self.pipe_writer.send_to(buf, &route.route_key()).await?
+                self.socket_manager.send_to(buf, &route.route_key()).await?
             }
         } else {
             return Err(io::Error::new(
@@ -368,7 +369,7 @@ impl TunnelTransmit {
     }
 
     async fn send_broadcast0(&self, buf: &[u8], group_code: &GroupCode, src_id: &NodeID) {
-        let route_table = self.pipe_writer.route_table();
+        let route_table = self.socket_manager.route_table();
         let table = route_table.route_table_one();
         let mut map: HashMap<NodeID, (Vec<NodeID>, Route)> = HashMap::new();
         for (id, route) in &table {
@@ -395,7 +396,7 @@ impl TunnelTransmit {
         for (owner_id, (list, route)) in map {
             if list.len() <= 1 && route.is_direct() {
                 if let Err(e) = self
-                    .pipe_writer
+                    .socket_manager
                     .send_to(buf.into(), &route.route_key())
                     .await
                 {
@@ -408,7 +409,7 @@ impl TunnelTransmit {
                         packet.set_dest_id(&owner_id);
                         packet.set_group_code(group_code);
                         if let Err(e) = self
-                            .pipe_writer
+                            .socket_manager
                             .send_to(packet.buffer().into(), &route.route_key())
                             .await
                         {

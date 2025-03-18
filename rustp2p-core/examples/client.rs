@@ -313,11 +313,15 @@ async fn my_nat_info(pipe_writer: &SocketManager<u32>) -> Arc<Mutex<NatInfo>> {
     log::info!("nat_type:{nat_type:?},public_ips:{public_ips:?},port_range={port_range}");
     let local_ipv4 = rust_p2p_core::extend::addr::local_ipv4().await.unwrap();
     let local_udp_ports = pipe_writer
-        .udp_pipe_writer()
+        .udp_socket_manager_as_ref()
         .unwrap()
         .local_ports()
         .unwrap();
-    let local_tcp_port = pipe_writer.tcp_pipe_writer().unwrap().local_addr().port();
+    let local_tcp_port = pipe_writer
+        .tcp_socket_manager_as_ref()
+        .unwrap()
+        .local_addr()
+        .port();
     let mut public_ports = local_udp_ports.clone();
     public_ports.fill(0);
     let nat_info = NatInfo {

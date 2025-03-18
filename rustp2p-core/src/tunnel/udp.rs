@@ -1,7 +1,6 @@
 use std::io;
 use std::io::IoSlice;
 use std::net::SocketAddr;
-use std::ops::Deref;
 use std::sync::Arc;
 
 #[cfg(any(target_os = "linux", target_os = "android"))]

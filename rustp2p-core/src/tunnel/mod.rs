@@ -5,15 +5,12 @@ use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 
 use crate::idle::IdleRouteManager;
 use crate::tunnel::config::PipeConfig;
-use crate::tunnel::extensible_pipe::{
-    ExtensiblePipe, ExtensiblePipeLine, ExtensiblePipeWriter, ExtensiblePipeWriterRef,
-};
+use crate::tunnel::extensible_pipe::{ExtensiblePipe, ExtensiblePipeLine, ExtensiblePipeWriter};
 
 use crate::punch::Puncher;
 use crate::route::route_table::RouteTable;
 use crate::route::{ConnectProtocol, RouteKey};
 use std::sync::Arc;
-use tokio::net::tcp as TokioTcp;
 
 pub mod config;
 pub mod extensible_pipe;
@@ -118,6 +115,12 @@ impl<PeerID> TunnelManager<PeerID> {
             extensible_pipe_writer: None,
         }
     }
+    pub fn udp_socket_manager_as_ref(&self) -> Option<&Arc<udp::SocketManager>> {
+        self.udp_tunnel_manager.as_ref().map(|v| &v.socket_manager)
+    }
+    pub fn tcp_socket_manager_as_ref(&self) -> Option<&Arc<tcp::SocketManager>> {
+        self.tcp_tunnel_manager.as_ref().map(|v| &v.socket_manager)
+    }
 }
 
 impl<PeerID> TunnelManager<PeerID> {
@@ -162,6 +165,13 @@ impl<PeerID> SocketManager<PeerID> {
     }
     pub fn route_table(&self) -> &RouteTable<PeerID> {
         &self.route_table
+    }
+
+    pub fn udp_socket_manager_as_ref(&self) -> Option<&Arc<udp::SocketManager>> {
+        self.udp_socket_manager.as_ref()
+    }
+    pub fn tcp_socket_manager_as_ref(&self) -> Option<&Arc<tcp::SocketManager>> {
+        self.tcp_socket_manager.as_ref()
     }
 }
 

@@ -59,22 +59,26 @@ async fn poll_direct_peer_node(
         }
         packet.payload_mut()[2..4].copy_from_slice(&id.to_be_bytes());
         match addr {
-            NodeAddress::Tcp(addr) => match pipe_writer.pipe_writer.tcp_pipe_writer() {
-                None => {}
-                Some(tcp) => {
-                    if let Err(e) = tcp.send_to_addr(packet.buffer().into(), addr).await {
-                        log::warn!("poll_direct_peer_node tcp, e={e:?},addr={addr:?}");
+            NodeAddress::Tcp(addr) => {
+                match pipe_writer.socket_manager.tcp_socket_manager_as_ref() {
+                    None => {}
+                    Some(tcp) => {
+                        if let Err(e) = tcp.send_to_addr(packet.buffer().into(), addr).await {
+                            log::warn!("poll_direct_peer_node tcp, e={e:?},addr={addr:?}");
+                        }
                     }
                 }
-            },
-            NodeAddress::Udp(addr) => match pipe_writer.pipe_writer.udp_pipe_writer() {
-                None => {}
-                Some(udp) => {
-                    if let Err(e) = udp.send_to_addr(packet.buffer(), addr).await {
-                        log::warn!("poll_direct_peer_node udp, e={e:?},addr={addr:?}");
+            }
+            NodeAddress::Udp(addr) => {
+                match pipe_writer.socket_manager.udp_socket_manager_as_ref() {
+                    None => {}
+                    Some(udp) => {
+                        if let Err(e) = udp.send_to_addr(packet.buffer(), addr).await {
+                            log::warn!("poll_direct_peer_node udp, e={e:?},addr={addr:?}");
+                        }
                     }
                 }
-            },
+            }
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
@@ -85,7 +89,7 @@ async fn poll_route_table_peer_node(
     buf: &[u8],
     query_id_max_num: usize,
 ) -> HashSet<NodeID> {
-    let mut route_table = pipe_writer.pipe_writer.route_table().route_table_p2p();
+    let mut route_table = pipe_writer.socket_manager.route_table().route_table_p2p();
     if route_table.is_empty() {
         return HashSet::new();
     }

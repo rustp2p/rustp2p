@@ -75,22 +75,26 @@ async fn direct_heartbeat_request(
             }
         }
         match addr {
-            NodeAddress::Tcp(addr) => match pipe_writer.pipe_writer.tcp_pipe_writer() {
-                None => {}
-                Some(tcp) => {
-                    if let Err(e) = tcp.send_to_addr(buf.into(), addr).await {
-                        log::warn!("direct_heartbeat_request tcp, e={e:?},addr={addr:?}");
+            NodeAddress::Tcp(addr) => {
+                match pipe_writer.socket_manager.tcp_socket_manager_as_ref() {
+                    None => {}
+                    Some(tcp) => {
+                        if let Err(e) = tcp.send_to_addr(buf.into(), addr).await {
+                            log::warn!("direct_heartbeat_request tcp, e={e:?},addr={addr:?}");
+                        }
                     }
                 }
-            },
-            NodeAddress::Udp(addr) => match pipe_writer.pipe_writer.udp_pipe_writer() {
-                None => {}
-                Some(udp) => {
-                    if let Err(e) = udp.send_to_addr(buf, addr).await {
-                        log::warn!("direct_heartbeat_request udp, e={e:?},addr={addr:?}");
+            }
+            NodeAddress::Udp(addr) => {
+                match pipe_writer.socket_manager.udp_socket_manager_as_ref() {
+                    None => {}
+                    Some(udp) => {
+                        if let Err(e) = udp.send_to_addr(buf, addr).await {
+                            log::warn!("direct_heartbeat_request udp, e={e:?},addr={addr:?}");
+                        }
                     }
                 }
-            },
+            }
         }
         tokio::time::sleep(Duration::from_millis(3)).await;
     }
@@ -100,7 +104,7 @@ async fn route_table_heartbeat_request(
     pipe_writer: &TunnelTransmit,
     packet: &mut NetPacket<&mut [u8]>,
 ) -> (HashSet<NodeID>, HashSet<NodeID>) {
-    let table = pipe_writer.pipe_writer.route_table().route_table();
+    let table = pipe_writer.socket_manager.route_table().route_table();
     let mut sent_p2p_ids = HashSet::with_capacity(table.len());
     let mut sent_relay_ids = HashSet::with_capacity(table.len());
     for (node_id, routes) in table {

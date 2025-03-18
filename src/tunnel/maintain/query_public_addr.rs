@@ -28,7 +28,7 @@ pub(crate) async fn query_tcp_public_addr_loop(
             match stun.to_socket_addrs() {
                 Ok(mut addr) => {
                     if let Some(addr) = addr.next() {
-                        if let Some(w) = pipe_writer.pipe_writer.tcp_pipe_writer() {
+                        if let Some(w) = pipe_writer.socket_manager.tcp_socket_manager_as_ref() {
                             match tokio::time::timeout(
                                 Duration::from_secs(5),
                                 w.connect_reuse_port_raw(addr),
@@ -124,7 +124,7 @@ pub(crate) async fn query_udp_public_addr_loop(
             match stun.to_socket_addrs() {
                 Ok(mut addr) => {
                     if let Some(addr) = addr.next() {
-                        if let Some(w) = pipe_writer.pipe_writer.udp_pipe_writer() {
+                        if let Some(w) = pipe_writer.socket_manager.udp_socket_manager_as_ref() {
                             if let Err(e) = w.detect_pub_addrs(&stun_request, addr).await {
                                 log::debug!("detect_pub_addrs {e:?} {addr:?}");
                             }
