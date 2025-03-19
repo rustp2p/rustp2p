@@ -1,6 +1,7 @@
 use std::io;
 use std::io::IoSlice;
 use std::net::SocketAddr;
+use std::ops::Deref;
 use std::sync::Arc;
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -556,6 +557,14 @@ impl TunnelManager {
     }
 }
 
+impl Deref for TunnelManager {
+    type Target = SocketManager;
+
+    fn deref(&self) -> &Self::Target {
+        &self.socket_manager
+    }
+}
+
 #[cfg(any(target_os = "linux", target_os = "android"))]
 fn sendmmsg(fd: std::os::fd::RawFd, bufs: &mut [(BytesMut, SocketAddr)]) -> io::Result<usize> {
     assert!(bufs.len() <= MAX_MESSAGES);
@@ -950,7 +959,6 @@ fn should_ignore_error(e: &io::Error) -> bool {
 }
 
 #[cfg(test)]
-#[cfg(feature = "use-tokio")]
 mod tests {
     use std::time::Duration;
 
@@ -987,7 +995,7 @@ mod tests {
             join.push(tokio::spawn(pipe_line_recv(rs.unwrap())));
             count += 1;
         }
-        udp_pipe.writer_ref().switch_low();
+        udp_pipe.switch_low();
 
         let mut close_pipe_line_count = 0;
         for x in join {
