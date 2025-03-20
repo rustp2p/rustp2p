@@ -36,7 +36,7 @@ pub struct TunnelManager {
     send_buffer_size: usize,
     recv_buffer_size: usize,
     pipe_context: PipeContext,
-    pipe: rust_p2p_core::tunnel::TunnelManager<NodeID>,
+    pipe: rust_p2p_core::tunnel::UnifiedTunnelFactory<NodeID>,
     shutdown_manager: ShutdownManager<()>,
     active_punch_sender: Sender<(NodeID, PunchConsultInfo)>,
     passive_punch_sender: Sender<(NodeID, PunchConsultInfo)>,
@@ -86,14 +86,15 @@ impl TunnelManager {
         #[cfg(any(feature = "aes-gcm", feature = "chacha20-poly1305"))]
         let cipher = config.encryption.clone().map(crate::cipher::Cipher::from);
 
-        let config: rust_p2p_core::tunnel::config::PipeConfig = config.into();
+        let config: rust_p2p_core::tunnel::config::TunnelConfig = config.into();
         let mut recycle_buf: Option<RecycleBuf> = None;
-        if let Some(v) = config.tcp_pipe_config.as_ref() {
+        if let Some(v) = config.tcp_tunnel_config.as_ref() {
             recycle_buf.clone_from(&v.recycle_buf);
-        } else if let Some(v) = config.udp_pipe_config.as_ref() {
+        } else if let Some(v) = config.udp_tunnel_config.as_ref() {
             recycle_buf.clone_from(&v.recycle_buf);
         };
-        let (pipe, puncher, idle_route_manager) = rust_p2p_core::tunnel::pipe::<NodeID>(config)?;
+        let (pipe, puncher, idle_route_manager) =
+            rust_p2p_core::tunnel::new_tunnel_component::<NodeID>(config)?;
         let local_tcp_port = if let Some(v) = pipe.shared_tcp_socket_manager() {
             v.local_addr().port()
         } else {
@@ -192,7 +193,11 @@ impl TunnelManager {
         if self.shutdown_manager.is_shutdown_triggered() {
             return Err(io::Error::new(io::ErrorKind::BrokenPipe, "shutdown"));
         }
-        let Ok(pipe_line) = self.shutdown_manager.wrap_cancel(self.pipe.accept()).await else {
+        let Ok(pipe_line) = self
+            .shutdown_manager
+            .wrap_cancel(self.pipe.dispatch())
+            .await
+        else {
             return Err(io::Error::new(io::ErrorKind::BrokenPipe, "shutdown"));
         };
         let pipe_line = pipe_line?;
@@ -220,7 +225,7 @@ impl TunnelManager {
 pub struct TunnelTransmit {
     send_buffer_size: usize,
     pipe_context: PipeContext,
-    socket_manager: rust_p2p_core::tunnel::SocketManager<NodeID>,
+    socket_manager: rust_p2p_core::tunnel::UnifiedSocketManager<NodeID>,
     shutdown_manager: ShutdownManager<()>,
     recycle_buf: Option<RecycleBuf>,
 }
@@ -499,7 +504,7 @@ impl TunnelTransmit {
 pub struct TunnelReceive {
     shutdown_manager: ShutdownManager<()>,
     pipe_context: PipeContext,
-    pipe_line: rust_p2p_core::tunnel::PipeLine,
+    pipe_line: rust_p2p_core::tunnel::UnifiedTunnel,
     tunnel_transmit: TunnelTransmit,
     route_table: RouteTable<NodeID>,
     active_punch_sender: Sender<(NodeID, PunchConsultInfo)>,

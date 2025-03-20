@@ -273,7 +273,7 @@ impl UdpPipeConfig {
     }
 }
 
-impl From<TunnelManagerConfig> for rust_p2p_core::tunnel::config::PipeConfig {
+impl From<TunnelManagerConfig> for rust_p2p_core::tunnel::config::TunnelConfig {
     fn from(value: TunnelManagerConfig) -> Self {
         let recycle_buf = if value.recycle_buf_cap > 0 {
             Some(RecycleBuf::new(
@@ -301,12 +301,12 @@ impl From<TunnelManagerConfig> for rust_p2p_core::tunnel::config::PipeConfig {
                 .clone_from(&value.default_interface);
             config
         });
-        rust_p2p_core::tunnel::config::PipeConfig {
+        rust_p2p_core::tunnel::config::TunnelConfig {
             load_balance: value.load_balance,
             multi_pipeline: value.multi_pipeline,
             route_idle_time: value.route_idle_time,
-            udp_pipe_config,
-            tcp_pipe_config,
+            udp_tunnel_config: udp_pipe_config,
+            tcp_tunnel_config: tcp_pipe_config,
             enable_extend: value.enable_extend,
         }
     }

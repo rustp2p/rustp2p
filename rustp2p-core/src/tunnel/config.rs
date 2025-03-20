@@ -22,23 +22,23 @@ pub enum LoadBalance {
     LowestLatency,
 }
 #[derive(Clone)]
-pub struct PipeConfig {
+pub struct TunnelConfig {
     pub load_balance: LoadBalance,
     pub multi_pipeline: usize,
     pub route_idle_time: Duration,
-    pub udp_pipe_config: Option<UdpTunnelConfig>,
-    pub tcp_pipe_config: Option<TcpTunnelConfig>,
+    pub udp_tunnel_config: Option<UdpTunnelConfig>,
+    pub tcp_tunnel_config: Option<TcpTunnelConfig>,
     pub enable_extend: bool,
 }
 
-impl Default for PipeConfig {
+impl Default for TunnelConfig {
     fn default() -> Self {
         Self {
             load_balance: LoadBalance::MinHopLowestLatency,
             multi_pipeline: MULTI_PIPELINE,
             enable_extend: false,
-            udp_pipe_config: Some(Default::default()),
-            tcp_pipe_config: Some(Default::default()),
+            udp_tunnel_config: Some(Default::default()),
+            tcp_tunnel_config: Some(Default::default()),
             route_idle_time: ROUTE_IDLE_TIME,
         }
     }
@@ -47,33 +47,33 @@ impl Default for PipeConfig {
 pub(crate) const MULTI_PIPELINE: usize = 2;
 pub(crate) const UDP_SUB_PIPELINE_NUM: usize = 82;
 
-impl PipeConfig {
-    pub fn new(tcp_init_codec: Box<dyn InitCodec>) -> PipeConfig {
+impl TunnelConfig {
+    pub fn new(tcp_init_codec: Box<dyn InitCodec>) -> TunnelConfig {
         let udp_pipe_config = Some(UdpTunnelConfig::default());
         let tcp_pipe_config = Some(TcpTunnelConfig::new(tcp_init_codec));
         Self {
             load_balance: LoadBalance::MinHopLowestLatency,
             multi_pipeline: MULTI_PIPELINE,
             enable_extend: false,
-            udp_pipe_config,
-            tcp_pipe_config,
+            udp_tunnel_config: udp_pipe_config,
+            tcp_tunnel_config: tcp_pipe_config,
             route_idle_time: ROUTE_IDLE_TIME,
         }
     }
 }
-impl PipeConfig {
+impl TunnelConfig {
     pub fn none_tcp(self) -> Self {
         self
     }
 }
-impl PipeConfig {
+impl TunnelConfig {
     pub fn empty() -> Self {
         Self {
             load_balance: LoadBalance::MinHopLowestLatency,
             multi_pipeline: MULTI_PIPELINE,
             enable_extend: false,
-            udp_pipe_config: None,
-            tcp_pipe_config: None,
+            udp_tunnel_config: None,
+            tcp_tunnel_config: None,
             route_idle_time: ROUTE_IDLE_TIME,
         }
     }
@@ -90,18 +90,18 @@ impl PipeConfig {
         self
     }
     pub fn set_udp_pipe_config(mut self, udp_pipe_config: UdpTunnelConfig) -> Self {
-        self.udp_pipe_config.replace(udp_pipe_config);
+        self.udp_tunnel_config.replace(udp_pipe_config);
         self
     }
     pub fn set_tcp_pipe_config(mut self, tcp_pipe_config: TcpTunnelConfig) -> Self {
-        self.tcp_pipe_config.replace(tcp_pipe_config);
+        self.tcp_tunnel_config.replace(tcp_pipe_config);
         self
     }
     pub fn check(&self) -> io::Result<()> {
-        if let Some(udp_pipe_config) = self.udp_pipe_config.as_ref() {
+        if let Some(udp_pipe_config) = self.udp_tunnel_config.as_ref() {
             udp_pipe_config.check()?;
         }
-        if let Some(tcp_pipe_config) = self.tcp_pipe_config.as_ref() {
+        if let Some(tcp_pipe_config) = self.tcp_tunnel_config.as_ref() {
             tcp_pipe_config.check()?;
         }
         Ok(())

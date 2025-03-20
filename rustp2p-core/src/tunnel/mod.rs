@@ -4,7 +4,7 @@ use std::io;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 
 use crate::idle::IdleRouteManager;
-use crate::tunnel::config::PipeConfig;
+use crate::tunnel::config::TunnelConfig;
 use crate::tunnel::extensible_pipe::{ExtensiblePipe, ExtensiblePipeLine, ExtensiblePipeWriter};
 
 use crate::punch::Puncher;
@@ -22,21 +22,23 @@ pub const DEFAULT_ADDRESS_V4: SocketAddr =
 pub const DEFAULT_ADDRESS_V6: SocketAddr =
     SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, 0));
 
-pub type PipeComponent<PeerID> = (
-    TunnelManager<PeerID>,
+pub type TunnelComponent<PeerID> = (
+    UnifiedTunnelFactory<PeerID>,
     Puncher<PeerID>,
     IdleRouteManager<PeerID>,
 );
 /// Construct the needed components for p2p communication with the given tunnel configuration
-pub fn pipe<PeerID: Hash + Eq + Clone>(config: PipeConfig) -> io::Result<PipeComponent<PeerID>> {
+pub fn new_tunnel_component<PeerID: Hash + Eq + Clone>(
+    config: TunnelConfig,
+) -> io::Result<TunnelComponent<PeerID>> {
     let route_table = RouteTable::new(config.load_balance, config.multi_pipeline);
-    let udp_tunnel_manager = if let Some(mut udp_pipe_config) = config.udp_pipe_config {
+    let udp_tunnel_manager = if let Some(mut udp_pipe_config) = config.udp_tunnel_config {
         udp_pipe_config.main_udp_count = config.multi_pipeline;
         Some(udp::UdpTunnelFactory::new(udp_pipe_config)?)
     } else {
         None
     };
-    let tcp_tunnel_manager = if let Some(mut tcp_pipe_config) = config.tcp_pipe_config {
+    let tcp_tunnel_manager = if let Some(mut tcp_pipe_config) = config.tcp_tunnel_config {
         tcp_pipe_config.tcp_multiplexing_limit = config.multi_pipeline;
         Some(tcp::TcpTunnelFactory::new(tcp_pipe_config)?)
     } else {
@@ -47,10 +49,10 @@ pub fn pipe<PeerID: Hash + Eq + Clone>(config: PipeConfig) -> io::Result<PipeCom
     } else {
         None
     };
-    let pipe = TunnelManager {
+    let pipe = UnifiedTunnelFactory {
         route_table: route_table.clone(),
-        udp_tunnel_manager,
-        tcp_tunnel_manager,
+        udp_tunnel_factory: udp_tunnel_manager,
+        tcp_tunnel_factory: tcp_tunnel_manager,
         extensible_pipe,
     };
     let puncher = Puncher::from(&pipe);
@@ -61,35 +63,35 @@ pub fn pipe<PeerID: Hash + Eq + Clone>(config: PipeConfig) -> io::Result<PipeCom
     ))
 }
 
-pub struct TunnelManager<PeerID> {
+pub struct UnifiedTunnelFactory<PeerID> {
     route_table: RouteTable<PeerID>,
-    udp_tunnel_manager: Option<udp::UdpTunnelFactory>,
-    tcp_tunnel_manager: Option<tcp::TcpTunnelFactory>,
+    udp_tunnel_factory: Option<udp::UdpTunnelFactory>,
+    tcp_tunnel_factory: Option<tcp::TcpTunnelFactory>,
     extensible_pipe: Option<ExtensiblePipe>,
 }
 
-pub enum PipeLine {
+pub enum UnifiedTunnel {
     Udp(udp::UdpTunnel),
     Tcp(tcp::TcpTunnel),
     Extend(ExtensiblePipeLine),
 }
 
 #[derive(Clone)]
-pub struct SocketManager<PeerID> {
+pub struct UnifiedSocketManager<PeerID> {
     route_table: RouteTable<PeerID>,
     udp_socket_manager: Option<Arc<udp::SocketManager>>,
     tcp_socket_manager: Option<Arc<tcp::SocketManager>>,
     extensible_pipe_writer: Option<ExtensiblePipeWriter>,
 }
 
-impl<PeerID> TunnelManager<PeerID> {
+impl<PeerID> UnifiedTunnelFactory<PeerID> {
     /// Accept pipelines from a given `tunnel`
-    pub async fn accept(&mut self) -> io::Result<PipeLine> {
+    pub async fn dispatch(&mut self) -> io::Result<UnifiedTunnel> {
         tokio::select! {
-            rs=accept_udp(self.udp_tunnel_manager.as_mut())=>{
+            rs=dispatch_udp_tunnel(self.udp_tunnel_factory.as_mut())=>{
                 rs
             }
-            rs=accept_tcp(self.tcp_tunnel_manager.as_mut())=>{
+            rs=accept_tcp(self.tcp_tunnel_factory.as_mut())=>{
                 rs
             }
             rs=accept_extend(self.extensible_pipe.as_mut())=>{
@@ -98,17 +100,17 @@ impl<PeerID> TunnelManager<PeerID> {
         }
     }
     pub fn shared_udp_socket_manager(&self) -> Option<Arc<udp::SocketManager>> {
-        self.udp_tunnel_manager
+        self.udp_tunnel_factory
             .as_ref()
             .map(|v| v.socket_manager.clone())
     }
     pub fn shared_tcp_socket_manager(&self) -> Option<Arc<tcp::SocketManager>> {
-        self.tcp_tunnel_manager
+        self.tcp_tunnel_factory
             .as_ref()
             .map(|v| v.socket_manager.clone())
     }
-    pub fn socket_manager(&self) -> SocketManager<PeerID> {
-        SocketManager {
+    pub fn socket_manager(&self) -> UnifiedSocketManager<PeerID> {
+        UnifiedSocketManager {
             route_table: self.route_table.clone(),
             udp_socket_manager: self.shared_udp_socket_manager(),
             tcp_socket_manager: self.shared_tcp_socket_manager(),
@@ -116,19 +118,19 @@ impl<PeerID> TunnelManager<PeerID> {
         }
     }
     pub fn udp_socket_manager_as_ref(&self) -> Option<&Arc<udp::SocketManager>> {
-        self.udp_tunnel_manager.as_ref().map(|v| &v.socket_manager)
+        self.udp_tunnel_factory.as_ref().map(|v| &v.socket_manager)
     }
     pub fn tcp_socket_manager_as_ref(&self) -> Option<&Arc<tcp::SocketManager>> {
-        self.tcp_tunnel_manager.as_ref().map(|v| &v.socket_manager)
+        self.tcp_tunnel_factory.as_ref().map(|v| &v.socket_manager)
     }
 }
 
-impl<PeerID> TunnelManager<PeerID> {
+impl<PeerID> UnifiedTunnelFactory<PeerID> {
     pub fn udp_tunnel_manager_as_mut(&mut self) -> Option<&mut udp::UdpTunnelFactory> {
-        self.udp_tunnel_manager.as_mut()
+        self.udp_tunnel_factory.as_mut()
     }
     pub fn tcp_tunnel_manager_as_mut(&mut self) -> Option<&mut tcp::TcpTunnelFactory> {
-        self.tcp_tunnel_manager.as_mut()
+        self.tcp_tunnel_factory.as_mut()
     }
     /// Acquire the `route_table` associated with the `tunnel`
     pub fn route_table(&self) -> &RouteTable<PeerID> {
@@ -136,31 +138,31 @@ impl<PeerID> TunnelManager<PeerID> {
     }
 }
 
-async fn accept_tcp(tcp: Option<&mut tcp::TcpTunnelFactory>) -> io::Result<PipeLine> {
+async fn accept_tcp(tcp: Option<&mut tcp::TcpTunnelFactory>) -> io::Result<UnifiedTunnel> {
     if let Some(tcp_pipe) = tcp {
-        Ok(PipeLine::Tcp(tcp_pipe.accept().await?))
+        Ok(UnifiedTunnel::Tcp(tcp_pipe.accept().await?))
     } else {
         futures::future::pending().await
     }
 }
-async fn accept_udp(
-    udp_tunnel_manager: Option<&mut udp::UdpTunnelFactory>,
-) -> io::Result<PipeLine> {
-    if let Some(udp_pipe) = udp_tunnel_manager {
-        Ok(PipeLine::Udp(udp_pipe.dispatch().await?))
+async fn dispatch_udp_tunnel(
+    udp_tunnel_factory: Option<&mut udp::UdpTunnelFactory>,
+) -> io::Result<UnifiedTunnel> {
+    if let Some(udp_tunnel_factory) = udp_tunnel_factory {
+        Ok(UnifiedTunnel::Udp(udp_tunnel_factory.dispatch().await?))
     } else {
         futures::future::pending().await
     }
 }
-async fn accept_extend(extend: Option<&mut ExtensiblePipe>) -> io::Result<PipeLine> {
+async fn accept_extend(extend: Option<&mut ExtensiblePipe>) -> io::Result<UnifiedTunnel> {
     if let Some(extend) = extend {
-        Ok(PipeLine::Extend(extend.accept().await?))
+        Ok(UnifiedTunnel::Extend(extend.accept().await?))
     } else {
         futures::future::pending().await
     }
 }
 
-impl<PeerID> SocketManager<PeerID> {
+impl<PeerID> UnifiedSocketManager<PeerID> {
     /// Acquire a owned `writer` for writing to the tunnel established by other extended protocols
     pub fn extensible_pipe_writer(&self) -> Option<&ExtensiblePipeWriter> {
         self.extensible_pipe_writer.as_ref()
@@ -177,7 +179,7 @@ impl<PeerID> SocketManager<PeerID> {
     }
 }
 
-impl<PeerID> SocketManager<PeerID> {
+impl<PeerID> UnifiedSocketManager<PeerID> {
     /// Writing `buf` to the target denoted by `route_key`
     pub async fn send_to(&self, buf: BytesMut, route_key: &RouteKey) -> io::Result<()> {
         match route_key.protocol() {
@@ -223,7 +225,7 @@ impl<PeerID> SocketManager<PeerID> {
         Err(io::Error::from(io::ErrorKind::InvalidInput))
     }
 }
-impl<PeerID: Hash + Eq> SocketManager<PeerID> {
+impl<PeerID: Hash + Eq> UnifiedSocketManager<PeerID> {
     /// Writing `buf` to the target named by `peer_id`
     pub async fn send_to_id(&self, buf: BytesMut, peer_id: &PeerID) -> io::Result<()> {
         let route = self.route_table.get_route_by_id(peer_id)?;
@@ -247,15 +249,15 @@ impl<PeerID: Hash + Eq> SocketManager<PeerID> {
     }
 }
 
-impl PipeLine {
+impl UnifiedTunnel {
     /// Receving buf from the associated PipeLine
     /// `usize` in the `Ok` branch indicates how many bytes are received
     /// `RouteKey` in the `Ok` branch denotes the source where these bytes are received from
     pub async fn recv_from(&mut self, buf: &mut [u8]) -> Option<io::Result<(usize, RouteKey)>> {
         match self {
-            PipeLine::Udp(line) => line.recv_from(buf).await,
-            PipeLine::Tcp(line) => Some(line.recv_from(buf).await),
-            PipeLine::Extend(line) => Some(line.recv_from(buf).await),
+            UnifiedTunnel::Udp(line) => line.recv_from(buf).await,
+            UnifiedTunnel::Tcp(line) => Some(line.recv_from(buf).await),
+            UnifiedTunnel::Extend(line) => Some(line.recv_from(buf).await),
         }
     }
     pub async fn recv_multi_from<B: AsMut<[u8]>>(
@@ -265,8 +267,8 @@ impl PipeLine {
         addrs: &mut [RouteKey],
     ) -> Option<io::Result<usize>> {
         match self {
-            PipeLine::Udp(line) => line.recv_multi_from(bufs, sizes, addrs).await,
-            PipeLine::Tcp(line) => {
+            UnifiedTunnel::Udp(line) => line.recv_multi_from(bufs, sizes, addrs).await,
+            UnifiedTunnel::Tcp(line) => {
                 if addrs.len() != bufs.len() {
                     return Some(Err(io::Error::new(io::ErrorKind::Other, "addrs error")));
                 }
@@ -278,7 +280,7 @@ impl PipeLine {
                     Err(e) => Some(Err(e)),
                 }
             }
-            PipeLine::Extend(line) => {
+            UnifiedTunnel::Extend(line) => {
                 let rs = line.recv_from(bufs[0].as_mut()).await;
                 match rs {
                     Ok((len, addr)) => {
@@ -293,27 +295,27 @@ impl PipeLine {
     }
     pub fn done(&mut self) {
         match self {
-            PipeLine::Udp(line) => line.done(),
-            PipeLine::Tcp(line) => line.done(),
-            PipeLine::Extend(line) => line.done(),
+            UnifiedTunnel::Udp(line) => line.done(),
+            UnifiedTunnel::Tcp(line) => line.done(),
+            UnifiedTunnel::Extend(line) => line.done(),
         }
     }
 }
 
-impl PipeLine {
+impl UnifiedTunnel {
     /// The protocol this pipeline is using
     pub fn protocol(&self) -> ConnectProtocol {
         match self {
-            PipeLine::Udp(_) => ConnectProtocol::UDP,
-            PipeLine::Tcp(_) => ConnectProtocol::TCP,
-            PipeLine::Extend(_) => ConnectProtocol::Extend,
+            UnifiedTunnel::Udp(_) => ConnectProtocol::UDP,
+            UnifiedTunnel::Tcp(_) => ConnectProtocol::TCP,
+            UnifiedTunnel::Extend(_) => ConnectProtocol::Extend,
         }
     }
     pub fn remote_addr(&self) -> Option<SocketAddr> {
         match self {
-            PipeLine::Udp(_) => None,
-            PipeLine::Tcp(tcp) => Some(tcp.route_key().addr()),
-            PipeLine::Extend(_) => None,
+            UnifiedTunnel::Udp(_) => None,
+            UnifiedTunnel::Tcp(tcp) => Some(tcp.route_key().addr()),
+            UnifiedTunnel::Extend(_) => None,
         }
     }
 }

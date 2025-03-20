@@ -13,7 +13,7 @@ use rand::Rng;
 use crate::nat::{NatInfo, NatType};
 
 use crate::route::route_table::RouteTable;
-use crate::tunnel::TunnelManager;
+use crate::tunnel::UnifiedTunnelFactory;
 use crate::tunnel::{tcp, udp};
 pub use config::*;
 pub mod config;
@@ -30,8 +30,8 @@ pub struct Puncher<PeerID> {
     tcp_socket_manager: Option<Arc<tcp::SocketManager>>,
 }
 
-impl<PeerID> From<&TunnelManager<PeerID>> for Puncher<PeerID> {
-    fn from(value: &TunnelManager<PeerID>) -> Self {
+impl<PeerID> From<&UnifiedTunnelFactory<PeerID>> for Puncher<PeerID> {
+    fn from(value: &UnifiedTunnelFactory<PeerID>) -> Self {
         let tcp_socket_manager = value.shared_tcp_socket_manager();
         let udp_socket_manager = value.shared_udp_socket_manager();
         Self::new(

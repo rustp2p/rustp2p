@@ -25,9 +25,9 @@ use rust_p2p_core::nat::NatInfo;
 use rust_p2p_core::punch::{PunchInfo, PunchModelBoxes, Puncher};
 use rust_p2p_core::route::route_table::RouteTable;
 use rust_p2p_core::route::ConnectProtocol;
-use rust_p2p_core::tunnel::config::{PipeConfig, TcpTunnelConfig, UdpTunnelConfig};
+use rust_p2p_core::tunnel::config::{TcpTunnelConfig, TunnelConfig, UdpTunnelConfig};
 use rust_p2p_core::tunnel::tcp::LengthPrefixedInitCodec;
-use rust_p2p_core::tunnel::{pipe, PipeLine, SocketManager};
+use rust_p2p_core::tunnel::{new_tunnel_component, UnifiedSocketManager, UnifiedTunnel};
 
 pub const HEAD_LEN: usize = 12;
 //
@@ -70,11 +70,11 @@ async fn main() {
     log::info!("my_id:{my_id},server:{server}");
     let udp_config = UdpTunnelConfig::default();
     let tcp_config = TcpTunnelConfig::new(Box::new(LengthPrefixedInitCodec));
-    let config = PipeConfig::empty()
+    let config = TunnelConfig::empty()
         .set_udp_pipe_config(udp_config)
         .set_tcp_pipe_config(tcp_config)
         .set_main_pipeline_num(2);
-    let (mut pipe, puncher, idle_route_manager) = pipe(config).unwrap();
+    let (mut pipe, puncher, idle_route_manager) = new_tunnel_component(config).unwrap();
     let pipe_writer = pipe.socket_manager();
     let nat_info = my_nat_info(&pipe_writer).await;
     {
@@ -155,7 +155,7 @@ async fn main() {
         pipe_writer,
     };
     loop {
-        let pipe_line = pipe.accept().await.unwrap();
+        let pipe_line = pipe.dispatch().await.unwrap();
         let context_handler = context_handler.clone();
         tokio::spawn(async move {
             let _ = context_handler.handle(pipe_line).await;
@@ -172,11 +172,11 @@ struct ContextHandler {
     route_table: RouteTable<u32>,
     #[allow(dead_code)]
     server: SocketAddr,
-    pipe_writer: SocketManager<u32>,
+    pipe_writer: UnifiedSocketManager<u32>,
 }
 
 impl ContextHandler {
-    async fn handle(&self, mut pipe_line: PipeLine) -> std::io::Result<()> {
+    async fn handle(&self, mut pipe_line: UnifiedTunnel) -> std::io::Result<()> {
         let mut buf = [0; 65536];
         while let Some(rs) = pipe_line.recv_from(&mut buf).await {
             let (len, route_key) = match rs {
@@ -301,7 +301,7 @@ impl ContextHandler {
     }
 }
 
-async fn my_nat_info(pipe_writer: &SocketManager<u32>) -> Arc<Mutex<NatInfo>> {
+async fn my_nat_info(pipe_writer: &UnifiedSocketManager<u32>) -> Arc<Mutex<NatInfo>> {
     let stun_server = vec![
         "stun.miwifi.com:3478".to_string(),
         "stun.chat.bilibili.com:3478".to_string(),
