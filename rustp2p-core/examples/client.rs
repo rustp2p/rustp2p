@@ -25,7 +25,7 @@ use rust_p2p_core::nat::NatInfo;
 use rust_p2p_core::punch::{PunchInfo, PunchModelBoxes, Puncher};
 use rust_p2p_core::route::route_table::RouteTable;
 use rust_p2p_core::route::ConnectProtocol;
-use rust_p2p_core::tunnel::config::{PipeConfig, TcpTunnelManagerConfig, UdpTunnelManagerConfig};
+use rust_p2p_core::tunnel::config::{PipeConfig, TcpTunnelConfig, UdpTunnelConfig};
 use rust_p2p_core::tunnel::tcp::LengthPrefixedInitCodec;
 use rust_p2p_core::tunnel::{pipe, PipeLine, SocketManager};
 
@@ -68,8 +68,8 @@ async fn main() {
         ConnectProtocol::UDP
     };
     log::info!("my_id:{my_id},server:{server}");
-    let udp_config = UdpTunnelManagerConfig::default();
-    let tcp_config = TcpTunnelManagerConfig::new(Box::new(LengthPrefixedInitCodec));
+    let udp_config = UdpTunnelConfig::default();
+    let tcp_config = TcpTunnelConfig::new(Box::new(LengthPrefixedInitCodec));
     let config = PipeConfig::empty()
         .set_udp_pipe_config(udp_config)
         .set_tcp_pipe_config(tcp_config)

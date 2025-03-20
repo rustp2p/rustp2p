@@ -26,8 +26,8 @@ pub struct PipeConfig {
     pub load_balance: LoadBalance,
     pub multi_pipeline: usize,
     pub route_idle_time: Duration,
-    pub udp_pipe_config: Option<UdpTunnelManagerConfig>,
-    pub tcp_pipe_config: Option<TcpTunnelManagerConfig>,
+    pub udp_pipe_config: Option<UdpTunnelConfig>,
+    pub tcp_pipe_config: Option<TcpTunnelConfig>,
     pub enable_extend: bool,
 }
 
@@ -49,8 +49,8 @@ pub(crate) const UDP_SUB_PIPELINE_NUM: usize = 82;
 
 impl PipeConfig {
     pub fn new(tcp_init_codec: Box<dyn InitCodec>) -> PipeConfig {
-        let udp_pipe_config = Some(UdpTunnelManagerConfig::default());
-        let tcp_pipe_config = Some(TcpTunnelManagerConfig::new(tcp_init_codec));
+        let udp_pipe_config = Some(UdpTunnelConfig::default());
+        let tcp_pipe_config = Some(TcpTunnelConfig::new(tcp_init_codec));
         Self {
             load_balance: LoadBalance::MinHopLowestLatency,
             multi_pipeline: MULTI_PIPELINE,
@@ -89,11 +89,11 @@ impl PipeConfig {
         self.enable_extend = enable_extend;
         self
     }
-    pub fn set_udp_pipe_config(mut self, udp_pipe_config: UdpTunnelManagerConfig) -> Self {
+    pub fn set_udp_pipe_config(mut self, udp_pipe_config: UdpTunnelConfig) -> Self {
         self.udp_pipe_config.replace(udp_pipe_config);
         self
     }
-    pub fn set_tcp_pipe_config(mut self, tcp_pipe_config: TcpTunnelManagerConfig) -> Self {
+    pub fn set_tcp_pipe_config(mut self, tcp_pipe_config: TcpTunnelConfig) -> Self {
         self.tcp_pipe_config.replace(tcp_pipe_config);
         self
     }
@@ -109,7 +109,7 @@ impl PipeConfig {
 }
 
 #[derive(Clone)]
-pub struct TcpTunnelManagerConfig {
+pub struct TcpTunnelConfig {
     pub route_idle_time: Duration,
     pub tcp_multiplexing_limit: usize,
     pub default_interface: Option<LocalInterface>,
@@ -119,7 +119,7 @@ pub struct TcpTunnelManagerConfig {
     pub recycle_buf: Option<RecycleBuf>,
 }
 
-impl Default for TcpTunnelManagerConfig {
+impl Default for TcpTunnelConfig {
     fn default() -> Self {
         Self {
             route_idle_time: ROUTE_IDLE_TIME,
@@ -133,8 +133,8 @@ impl Default for TcpTunnelManagerConfig {
     }
 }
 
-impl TcpTunnelManagerConfig {
-    pub fn new(init_codec: Box<dyn InitCodec>) -> TcpTunnelManagerConfig {
+impl TcpTunnelConfig {
+    pub fn new(init_codec: Box<dyn InitCodec>) -> TcpTunnelConfig {
         Self {
             route_idle_time: ROUTE_IDLE_TIME,
             tcp_multiplexing_limit: MULTI_PIPELINE,
@@ -186,9 +186,9 @@ impl TcpTunnelManagerConfig {
 }
 
 #[derive(Clone)]
-pub struct UdpTunnelManagerConfig {
-    pub main_pipeline_num: usize,
-    pub sub_pipeline_num: usize,
+pub struct UdpTunnelConfig {
+    pub main_udp_count: usize,
+    pub sub_udp_count: usize,
     pub model: Model,
     pub default_interface: Option<LocalInterface>,
     pub udp_ports: Vec<u16>,
@@ -196,11 +196,11 @@ pub struct UdpTunnelManagerConfig {
     pub recycle_buf: Option<RecycleBuf>,
 }
 
-impl Default for UdpTunnelManagerConfig {
+impl Default for UdpTunnelConfig {
     fn default() -> Self {
         Self {
-            main_pipeline_num: MULTI_PIPELINE,
-            sub_pipeline_num: UDP_SUB_PIPELINE_NUM,
+            main_udp_count: MULTI_PIPELINE,
+            sub_udp_count: UDP_SUB_PIPELINE_NUM,
             model: Model::Low,
             default_interface: None,
             udp_ports: vec![0, 0],
@@ -210,21 +210,21 @@ impl Default for UdpTunnelManagerConfig {
     }
 }
 
-impl UdpTunnelManagerConfig {
+impl UdpTunnelConfig {
     pub fn check(&self) -> io::Result<()> {
-        if self.main_pipeline_num == 0 {
+        if self.main_udp_count == 0 {
             return Err(io::Error::new(
                 io::ErrorKind::Other,
                 "main_pipeline_num cannot be 0",
             ));
         }
-        if self.main_pipeline_num > MAX_MAIN_PIPELINE_NUM {
+        if self.main_udp_count > MAX_MAIN_PIPELINE_NUM {
             return Err(io::Error::new(
                 io::ErrorKind::Other,
                 "main_pipeline_num is too large",
             ));
         }
-        if self.sub_pipeline_num > MAX_SYMMETRIC_PIPELINE_NUM {
+        if self.sub_udp_count > MAX_SYMMETRIC_PIPELINE_NUM {
             return Err(io::Error::new(
                 io::ErrorKind::Other,
                 "symmetric_pipeline_num is too large",
@@ -235,12 +235,12 @@ impl UdpTunnelManagerConfig {
         }
         Ok(())
     }
-    pub fn set_main_pipeline_num(mut self, main_pipeline_num: usize) -> Self {
-        self.main_pipeline_num = main_pipeline_num;
+    pub fn set_main_udp_count(mut self, count: usize) -> Self {
+        self.main_udp_count = count;
         self
     }
-    pub fn set_sub_pipeline_num(mut self, sub_pipeline_num: usize) -> Self {
-        self.sub_pipeline_num = sub_pipeline_num;
+    pub fn set_sub_udp_count(mut self, count: usize) -> Self {
+        self.sub_udp_count = count;
         self
     }
     pub fn set_model(mut self, model: Model) -> Self {

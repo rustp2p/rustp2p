@@ -88,7 +88,7 @@ impl Default for TunnelManagerConfig {
             #[cfg(any(feature = "aes-gcm", feature = "chacha20-poly1305"))]
             encryption: None,
             default_interface: None,
-            use_v6: rust_p2p_core::tunnel::config::UdpTunnelManagerConfig::default()
+            use_v6: rust_p2p_core::tunnel::config::UdpTunnelConfig::default()
                 .set_use_v6(true)
                 .check()
                 .is_ok(),
@@ -284,7 +284,7 @@ impl From<TunnelManagerConfig> for rust_p2p_core::tunnel::config::PipeConfig {
             None
         };
         let udp_pipe_config = value.udp_pipe_config.map(|v| {
-            let mut config: rust_p2p_core::tunnel::config::UdpTunnelManagerConfig = v.into();
+            let mut config: rust_p2p_core::tunnel::config::UdpTunnelConfig = v.into();
             config.recycle_buf.clone_from(&recycle_buf);
             config.use_v6 = value.use_v6;
             config
@@ -293,7 +293,7 @@ impl From<TunnelManagerConfig> for rust_p2p_core::tunnel::config::PipeConfig {
             config
         });
         let tcp_pipe_config = value.tcp_pipe_config.map(|v| {
-            let mut config: rust_p2p_core::tunnel::config::TcpTunnelManagerConfig = v.into();
+            let mut config: rust_p2p_core::tunnel::config::TcpTunnelConfig = v.into();
             config.recycle_buf = recycle_buf;
             config.use_v6 = value.use_v6;
             config
@@ -312,11 +312,11 @@ impl From<TunnelManagerConfig> for rust_p2p_core::tunnel::config::PipeConfig {
     }
 }
 
-impl From<UdpPipeConfig> for rust_p2p_core::tunnel::config::UdpTunnelManagerConfig {
+impl From<UdpPipeConfig> for rust_p2p_core::tunnel::config::UdpTunnelConfig {
     fn from(value: UdpPipeConfig) -> Self {
-        rust_p2p_core::tunnel::config::UdpTunnelManagerConfig {
-            main_pipeline_num: value.main_pipeline_num,
-            sub_pipeline_num: value.sub_pipeline_num,
+        rust_p2p_core::tunnel::config::UdpTunnelConfig {
+            main_udp_count: value.main_pipeline_num,
+            sub_udp_count: value.sub_pipeline_num,
             model: value.model,
             default_interface: None,
             udp_ports: value.udp_ports,
@@ -326,9 +326,9 @@ impl From<UdpPipeConfig> for rust_p2p_core::tunnel::config::UdpTunnelManagerConf
     }
 }
 
-impl From<TcpPipeConfig> for rust_p2p_core::tunnel::config::TcpTunnelManagerConfig {
+impl From<TcpPipeConfig> for rust_p2p_core::tunnel::config::TcpTunnelConfig {
     fn from(value: TcpPipeConfig) -> Self {
-        rust_p2p_core::tunnel::config::TcpTunnelManagerConfig {
+        rust_p2p_core::tunnel::config::TcpTunnelConfig {
             route_idle_time: value.route_idle_time,
             tcp_multiplexing_limit: value.tcp_multiplexing_limit,
             default_interface: None,

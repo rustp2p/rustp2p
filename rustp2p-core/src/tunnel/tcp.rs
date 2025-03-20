@@ -1,6 +1,6 @@
 use crate::route::{Index, RouteKey};
 use crate::socket::{connect_tcp, create_tcp_listener, LocalInterface};
-use crate::tunnel::config::TcpTunnelManagerConfig;
+use crate::tunnel::config::TcpTunnelConfig;
 use crate::tunnel::recycle::RecycleBuf;
 use async_lock::Mutex;
 use async_trait::async_trait;
@@ -19,7 +19,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::{TcpListener, TcpStream};
 
-pub struct TunnelManager {
+pub struct TcpTunnelFactory {
     route_idle_time: Duration,
     tcp_listener: TcpListener,
     connect_receiver: Receiver<(RouteKey, ReadHalfBox)>,
@@ -29,9 +29,9 @@ pub struct TunnelManager {
     init_codec: Arc<Box<dyn InitCodec>>,
 }
 
-impl TunnelManager {
+impl TcpTunnelFactory {
     /// Construct a `TCP` tunnel with the specified configuration
-    pub fn new(config: TcpTunnelManagerConfig) -> io::Result<TunnelManager> {
+    pub fn new(config: TcpTunnelConfig) -> io::Result<TcpTunnelFactory> {
         config.check()?;
         let address: SocketAddr = if config.use_v6 {
             format!("[::]:{}", config.tcp_port).parse().unwrap()
@@ -54,7 +54,7 @@ impl TunnelManager {
             config.default_interface,
             init_codec.clone(),
         ));
-        Ok(TunnelManager {
+        Ok(TcpTunnelFactory {
             route_idle_time: config.route_idle_time,
             tcp_listener,
             connect_receiver,
@@ -65,14 +65,14 @@ impl TunnelManager {
     }
 }
 
-impl TunnelManager {
+impl TcpTunnelFactory {
     /// Accept `TCP` pipelines from this kind tunnel
-    pub async fn accept(&mut self) -> io::Result<Tunnel> {
+    pub async fn accept(&mut self) -> io::Result<TcpTunnel> {
         tokio::select! {
             rs=self.connect_receiver.recv()=>{
                 let (route_key,read_half) = rs.
                     map_err(|_| io::Error::new(io::ErrorKind::Other,"connect_receiver done"))?;
-                Ok(Tunnel::new(self.route_idle_time,route_key,read_half,self.write_half_collect.clone()))
+                Ok(TcpTunnel::new(self.route_idle_time,route_key,read_half,self.write_half_collect.clone()))
             },
             rs=self.tcp_listener.accept()=>{
                 let (tcp_stream,addr) = rs?;
@@ -82,13 +82,13 @@ impl TunnelManager {
                 let (decoder,encoder) = self.init_codec.codec(addr)?;
                 let read_half = ReadHalfBox::new(read_half,decoder);
                 self.write_half_collect.add_write_half(route_key,0, write_half,encoder);
-                Ok(Tunnel::new(self.route_idle_time,route_key,read_half,self.write_half_collect.clone()))
+                Ok(TcpTunnel::new(self.route_idle_time,route_key,read_half,self.write_half_collect.clone()))
             }
         }
     }
 }
 
-pub struct Tunnel {
+pub struct TcpTunnel {
     route_key: RouteKey,
     route_idle_time: Duration,
     tcp_read: OwnedReadHalf,
@@ -96,7 +96,7 @@ pub struct Tunnel {
     write_half_collect: WriteHalfCollect,
 }
 
-impl Tunnel {
+impl TcpTunnel {
     pub(crate) fn new(
         route_idle_time: Duration,
         route_key: RouteKey,
@@ -122,13 +122,13 @@ impl Tunnel {
     }
 }
 
-impl Drop for Tunnel {
+impl Drop for TcpTunnel {
     fn drop(&mut self) {
         self.write_half_collect.remove(&self.route_key);
     }
 }
 
-impl Tunnel {
+impl TcpTunnel {
     /// Writing `buf` to the target denoted by `route_key` via this pipeline
     pub async fn send(&self, buf: BytesMut) -> io::Result<()> {
         self.write_half_collect.send_to(buf, &self.route_key).await
@@ -687,20 +687,20 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 
-    use crate::tunnel::config::TcpTunnelManagerConfig;
-    use crate::tunnel::tcp::{Decoder, Encoder, InitCodec, TunnelManager};
+    use crate::tunnel::config::TcpTunnelConfig;
+    use crate::tunnel::tcp::{Decoder, Encoder, InitCodec, TcpTunnelFactory};
 
     #[tokio::test]
     pub async fn create_tcp_pipe() {
-        let config: TcpTunnelManagerConfig = TcpTunnelManagerConfig::default();
-        let tcp_pipe = TunnelManager::new(config).unwrap();
+        let config: TcpTunnelConfig = TcpTunnelConfig::default();
+        let tcp_pipe = TcpTunnelFactory::new(config).unwrap();
         drop(tcp_pipe)
     }
 
     #[tokio::test]
     pub async fn create_codec_tcp_pipe() {
-        let config = TcpTunnelManagerConfig::new(Box::new(MyInitCodeC));
-        let tcp_pipe = TunnelManager::new(config).unwrap();
+        let config = TcpTunnelConfig::new(Box::new(MyInitCodeC));
+        let tcp_pipe = TcpTunnelFactory::new(config).unwrap();
         drop(tcp_pipe)
     }
 

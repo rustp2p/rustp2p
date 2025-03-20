@@ -31,14 +31,14 @@ pub type PipeComponent<PeerID> = (
 pub fn pipe<PeerID: Hash + Eq + Clone>(config: PipeConfig) -> io::Result<PipeComponent<PeerID>> {
     let route_table = RouteTable::new(config.load_balance, config.multi_pipeline);
     let udp_tunnel_manager = if let Some(mut udp_pipe_config) = config.udp_pipe_config {
-        udp_pipe_config.main_pipeline_num = config.multi_pipeline;
-        Some(udp::TunnelManager::new(udp_pipe_config)?)
+        udp_pipe_config.main_udp_count = config.multi_pipeline;
+        Some(udp::UdpTunnelFactory::new(udp_pipe_config)?)
     } else {
         None
     };
     let tcp_tunnel_manager = if let Some(mut tcp_pipe_config) = config.tcp_pipe_config {
         tcp_pipe_config.tcp_multiplexing_limit = config.multi_pipeline;
-        Some(tcp::TunnelManager::new(tcp_pipe_config)?)
+        Some(tcp::TcpTunnelFactory::new(tcp_pipe_config)?)
     } else {
         None
     };
@@ -63,14 +63,14 @@ pub fn pipe<PeerID: Hash + Eq + Clone>(config: PipeConfig) -> io::Result<PipeCom
 
 pub struct TunnelManager<PeerID> {
     route_table: RouteTable<PeerID>,
-    udp_tunnel_manager: Option<udp::TunnelManager>,
-    tcp_tunnel_manager: Option<tcp::TunnelManager>,
+    udp_tunnel_manager: Option<udp::UdpTunnelFactory>,
+    tcp_tunnel_manager: Option<tcp::TcpTunnelFactory>,
     extensible_pipe: Option<ExtensiblePipe>,
 }
 
 pub enum PipeLine {
-    Udp(udp::Tunnel),
-    Tcp(tcp::Tunnel),
+    Udp(udp::UdpTunnel),
+    Tcp(tcp::TcpTunnel),
     Extend(ExtensiblePipeLine),
 }
 
@@ -124,10 +124,10 @@ impl<PeerID> TunnelManager<PeerID> {
 }
 
 impl<PeerID> TunnelManager<PeerID> {
-    pub fn udp_tunnel_manager_as_mut(&mut self) -> Option<&mut udp::TunnelManager> {
+    pub fn udp_tunnel_manager_as_mut(&mut self) -> Option<&mut udp::UdpTunnelFactory> {
         self.udp_tunnel_manager.as_mut()
     }
-    pub fn tcp_tunnel_manager_as_mut(&mut self) -> Option<&mut tcp::TunnelManager> {
+    pub fn tcp_tunnel_manager_as_mut(&mut self) -> Option<&mut tcp::TcpTunnelFactory> {
         self.tcp_tunnel_manager.as_mut()
     }
     /// Acquire the `route_table` associated with the `tunnel`
@@ -136,14 +136,16 @@ impl<PeerID> TunnelManager<PeerID> {
     }
 }
 
-async fn accept_tcp(tcp: Option<&mut tcp::TunnelManager>) -> io::Result<PipeLine> {
+async fn accept_tcp(tcp: Option<&mut tcp::TcpTunnelFactory>) -> io::Result<PipeLine> {
     if let Some(tcp_pipe) = tcp {
         Ok(PipeLine::Tcp(tcp_pipe.accept().await?))
     } else {
         futures::future::pending().await
     }
 }
-async fn accept_udp(udp_tunnel_manager: Option<&mut udp::TunnelManager>) -> io::Result<PipeLine> {
+async fn accept_udp(
+    udp_tunnel_manager: Option<&mut udp::UdpTunnelFactory>,
+) -> io::Result<PipeLine> {
     if let Some(udp_pipe) = udp_tunnel_manager {
         Ok(PipeLine::Udp(udp_pipe.dispatch().await?))
     } else {
