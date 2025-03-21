@@ -161,7 +161,7 @@ impl<PeerID> UnifiedSocketManager<PeerID> {
         match route_key.protocol() {
             ConnectProtocol::UDP => {
                 if let Some(w) = self.udp_socket_manager.as_ref() {
-                    return w.send_buf_to(buf, route_key).await;
+                    return w.send_bytes_to(buf, route_key).await;
                 }
             }
             ConnectProtocol::TCP => {
@@ -183,12 +183,12 @@ impl<PeerID> UnifiedSocketManager<PeerID> {
         match connect_protocol {
             ConnectProtocol::UDP => {
                 if let Some(w) = self.udp_socket_manager.as_ref() {
-                    return w.send_buf_to_addr(buf, addr).await;
+                    return w.send_bytes_to(buf, addr).await;
                 }
             }
             ConnectProtocol::TCP => {
                 if let Some(w) = self.tcp_socket_manager.as_ref() {
-                    return w.send_to_addr(buf, addr).await;
+                    return w.send_to(buf, addr).await;
                 }
             }
         }

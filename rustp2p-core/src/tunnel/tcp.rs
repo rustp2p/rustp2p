@@ -8,9 +8,9 @@ use bytes::BytesMut;
 use dashmap::DashMap;
 use dyn_clone::DynClone;
 use rand::Rng;
+use std::future::Future;
 use std::io;
 use std::io::IoSlice;
-use std::marker::PhantomData;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -518,51 +518,71 @@ impl SocketManager {
         let route_key = self.connect_reuse_port(addr.into()).await?;
         self.send_to(buf, &route_key).await
     }
-    pub async fn send_to_addr<A: Into<SocketAddr>>(
-        &self,
-        buf: BytesMut,
-        addr: A,
-    ) -> io::Result<()> {
-        let route_key = self.connect(addr.into()).await?;
-        self.send_to(buf, &route_key).await
-    }
+
     /// Writing `buf` to the target denoted by `route_key`
-    pub async fn send_to(&self, buf: BytesMut, route_key: &RouteKey) -> io::Result<()> {
-        self.write_half_collect.send_to(buf, route_key).await
+    pub async fn send_to<D: ToRouteKeyForTcp<()>>(&self, buf: BytesMut, dest: D) -> io::Result<()> {
+        let route_key = ToRouteKeyForTcp::route_key(self, dest).await?;
+        self.write_half_collect.send_to(buf, &route_key).await
     }
-    pub async fn get(&self, addr: SocketAddr, index: usize) -> io::Result<IndexedTcpSocket<'_>> {
-        let route_key = self.multi_connect(addr, index).await?;
-        let write_half = self
-            .write_half_collect
-            .get(&route_key.index_usize())
-            .ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("not found with index={index}"),
-                )
-            })?;
+    // pub async fn get_indexed_tcp(&self, addr: SocketAddr, index: usize) -> io::Result<IndexedTcpSocket<'_>> {
+    //     let route_key = self.multi_connect(addr, index).await?;
+    //     let write_half = self
+    //         .write_half_collect
+    //         .get(&route_key.index_usize())
+    //         .ok_or_else(|| {
+    //             io::Error::new(
+    //                 io::ErrorKind::Other,
+    //                 format!("not found with index={index}"),
+    //             )
+    //         })?;
+    //
+    //     Ok(IndexedTcpSocket {
+    //         shadow: write_half,
+    //         marker: Default::default(),
+    //     })
+    // }
+}
+pub trait ToRouteKeyForTcp<T> {
+    fn route_key(_: &SocketManager, _: Self) -> impl Future<Output = io::Result<RouteKey>>;
+}
 
-        Ok(IndexedTcpSocket {
-            shadow: write_half,
-            marker: Default::default(),
-        })
+impl ToRouteKeyForTcp<()> for RouteKey {
+    async fn route_key(_: &SocketManager, dest: RouteKey) -> io::Result<RouteKey> {
+        Ok(dest)
+    }
+}
+
+impl ToRouteKeyForTcp<()> for &RouteKey {
+    async fn route_key(_: &SocketManager, dest: &RouteKey) -> io::Result<RouteKey> {
+        Ok(*dest)
     }
 }
 
-pub struct IndexedTcpSocket<'a> {
-    shadow: Sender<BytesMut>,
-    marker: PhantomData<&'a ()>,
-}
-
-impl IndexedTcpSocket<'_> {
-    pub async fn send(&self, buf: BytesMut) -> io::Result<()> {
-        if let Err(_e) = self.shadow.send(buf).await {
-            Err(io::Error::from(io::ErrorKind::WriteZero))?
-        } else {
-            Ok(())
-        }
+impl ToRouteKeyForTcp<()> for &mut RouteKey {
+    async fn route_key(_: &SocketManager, dest: &mut RouteKey) -> io::Result<RouteKey> {
+        Ok(*dest)
     }
 }
+impl<S: Into<SocketAddr>> ToRouteKeyForTcp<()> for S {
+    async fn route_key(socket_manager: &SocketManager, dest: Self) -> io::Result<RouteKey> {
+        socket_manager.connect(dest.into()).await
+    }
+}
+
+// pub struct IndexedTcpSocket<'a> {
+//     shadow: Sender<BytesMut>,
+//     marker: PhantomData<&'a ()>,
+// }
+//
+// impl IndexedTcpSocket<'_> {
+//     pub async fn send(&self, buf: BytesMut) -> io::Result<()> {
+//         if let Err(_e) = self.shadow.send(buf).await {
+//             Err(io::Error::from(io::ErrorKind::WriteZero))?
+//         } else {
+//             Ok(())
+//         }
+//     }
+// }
 
 pub trait TcpStreamIndex {
     fn route_key(&self) -> io::Result<RouteKey>;

@@ -78,7 +78,7 @@ async fn direct_heartbeat_request(
             NodeAddress::Tcp(addr) => match tunnel_tx.socket_manager.tcp_socket_manager_as_ref() {
                 None => {}
                 Some(tcp) => {
-                    if let Err(e) = tcp.send_to_addr(buf.into(), addr).await {
+                    if let Err(e) = tcp.send_to(buf.into(), addr).await {
                         log::warn!("direct_heartbeat_request tcp, e={e:?},addr={addr:?}");
                     }
                 }
@@ -86,7 +86,7 @@ async fn direct_heartbeat_request(
             NodeAddress::Udp(addr) => match tunnel_tx.socket_manager.udp_socket_manager_as_ref() {
                 None => {}
                 Some(udp) => {
-                    if let Err(e) = udp.send_to_addr(buf, addr).await {
+                    if let Err(e) = udp.send_to(buf, addr).await {
                         log::warn!("direct_heartbeat_request udp, e={e:?},addr={addr:?}");
                     }
                 }

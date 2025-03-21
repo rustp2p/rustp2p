@@ -68,6 +68,42 @@ impl UDPIndex {
     }
 }
 
+pub trait ToRouteKeyForUdp<T> {
+    fn route_key(socket_manager: &SocketManager, dest: Self) -> io::Result<RouteKey>;
+}
+
+impl ToRouteKeyForUdp<()> for RouteKey {
+    fn route_key(_: &SocketManager, dest: Self) -> io::Result<RouteKey> {
+        Ok(dest)
+    }
+}
+
+impl ToRouteKeyForUdp<()> for &RouteKey {
+    fn route_key(_: &SocketManager, dest: Self) -> io::Result<RouteKey> {
+        Ok(*dest)
+    }
+}
+
+impl ToRouteKeyForUdp<()> for &mut RouteKey {
+    fn route_key(_: &SocketManager, dest: Self) -> io::Result<RouteKey> {
+        Ok(*dest)
+    }
+}
+
+impl<S: Into<SocketAddr>> ToRouteKeyForUdp<()> for S {
+    fn route_key(socket_manager: &SocketManager, dest: Self) -> io::Result<RouteKey> {
+        let addr = dest.into();
+        socket_manager.generate_route_key_from_addr(0, addr)
+    }
+}
+
+impl<S: Into<SocketAddr>> ToRouteKeyForUdp<usize> for (usize, S) {
+    fn route_key(socket_manager: &SocketManager, dest: Self) -> io::Result<RouteKey> {
+        let (index, addr) = dest;
+        socket_manager.generate_route_key_from_addr(index, addr.into())
+    }
+}
+
 /// initialize udp tunnel by config
 pub(crate) fn create_tunnel_factory(config: UdpTunnelConfig) -> io::Result<UdpTunnelFactory> {
     config.check()?;
@@ -146,15 +182,8 @@ impl SocketManager {
     pub(crate) fn try_main_batch_send_to(&self, buf: &[u8], addr: &[SocketAddr]) {
         let len = self.main_v4_udp_count();
         for (i, addr) in addr.iter().enumerate() {
-            match self.get(*addr, i % len) {
-                Ok(writer) => {
-                    if let Err(e) = writer.try_send(buf) {
-                        log::info!("try_main_send_to_addr: {e:?},{i},{addr}")
-                    }
-                }
-                Err(e) => {
-                    log::info!("try_main_send_to_addr: {e:?},{i},{addr}")
-                }
+            if let Err(e) = self.try_send_to(buf, (i % len, *addr)) {
+                log::info!("try_main_send_to_addr: {e:?},{},{addr}", i % len);
             }
         }
     }
@@ -259,36 +288,6 @@ impl SocketManager {
             _ => return Err(io::Error::from(io::ErrorKind::InvalidInput)),
         })
     }
-
-    #[inline]
-    async fn send_to_addr_via_index(
-        &self,
-        buf: &[u8],
-        addr: SocketAddr,
-        index: usize,
-    ) -> io::Result<()> {
-        let key = self.generate_route_key_from_addr(index, addr)?;
-        self.send_to(buf, &key).await
-    }
-    async fn send_buf_to_addr_via_index(
-        &self,
-        buf: BytesMut,
-        addr: SocketAddr,
-        index: usize,
-    ) -> io::Result<()> {
-        let key = self.generate_route_key_from_addr(index, addr)?;
-        self.send_buf_to(buf, &key).await
-    }
-    #[inline]
-    fn try_send_to_addr_via_index(
-        &self,
-        buf: &[u8],
-        addr: SocketAddr,
-        index: usize,
-    ) -> io::Result<()> {
-        let key = self.generate_route_key_from_addr(index, addr)?;
-        self.try_send_to(buf, &key)
-    }
 }
 
 impl SocketManager {
@@ -326,7 +325,54 @@ impl SocketManager {
         }
         Ok(ports)
     }
-    pub async fn send_buf_to(&self, buf: BytesMut, route_key: &RouteKey) -> io::Result<()> {
+    /// Writing `buf` to the target denoted by `route_key`
+    pub async fn send_to<T, D: ToRouteKeyForUdp<T>>(&self, buf: &[u8], dest: D) -> io::Result<()> {
+        let route_key = ToRouteKeyForUdp::route_key(self, dest)?;
+        let len = self
+            .get_udp_from_route(&route_key)?
+            .send_to(buf, route_key.addr())
+            .await?;
+        if len == 0 {
+            return Err(std::io::Error::from(io::ErrorKind::WriteZero));
+        }
+        Ok(())
+    }
+
+    /// Try to write `buf` to the target denoted by `route_key`
+    pub fn try_send_to<T, D: ToRouteKeyForUdp<T>>(&self, buf: &[u8], dest: D) -> io::Result<()> {
+        let route_key = ToRouteKeyForUdp::route_key(self, dest)?;
+        let len = self
+            .get_udp_from_route(&route_key)?
+            .try_send_to(buf, route_key.addr())?;
+        if len == 0 {
+            return Err(std::io::Error::from(io::ErrorKind::WriteZero));
+        }
+        Ok(())
+    }
+
+    pub async fn send_multiple_to<T, D: ToRouteKeyForUdp<T>>(
+        &self,
+        bufs: &[IoSlice<'_>],
+        dest: D,
+    ) -> io::Result<()> {
+        let route_key = ToRouteKeyForUdp::route_key(self, dest)?;
+        let udp = self.get_udp_from_route(&route_key)?;
+        for buf in bufs {
+            let len = udp.send_to(buf, route_key.addr()).await?;
+            if len == 0 {
+                return Err(std::io::Error::from(io::ErrorKind::WriteZero));
+            }
+        }
+
+        Ok(())
+    }
+
+    pub async fn send_bytes_to<T, D: ToRouteKeyForUdp<T>>(
+        &self,
+        buf: BytesMut,
+        dest: D,
+    ) -> io::Result<()> {
+        let route_key = ToRouteKeyForUdp::route_key(self, dest)?;
         let sender = if let Some(sender) = self.sender_map.get(&route_key.index()) {
             sender.value().clone()
         } else {
@@ -338,71 +384,6 @@ impl SocketManager {
             Ok(())
         }
     }
-    /// Writing `buf` to the target denoted by `route_key`
-    pub async fn send_to(&self, buf: &[u8], route_key: &RouteKey) -> io::Result<()> {
-        let len = self
-            .get_udp_from_route(route_key)?
-            .send_to(buf, route_key.addr())
-            .await?;
-        if len == 0 {
-            return Err(std::io::Error::from(io::ErrorKind::WriteZero));
-        }
-        Ok(())
-    }
-    pub async fn send_multiple_to(
-        &self,
-        bufs: &[IoSlice<'_>],
-        route_key: &RouteKey,
-    ) -> io::Result<()> {
-        let udp = self.get_udp_from_route(route_key)?;
-        for buf in bufs {
-            let len = udp.send_to(buf, route_key.addr()).await?;
-            if len == 0 {
-                return Err(std::io::Error::from(io::ErrorKind::WriteZero));
-            }
-        }
-
-        Ok(())
-    }
-    /// Try to write `buf` to the target denoted by `route_key`
-    pub fn try_send_to(&self, buf: &[u8], route_key: &RouteKey) -> io::Result<()> {
-        let len = self
-            .get_udp_from_route(route_key)?
-            .try_send_to(buf, route_key.addr())?;
-        if len == 0 {
-            return Err(std::io::Error::from(io::ErrorKind::WriteZero));
-        }
-        Ok(())
-    }
-    /// Writing `buf` to the target denoted by SocketAddr
-    pub async fn send_to_addr<A: Into<SocketAddr>>(&self, buf: &[u8], addr: A) -> io::Result<()> {
-        self.send_to_addr_via_index(buf, addr.into(), 0).await
-    }
-    pub async fn send_buf_to_addr<A: Into<SocketAddr>>(
-        &self,
-        buf: BytesMut,
-        addr: A,
-    ) -> io::Result<()> {
-        self.send_buf_to_addr_via_index(buf, addr.into(), 0).await
-    }
-    /// Try to write `buf` to the target denoted by SocketAddr
-    pub fn try_send_to_addr<A: Into<SocketAddr>>(&self, buf: &[u8], addr: A) -> io::Result<()> {
-        self.try_send_to_addr_via_index(buf, addr.into(), 0)
-    }
-    /// Acquire the Udp Socket by the index
-    pub fn get(&self, addr: SocketAddr, index: usize) -> io::Result<IndexedUdpSocket<'_>> {
-        if index >= self.main_udp_v4.len() && index >= self.main_udp_v6.len() {
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                "neither in the bound of both the udp_v4 set nor the udp_v6 set",
-            ));
-        }
-        Ok(IndexedUdpSocket {
-            shadow: self,
-            addr,
-            index,
-        })
-    }
 
     /// Send bytes to the target denoted by SocketAddr with every main underlying socket
     pub async fn detect_pub_addrs<A: Into<SocketAddr>>(
@@ -412,7 +393,7 @@ impl SocketManager {
     ) -> io::Result<()> {
         let addr: SocketAddr = addr.into();
         for index in 0..self.main_v4_udp_count() {
-            self.send_to_addr_via_index(buf, addr, index).await?;
+            self.send_to(buf, (index, addr)).await?
         }
         Ok(())
     }
@@ -648,23 +629,6 @@ fn socket_addr_to_sockaddr(addr: &SocketAddr) -> sockaddr_storage {
     storage
 }
 
-pub struct IndexedUdpSocket<'a> {
-    shadow: &'a SocketManager,
-    addr: SocketAddr,
-    index: usize,
-}
-
-impl IndexedUdpSocket<'_> {
-    pub async fn send(&self, buf: &[u8]) -> io::Result<()> {
-        self.shadow
-            .send_to_addr_via_index(buf, self.addr, self.index)
-            .await
-    }
-    pub fn try_send(&self, buf: &[u8]) -> io::Result<()> {
-        self.shadow
-            .try_send_to_addr_via_index(buf, self.addr, self.index)
-    }
-}
 pub struct UdpTunnel {
     index: Index,
     udp: Option<Arc<UdpSocket>>,

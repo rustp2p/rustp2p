@@ -324,7 +324,7 @@ impl<PeerID: Hash + Eq + Clone> Puncher<PeerID> {
                     return Ok(index);
                 }
                 let addr: SocketAddr = SocketAddr::V4(SocketAddrV4::new(*pub_ip, *port));
-                if let Err(e) = udp_socket_manager.try_send_to_addr(buf, addr) {
+                if let Err(e) = udp_socket_manager.try_send_to(buf, addr) {
                     log::info!("{addr},{e:?}");
                 }
                 tokio::time::sleep(Duration::from_millis(2)).await
