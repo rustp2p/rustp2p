@@ -6,36 +6,32 @@ use std::time::Duration;
 use async_trait::async_trait;
 use bytes::{Buf, BytesMut};
 
-use rust_p2p_core::async_compat::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
+use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 
-#[cfg(feature = "use-async-std")]
-use async_std::prelude::*;
-
-#[cfg(feature = "use-tokio")]
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-use crate::pipe::{NodeAddress, PeerNodeAddress, RecvResult};
 use crate::protocol::node_id::{GroupCode, NodeID};
 use crate::protocol::{NetPacket, HEAD_LEN};
+use crate::tunnel::{NodeAddress, PeerNodeAddress, RecvResult};
 pub use rust_p2p_core::nat::*;
-pub use rust_p2p_core::pipe::config::LoadBalance;
-use rust_p2p_core::pipe::recycle::RecycleBuf;
-use rust_p2p_core::pipe::tcp_pipe::{Decoder, Encoder, InitCodec};
-pub use rust_p2p_core::pipe::udp_pipe::Model;
 pub use rust_p2p_core::punch::config::{PunchModel, PunchModelBox};
 pub use rust_p2p_core::route::*;
 pub use rust_p2p_core::socket::LocalInterface;
+pub use rust_p2p_core::tunnel::config::LoadBalance;
+use rust_p2p_core::tunnel::recycle::RecycleBuf;
+use rust_p2p_core::tunnel::tcp::{Decoder, Encoder, InitCodec};
+pub use rust_p2p_core::tunnel::udp::Model;
 
 pub(crate) mod punch_info;
 
 pub(crate) const ROUTE_IDLE_TIME: Duration = Duration::from_secs(10);
 
-pub struct PipeConfig {
+pub struct TunnelManagerConfig {
     pub load_balance: LoadBalance,
-    pub multi_pipeline: usize,
+    pub major_socket_count: usize,
     pub route_idle_time: Duration,
-    pub udp_pipe_config: Option<UdpPipeConfig>,
-    pub tcp_pipe_config: Option<TcpPipeConfig>,
+    pub udp_tunnel_config: Option<UdpTunnelConfig>,
+    pub tcp_tunnel_config: Option<TcpTunnelConfig>,
     pub enable_extend: bool,
     pub group_code: Option<GroupCode>,
     pub self_id: Option<NodeID>,
@@ -56,14 +52,14 @@ pub struct PipeConfig {
     pub use_v6: bool,
 }
 
-impl Default for PipeConfig {
+impl Default for TunnelManagerConfig {
     fn default() -> Self {
         Self {
             load_balance: LoadBalance::MinHopLowestLatency,
-            multi_pipeline: MULTI_PIPELINE,
+            major_socket_count: MAX_MAJOR_SOCKET_COUNT,
             enable_extend: false,
-            udp_pipe_config: Some(Default::default()),
-            tcp_pipe_config: Some(Default::default()),
+            udp_tunnel_config: Some(Default::default()),
+            tcp_tunnel_config: Some(Default::default()),
             route_idle_time: ROUTE_IDLE_TIME,
             group_code: None,
             self_id: None,
@@ -92,7 +88,7 @@ impl Default for PipeConfig {
             #[cfg(any(feature = "aes-gcm", feature = "chacha20-poly1305"))]
             encryption: None,
             default_interface: None,
-            use_v6: rust_p2p_core::pipe::config::UdpPipeConfig::default()
+            use_v6: rust_p2p_core::tunnel::config::UdpTunnelConfig::default()
                 .set_use_v6(true)
                 .check()
                 .is_ok(),
@@ -100,16 +96,16 @@ impl Default for PipeConfig {
     }
 }
 
-pub(crate) const MULTI_PIPELINE: usize = 2;
-pub(crate) const UDP_SUB_PIPELINE_NUM: usize = 82;
+pub(crate) const MAX_MAJOR_SOCKET_COUNT: usize = 2;
+pub(crate) const MAX_UDP_SUB_SOCKET_COUNT: usize = 82;
 
-impl PipeConfig {
+impl TunnelManagerConfig {
     pub fn none_tcp(self) -> Self {
         self
     }
 }
 
-impl PipeConfig {
+impl TunnelManagerConfig {
     pub fn empty() -> Self {
         Self::default()
     }
@@ -117,20 +113,20 @@ impl PipeConfig {
         self.load_balance = load_balance;
         self
     }
-    pub fn set_main_pipeline_num(mut self, main_pipeline_num: usize) -> Self {
-        self.multi_pipeline = main_pipeline_num;
+    pub fn set_main_socket_count(mut self, count: usize) -> Self {
+        self.major_socket_count = count;
         self
     }
     pub fn set_enable_extend(mut self, enable_extend: bool) -> Self {
         self.enable_extend = enable_extend;
         self
     }
-    pub fn set_udp_pipe_config(mut self, udp_pipe_config: UdpPipeConfig) -> Self {
-        self.udp_pipe_config.replace(udp_pipe_config);
+    pub fn set_udp_tunnel_config(mut self, config: UdpTunnelConfig) -> Self {
+        self.udp_tunnel_config.replace(config);
         self
     }
-    pub fn set_tcp_pipe_config(mut self, tcp_pipe_config: TcpPipeConfig) -> Self {
-        self.tcp_pipe_config.replace(tcp_pipe_config);
+    pub fn set_tcp_tunnel_config(mut self, config: TcpTunnelConfig) -> Self {
+        self.tcp_tunnel_config.replace(config);
         self
     }
     pub fn set_group_code(mut self, group_code: GroupCode) -> Self {
@@ -203,23 +199,23 @@ impl PipeConfig {
     }
 }
 
-pub struct TcpPipeConfig {
+pub struct TcpTunnelConfig {
     pub route_idle_time: Duration,
     pub tcp_multiplexing_limit: usize,
     pub tcp_port: u16,
 }
 
-impl Default for TcpPipeConfig {
+impl Default for TcpTunnelConfig {
     fn default() -> Self {
         Self {
             route_idle_time: ROUTE_IDLE_TIME,
-            tcp_multiplexing_limit: MULTI_PIPELINE,
+            tcp_multiplexing_limit: MAX_MAJOR_SOCKET_COUNT,
             tcp_port: 0,
         }
     }
 }
 
-impl TcpPipeConfig {
+impl TcpTunnelConfig {
     pub fn set_tcp_multiplexing_limit(mut self, tcp_multiplexing_limit: usize) -> Self {
         self.tcp_multiplexing_limit = tcp_multiplexing_limit;
         self
@@ -235,31 +231,31 @@ impl TcpPipeConfig {
 }
 
 #[derive(Clone)]
-pub struct UdpPipeConfig {
-    pub main_pipeline_num: usize,
-    pub sub_pipeline_num: usize,
+pub struct UdpTunnelConfig {
+    pub main_socket_count: usize,
+    pub sub_socket_count: usize,
     pub model: Model,
     pub udp_ports: Vec<u16>,
 }
 
-impl Default for UdpPipeConfig {
+impl Default for UdpTunnelConfig {
     fn default() -> Self {
         Self {
-            main_pipeline_num: MULTI_PIPELINE,
-            sub_pipeline_num: UDP_SUB_PIPELINE_NUM,
+            main_socket_count: MAX_MAJOR_SOCKET_COUNT,
+            sub_socket_count: MAX_UDP_SUB_SOCKET_COUNT,
             model: Model::Low,
             udp_ports: vec![0, 0],
         }
     }
 }
 
-impl UdpPipeConfig {
-    pub fn set_main_pipeline_num(mut self, main_pipeline_num: usize) -> Self {
-        self.main_pipeline_num = main_pipeline_num;
+impl UdpTunnelConfig {
+    pub fn set_main_socket_count(mut self, count: usize) -> Self {
+        self.main_socket_count = count;
         self
     }
-    pub fn set_sub_pipeline_num(mut self, sub_pipeline_num: usize) -> Self {
-        self.sub_pipeline_num = sub_pipeline_num;
+    pub fn set_sub_socket_count(mut self, count: usize) -> Self {
+        self.sub_socket_count = count;
         self
     }
     pub fn set_model(mut self, model: Model) -> Self {
@@ -277,8 +273,8 @@ impl UdpPipeConfig {
     }
 }
 
-impl From<PipeConfig> for rust_p2p_core::pipe::config::PipeConfig {
-    fn from(value: PipeConfig) -> Self {
+impl From<TunnelManagerConfig> for rust_p2p_core::tunnel::config::TunnelConfig {
+    fn from(value: TunnelManagerConfig) -> Self {
         let recycle_buf = if value.recycle_buf_cap > 0 {
             Some(RecycleBuf::new(
                 value.recycle_buf_cap,
@@ -287,8 +283,8 @@ impl From<PipeConfig> for rust_p2p_core::pipe::config::PipeConfig {
         } else {
             None
         };
-        let udp_pipe_config = value.udp_pipe_config.map(|v| {
-            let mut config: rust_p2p_core::pipe::config::UdpPipeConfig = v.into();
+        let udp_tunnel_config = value.udp_tunnel_config.map(|v| {
+            let mut config: rust_p2p_core::tunnel::config::UdpTunnelConfig = v.into();
             config.recycle_buf.clone_from(&recycle_buf);
             config.use_v6 = value.use_v6;
             config
@@ -296,8 +292,8 @@ impl From<PipeConfig> for rust_p2p_core::pipe::config::PipeConfig {
                 .clone_from(&value.default_interface);
             config
         });
-        let tcp_pipe_config = value.tcp_pipe_config.map(|v| {
-            let mut config: rust_p2p_core::pipe::config::TcpPipeConfig = v.into();
+        let tcp_tunnel_config = value.tcp_tunnel_config.map(|v| {
+            let mut config: rust_p2p_core::tunnel::config::TcpTunnelConfig = v.into();
             config.recycle_buf = recycle_buf;
             config.use_v6 = value.use_v6;
             config
@@ -305,22 +301,22 @@ impl From<PipeConfig> for rust_p2p_core::pipe::config::PipeConfig {
                 .clone_from(&value.default_interface);
             config
         });
-        rust_p2p_core::pipe::config::PipeConfig {
+        rust_p2p_core::tunnel::config::TunnelConfig {
             load_balance: value.load_balance,
-            multi_pipeline: value.multi_pipeline,
+            major_socket_count: value.major_socket_count,
             route_idle_time: value.route_idle_time,
-            udp_pipe_config,
-            tcp_pipe_config,
+            udp_tunnel_config,
+            tcp_tunnel_config,
             enable_extend: value.enable_extend,
         }
     }
 }
 
-impl From<UdpPipeConfig> for rust_p2p_core::pipe::config::UdpPipeConfig {
-    fn from(value: UdpPipeConfig) -> Self {
-        rust_p2p_core::pipe::config::UdpPipeConfig {
-            main_pipeline_num: value.main_pipeline_num,
-            sub_pipeline_num: value.sub_pipeline_num,
+impl From<UdpTunnelConfig> for rust_p2p_core::tunnel::config::UdpTunnelConfig {
+    fn from(value: UdpTunnelConfig) -> Self {
+        rust_p2p_core::tunnel::config::UdpTunnelConfig {
+            main_udp_count: value.main_socket_count,
+            sub_udp_count: value.sub_socket_count,
             model: value.model,
             default_interface: None,
             udp_ports: value.udp_ports,
@@ -330,9 +326,9 @@ impl From<UdpPipeConfig> for rust_p2p_core::pipe::config::UdpPipeConfig {
     }
 }
 
-impl From<TcpPipeConfig> for rust_p2p_core::pipe::config::TcpPipeConfig {
-    fn from(value: TcpPipeConfig) -> Self {
-        rust_p2p_core::pipe::config::TcpPipeConfig {
+impl From<TcpTunnelConfig> for rust_p2p_core::tunnel::config::TcpTunnelConfig {
+    fn from(value: TcpTunnelConfig) -> Self {
+        rust_p2p_core::tunnel::config::TcpTunnelConfig {
             route_idle_time: value.route_idle_time,
             tcp_multiplexing_limit: value.tcp_multiplexing_limit,
             default_interface: None,
@@ -385,7 +381,6 @@ impl Decoder for LengthPrefixedDecoder {
         }
     }
 
-    #[cfg(feature = "use-tokio")]
     fn try_decode(&mut self, read: &mut OwnedReadHalf, src: &mut [u8]) -> io::Result<usize> {
         if src.len() < HEAD_LEN {
             return Err(io::Error::new(io::ErrorKind::Other, "too short"));

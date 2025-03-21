@@ -60,27 +60,24 @@ impl From<(RouteKey, u8)> for Route {
     }
 }
 
-use crate::pipe::udp_pipe::UDPIndex;
+use crate::tunnel::udp::UDPIndex;
 #[non_exhaustive]
 #[derive(Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash, Debug)]
 pub enum Index {
     Udp(UDPIndex),
     Tcp(usize),
-    Extend(usize),
 }
 impl Index {
     pub fn index(&self) -> usize {
         match self {
             Index::Udp(index) => index.index(),
             Index::Tcp(index) => *index,
-            Index::Extend(index) => *index,
         }
     }
     pub fn protocol(&self) -> ConnectProtocol {
         match self {
             Index::Tcp(_) => ConnectProtocol::TCP,
             Index::Udp(_) => ConnectProtocol::UDP,
-            Index::Extend(_) => ConnectProtocol::Extend,
         }
     }
 }
@@ -128,7 +125,6 @@ pub struct RouteSortKey {
 pub enum ConnectProtocol {
     UDP,
     TCP,
-    Extend,
 }
 impl ConnectProtocol {
     #[inline]

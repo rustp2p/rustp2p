@@ -2,21 +2,31 @@ use std::io;
 use std::io::IoSlice;
 use std::net::SocketAddr;
 use std::ops::Deref;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
-use crate::async_compat::net::udp::UdpSocket;
 #[cfg(any(target_os = "linux", target_os = "android"))]
-use crate::async_compat::net::udp::{read_with, write_with};
+use tokio::io::Interest;
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+pub async fn read_with<R>(udp: &UdpSocket, op: impl FnMut() -> io::Result<R>) -> io::Result<R> {
+    udp.async_io(Interest::READABLE, op).await
+}
+#[cfg(any(target_os = "linux", target_os = "android"))]
+pub async fn write_with<R>(udp: &UdpSocket, op: impl FnMut() -> io::Result<R>) -> io::Result<R> {
+    udp.async_io(Interest::WRITABLE, op).await
+}
+
 use bytes::BytesMut;
 use dashmap::DashMap;
 use parking_lot::{Mutex, RwLock};
 use tachyonix::{Receiver, Sender, TrySendError};
+use tokio::net::UdpSocket;
 
-use crate::pipe::config::UdpPipeConfig;
-use crate::pipe::recycle::RecycleBuf;
-use crate::pipe::{DEFAULT_ADDRESS_V4, DEFAULT_ADDRESS_V6};
 use crate::route::{Index, RouteKey};
 use crate::socket::{bind_udp, LocalInterface};
+use crate::tunnel::config::UdpTunnelConfig;
+use crate::tunnel::recycle::RecycleBuf;
+use crate::tunnel::{DEFAULT_ADDRESS_V4, DEFAULT_ADDRESS_V6};
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
 const MAX_MESSAGES: usize = 16;
@@ -58,13 +68,49 @@ impl UDPIndex {
     }
 }
 
-/// initialize udp pipe by config
-pub(crate) fn udp_pipe(config: UdpPipeConfig) -> io::Result<UdpPipe> {
+pub trait ToRouteKeyForUdp<T> {
+    fn route_key(socket_manager: &SocketManager, dest: Self) -> io::Result<RouteKey>;
+}
+
+impl ToRouteKeyForUdp<()> for RouteKey {
+    fn route_key(_: &SocketManager, dest: Self) -> io::Result<RouteKey> {
+        Ok(dest)
+    }
+}
+
+impl ToRouteKeyForUdp<()> for &RouteKey {
+    fn route_key(_: &SocketManager, dest: Self) -> io::Result<RouteKey> {
+        Ok(*dest)
+    }
+}
+
+impl ToRouteKeyForUdp<()> for &mut RouteKey {
+    fn route_key(_: &SocketManager, dest: Self) -> io::Result<RouteKey> {
+        Ok(*dest)
+    }
+}
+
+impl<S: Into<SocketAddr>> ToRouteKeyForUdp<()> for S {
+    fn route_key(socket_manager: &SocketManager, dest: Self) -> io::Result<RouteKey> {
+        let addr = dest.into();
+        socket_manager.generate_route_key_from_addr(0, addr)
+    }
+}
+
+impl<S: Into<SocketAddr>> ToRouteKeyForUdp<usize> for (usize, S) {
+    fn route_key(socket_manager: &SocketManager, dest: Self) -> io::Result<RouteKey> {
+        let (index, addr) = dest;
+        socket_manager.generate_route_key_from_addr(index, addr.into())
+    }
+}
+
+/// initialize udp tunnel by config
+pub(crate) fn create_tunnel_factory(config: UdpTunnelConfig) -> io::Result<UdpTunnelFactory> {
     config.check()?;
     let mut udp_ports = config.udp_ports;
-    udp_ports.resize(config.main_pipeline_num, 0);
-    let mut main_udp_v4: Vec<Arc<UdpSocket>> = Vec::with_capacity(config.main_pipeline_num);
-    let mut main_udp_v6: Vec<Arc<UdpSocket>> = Vec::with_capacity(config.main_pipeline_num);
+    udp_ports.resize(config.main_udp_count, 0);
+    let mut main_udp_v4: Vec<Arc<UdpSocket>> = Vec::with_capacity(config.main_udp_count);
+    let mut main_udp_v6: Vec<Arc<UdpSocket>> = Vec::with_capacity(config.main_udp_count);
     // 因为在mac上v4和v6的对绑定网卡的处理不同，所以这里分开监听，并且分开监听更容易处理发送目标为v4的情况，因为双协议栈下发送v4目标需要转换成v6
     for port in &udp_ports {
         loop {
@@ -92,59 +138,52 @@ pub(crate) fn udp_pipe(config: UdpPipeConfig) -> io::Result<UdpPipe> {
             break;
         }
     }
-    let (pipe_line_sender, pipe_line_receiver) =
-        tachyonix::channel(config.main_pipeline_num * 2 + config.sub_pipeline_num * 2);
-    let socket_layer = Arc::new(SocketLayer {
+    let (tunnel_sender, tunnel_receiver) =
+        tachyonix::channel(config.main_udp_count * 2 + config.sub_udp_count * 2);
+    let socket_layer = Arc::new(SocketManager {
         main_udp_v4,
         main_udp_v6,
-        sub_udp: RwLock::new(Vec::with_capacity(config.sub_pipeline_num)),
+        sub_udp: RwLock::new(Vec::with_capacity(config.sub_udp_count)),
         sub_close_notify: Default::default(),
-        pipe_line_sender,
-        sub_udp_num: config.sub_pipeline_num,
+        tunnel_dispatcher: tunnel_sender,
+        sub_udp_num: config.sub_udp_count,
         default_interface: config.default_interface,
         sender_map: Default::default(),
     });
-    let udp_pipe = UdpPipe {
-        pipe_line_receiver,
-        socket_layer,
+    let tunnel_factory = UdpTunnelFactory {
+        tunnel_receiver,
+        socket_manager: socket_layer,
         recycle_buf: config.recycle_buf,
     };
-    udp_pipe.init()?;
-    udp_pipe.socket_layer.switch_model(config.model)?;
-    Ok(udp_pipe)
+    tunnel_factory.init()?;
+    tunnel_factory.socket_manager.switch_model(config.model)?;
+    Ok(tunnel_factory)
 }
 
-pub struct SocketLayer {
+pub struct SocketManager {
     main_udp_v4: Vec<Arc<UdpSocket>>,
     main_udp_v6: Vec<Arc<UdpSocket>>,
     sub_udp: RwLock<Vec<Arc<UdpSocket>>>,
     sub_close_notify: Mutex<Option<async_broadcast::Sender<()>>>,
-    pipe_line_sender: Sender<UdpPipeLine>,
+    tunnel_dispatcher: Sender<InactiveUdpTunnel>,
     sub_udp_num: usize,
     default_interface: Option<LocalInterface>,
     sender_map: DashMap<Index, Sender<(BytesMut, SocketAddr)>>,
 }
 
-impl SocketLayer {
-    pub(crate) fn try_sub_send_to_addr_v4(&self, buf: &[u8], addr: SocketAddr) {
+impl SocketManager {
+    pub(crate) fn try_sub_batch_send_to(&self, buf: &[u8], addr: SocketAddr) {
         for (i, udp) in self.sub_udp.read().iter().enumerate() {
             if let Err(e) = udp.try_send_to(buf, addr) {
                 log::info!("try_sub_send_to_addr_v4: {e:?},{i},{addr}")
             }
         }
     }
-    pub(crate) fn try_main_send_to_addr(&self, buf: &[u8], addr: &[SocketAddr]) {
-        let len = self.main_pipeline_len();
+    pub(crate) fn try_main_batch_send_to(&self, buf: &[u8], addr: &[SocketAddr]) {
+        let len = self.main_v4_udp_count();
         for (i, addr) in addr.iter().enumerate() {
-            match self.get(*addr, i % len) {
-                Ok(writer) => {
-                    if let Err(e) = writer.try_send(buf) {
-                        log::info!("try_main_send_to_addr: {e:?},{i},{addr}")
-                    }
-                }
-                Err(e) => {
-                    log::info!("try_main_send_to_addr: {e:?},{i},{addr}")
-                }
+            if let Err(e) = self.try_send_to(buf, (i % len, *addr)) {
+                log::info!("try_main_send_to_addr: {e:?},{},{addr}", i % len);
             }
         }
     }
@@ -199,13 +238,14 @@ impl SocketLayer {
         }
         for (index, udp) in sub_udp_list.iter().enumerate() {
             let udp = udp.clone();
-            let udp_pipe_line = UdpPipeLine::sub_new(
-                UDPIndex::SubV4(index),
+            let udp_tunnel = InactiveUdpTunnel::new(
+                false,
+                Index::Udp(UDPIndex::SubV4(index)),
                 udp,
-                sub_close_notify_receiver.clone(),
+                Some(sub_close_notify_receiver.clone()),
             );
-            if self.pipe_line_sender.try_send(udp_pipe_line).is_err() {
-                Err(io::Error::new(io::ErrorKind::Other, "pipe channel error"))?
+            if self.tunnel_dispatcher.try_send(udp_tunnel).is_err() {
+                Err(io::Error::new(io::ErrorKind::Other, "tunnel channel error"))?
             }
         }
         sub_close_notify_guard.replace(sub_close_notify_sender);
@@ -248,39 +288,9 @@ impl SocketLayer {
             _ => return Err(io::Error::from(io::ErrorKind::InvalidInput)),
         })
     }
-
-    #[inline]
-    async fn send_to_addr_via_index(
-        &self,
-        buf: &[u8],
-        addr: SocketAddr,
-        index: usize,
-    ) -> io::Result<()> {
-        let key = self.generate_route_key_from_addr(index, addr)?;
-        self.send_to(buf, &key).await
-    }
-    async fn send_buf_to_addr_via_index(
-        &self,
-        buf: BytesMut,
-        addr: SocketAddr,
-        index: usize,
-    ) -> io::Result<()> {
-        let key = self.generate_route_key_from_addr(index, addr)?;
-        self.send_buf_to(buf, &key).await
-    }
-    #[inline]
-    fn try_send_to_addr_via_index(
-        &self,
-        buf: &[u8],
-        addr: SocketAddr,
-        index: usize,
-    ) -> io::Result<()> {
-        let key = self.generate_route_key_from_addr(index, addr)?;
-        self.try_send_to(buf, &key)
-    }
 }
 
-impl SocketLayer {
+impl SocketManager {
     pub fn model(&self) -> Model {
         if self.sub_udp.read().is_empty() {
             Model::Low
@@ -290,15 +300,11 @@ impl SocketLayer {
     }
 
     #[inline]
-    pub fn main_pipeline_len(&self) -> usize {
-        self.v4_pipeline_len()
-    }
-    #[inline]
-    pub fn v4_pipeline_len(&self) -> usize {
+    pub fn main_v4_udp_count(&self) -> usize {
         self.main_udp_v4.len()
     }
     #[inline]
-    pub fn v6_pipeline_len(&self) -> usize {
+    pub fn main_v6_udp_count(&self) -> usize {
         self.main_udp_v6.len()
     }
 
@@ -313,13 +319,60 @@ impl SocketLayer {
     }
     /// Acquire the local ports `UDP` sockets bind on
     pub fn local_ports(&self) -> io::Result<Vec<u16>> {
-        let mut ports = Vec::with_capacity(self.v4_pipeline_len());
+        let mut ports = Vec::with_capacity(self.main_v4_udp_count());
         for udp in &self.main_udp_v4 {
             ports.push(udp.local_addr()?.port());
         }
         Ok(ports)
     }
-    pub async fn send_buf_to(&self, buf: BytesMut, route_key: &RouteKey) -> io::Result<()> {
+    /// Writing `buf` to the target denoted by `route_key`
+    pub async fn send_to<T, D: ToRouteKeyForUdp<T>>(&self, buf: &[u8], dest: D) -> io::Result<()> {
+        let route_key = ToRouteKeyForUdp::route_key(self, dest)?;
+        let len = self
+            .get_udp_from_route(&route_key)?
+            .send_to(buf, route_key.addr())
+            .await?;
+        if len == 0 {
+            return Err(std::io::Error::from(io::ErrorKind::WriteZero));
+        }
+        Ok(())
+    }
+
+    /// Try to write `buf` to the target denoted by `route_key`
+    pub fn try_send_to<T, D: ToRouteKeyForUdp<T>>(&self, buf: &[u8], dest: D) -> io::Result<()> {
+        let route_key = ToRouteKeyForUdp::route_key(self, dest)?;
+        let len = self
+            .get_udp_from_route(&route_key)?
+            .try_send_to(buf, route_key.addr())?;
+        if len == 0 {
+            return Err(std::io::Error::from(io::ErrorKind::WriteZero));
+        }
+        Ok(())
+    }
+
+    pub async fn send_multiple_to<T, D: ToRouteKeyForUdp<T>>(
+        &self,
+        bufs: &[IoSlice<'_>],
+        dest: D,
+    ) -> io::Result<()> {
+        let route_key = ToRouteKeyForUdp::route_key(self, dest)?;
+        let udp = self.get_udp_from_route(&route_key)?;
+        for buf in bufs {
+            let len = udp.send_to(buf, route_key.addr()).await?;
+            if len == 0 {
+                return Err(std::io::Error::from(io::ErrorKind::WriteZero));
+            }
+        }
+
+        Ok(())
+    }
+
+    pub async fn send_bytes_to<T, D: ToRouteKeyForUdp<T>>(
+        &self,
+        buf: BytesMut,
+        dest: D,
+    ) -> io::Result<()> {
+        let route_key = ToRouteKeyForUdp::route_key(self, dest)?;
         let sender = if let Some(sender) = self.sender_map.get(&route_key.index()) {
             sender.value().clone()
         } else {
@@ -331,71 +384,6 @@ impl SocketLayer {
             Ok(())
         }
     }
-    /// Writing `buf` to the target denoted by `route_key`
-    pub async fn send_to(&self, buf: &[u8], route_key: &RouteKey) -> io::Result<()> {
-        let len = self
-            .get_udp_from_route(route_key)?
-            .send_to(buf, route_key.addr())
-            .await?;
-        if len == 0 {
-            return Err(std::io::Error::from(io::ErrorKind::WriteZero));
-        }
-        Ok(())
-    }
-    pub async fn send_multiple_to(
-        &self,
-        bufs: &[IoSlice<'_>],
-        route_key: &RouteKey,
-    ) -> io::Result<()> {
-        let udp = self.get_udp_from_route(route_key)?;
-        for buf in bufs {
-            let len = udp.send_to(buf, route_key.addr()).await?;
-            if len == 0 {
-                return Err(std::io::Error::from(io::ErrorKind::WriteZero));
-            }
-        }
-
-        Ok(())
-    }
-    /// Try to write `buf` to the target denoted by `route_key`
-    pub fn try_send_to(&self, buf: &[u8], route_key: &RouteKey) -> io::Result<()> {
-        let len = self
-            .get_udp_from_route(route_key)?
-            .try_send_to(buf, route_key.addr())?;
-        if len == 0 {
-            return Err(std::io::Error::from(io::ErrorKind::WriteZero));
-        }
-        Ok(())
-    }
-    /// Writing `buf` to the target denoted by SocketAddr
-    pub async fn send_to_addr<A: Into<SocketAddr>>(&self, buf: &[u8], addr: A) -> io::Result<()> {
-        self.send_to_addr_via_index(buf, addr.into(), 0).await
-    }
-    pub async fn send_buf_to_addr<A: Into<SocketAddr>>(
-        &self,
-        buf: BytesMut,
-        addr: A,
-    ) -> io::Result<()> {
-        self.send_buf_to_addr_via_index(buf, addr.into(), 0).await
-    }
-    /// Try to write `buf` to the target denoted by SocketAddr
-    pub fn try_send_to_addr<A: Into<SocketAddr>>(&self, buf: &[u8], addr: A) -> io::Result<()> {
-        self.try_send_to_addr_via_index(buf, addr.into(), 0)
-    }
-    /// Acquire the PipeWriter by the index
-    pub fn get(&self, addr: SocketAddr, index: usize) -> io::Result<UdpPipeWriterIndex<'_>> {
-        if index >= self.main_udp_v4.len() && index >= self.main_udp_v6.len() {
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                "neither in the bound of both the udp_v4 set nor the udp_v6 set",
-            ));
-        }
-        Ok(UdpPipeWriterIndex {
-            shadow: self,
-            addr,
-            index,
-        })
-    }
 
     /// Send bytes to the target denoted by SocketAddr with every main underlying socket
     pub async fn detect_pub_addrs<A: Into<SocketAddr>>(
@@ -404,162 +392,159 @@ impl SocketLayer {
         addr: A,
     ) -> io::Result<()> {
         let addr: SocketAddr = addr.into();
-        for index in 0..self.main_pipeline_len() {
-            self.send_to_addr_via_index(buf, addr, index).await?;
+        for index in 0..self.main_v4_udp_count() {
+            self.send_to(buf, (index, addr)).await?
         }
         Ok(())
     }
 }
 
-pub struct UdpPipe {
-    pipe_line_receiver: Receiver<UdpPipeLine>,
-    socket_layer: Arc<SocketLayer>,
+pub struct UdpTunnelFactory {
+    tunnel_receiver: Receiver<InactiveUdpTunnel>,
+    pub(crate) socket_manager: Arc<SocketManager>,
     recycle_buf: Option<RecycleBuf>,
 }
 
-impl UdpPipe {
+impl UdpTunnelFactory {
     pub(crate) fn init(&self) -> io::Result<()> {
-        for (index, udp) in self.socket_layer.main_udp_v4.iter().enumerate() {
+        for (index, udp) in self.socket_manager.main_udp_v4.iter().enumerate() {
             let udp = udp.clone();
-            let udp_pipe_line = UdpPipeLine::main_new(
-                UDPIndex::MainV4(index),
-                udp,
-                self.socket_layer.pipe_line_sender.clone(),
-            );
+            let tunnel =
+                InactiveUdpTunnel::new(true, Index::Udp(UDPIndex::MainV4(index)), udp, None);
             if self
-                .socket_layer
-                .pipe_line_sender
-                .try_send(udp_pipe_line)
+                .socket_manager
+                .tunnel_dispatcher
+                .try_send(tunnel)
                 .is_err()
             {
-                Err(io::Error::new(io::ErrorKind::Other, "pipe channel error"))?
+                Err(io::Error::new(io::ErrorKind::Other, "tunnel channel error"))?
             }
         }
-        for (index, udp) in self.socket_layer.main_udp_v6.iter().enumerate() {
+        for (index, udp) in self.socket_manager.main_udp_v6.iter().enumerate() {
             let udp = udp.clone();
-            let udp_pipe_line = UdpPipeLine::main_new(
-                UDPIndex::MainV6(index),
-                udp,
-                self.socket_layer.pipe_line_sender.clone(),
-            );
+            let tunnel =
+                InactiveUdpTunnel::new(true, Index::Udp(UDPIndex::MainV6(index)), udp, None);
             if self
-                .socket_layer
-                .pipe_line_sender
-                .try_send(udp_pipe_line)
+                .socket_manager
+                .tunnel_dispatcher
+                .try_send(tunnel)
                 .is_err()
             {
-                Err(io::Error::new(io::ErrorKind::Other, "pipe channel error"))?
+                Err(io::Error::new(io::ErrorKind::Other, "tunnel channel error"))?
             }
         }
         Ok(())
     }
 }
 
-impl UdpPipe {
-    /// Construct a `UDP` pipe with the specified configuration
-    pub fn new(config: UdpPipeConfig) -> io::Result<UdpPipe> {
-        udp_pipe(config)
+impl UdpTunnelFactory {
+    /// Construct a `UDP` tunnel with the specified configuration
+    pub fn new(config: UdpTunnelConfig) -> io::Result<UdpTunnelFactory> {
+        create_tunnel_factory(config)
     }
-    /// Accept `UDP` pipelines from this kind pipe
-    pub async fn accept(&mut self) -> io::Result<UdpPipeLine> {
-        let mut line = self
-            .pipe_line_receiver
+    /// Accept `UDP` tunnel from this kind factory
+    pub async fn dispatch(&mut self) -> io::Result<UdpTunnel> {
+        let udp_tunnel = self
+            .tunnel_receiver
             .recv()
             .await
-            .map_err(|_| io::Error::new(io::ErrorKind::Other, "UdpPipe close"))?;
-        line.active = true;
-        if line.socket_layer.is_some() {
-            return Ok(line);
-        }
-        let (s, mut r) = tachyonix::channel(32);
-        let index = line.index;
-        self.socket_layer.sender_map.insert(index, s);
-        line.socket_layer.replace(self.socket_layer.clone());
-        let socket_layer = self.socket_layer.clone();
-        let udp = line.udp.clone().unwrap();
-        let recycle_buf = self.recycle_buf.clone();
-        crate::async_compat::spawn(async move {
-            #[cfg(any(target_os = "linux", target_os = "android"))]
-            let mut vec_buf = Vec::with_capacity(16);
+            .map_err(|_| io::Error::new(io::ErrorKind::Other, "Udp tunnel close"))?;
+        if !self
+            .socket_manager
+            .sender_map
+            .contains_key(&udp_tunnel.index)
+        {
+            let (s, mut r) = tachyonix::channel(32);
+            let index = udp_tunnel.index;
+            self.socket_manager.sender_map.insert(index, s);
 
-            while let Ok((buf, addr)) = r.recv().await {
+            let socket_layer = self.socket_manager.clone();
+            let udp = udp_tunnel.udp.clone();
+            let recycle_buf = self.recycle_buf.clone();
+            tokio::spawn(async move {
                 #[cfg(any(target_os = "linux", target_os = "android"))]
-                {
-                    vec_buf.push((buf, addr));
-                    while let Ok(tup) = r.try_recv() {
-                        vec_buf.push(tup);
-                        if vec_buf.len() == MAX_MESSAGES {
-                            break;
-                        }
-                    }
-                    let mut bufs = &mut vec_buf[..];
-                    let fd = udp.as_raw_fd();
-                    loop {
-                        if bufs.len() == 1 {
-                            let (buf, addr) = unsafe { bufs.get_unchecked(0) };
-                            if let Err(e) = udp.send_to(buf, *addr).await {
-                                log::warn!("send_to {addr:?},{e:?}")
+                let mut vec_buf = Vec::with_capacity(16);
+
+                while let Ok((buf, addr)) = r.recv().await {
+                    #[cfg(any(target_os = "linux", target_os = "android"))]
+                    {
+                        vec_buf.push((buf, addr));
+                        while let Ok(tup) = r.try_recv() {
+                            vec_buf.push(tup);
+                            if vec_buf.len() == MAX_MESSAGES {
+                                break;
                             }
-                            break;
-                        } else {
-                            let rs = write_with(&udp, || sendmmsg(fd, bufs)).await;
-                            match rs {
-                                Ok(size) => {
-                                    if size < bufs.len() {
-                                        bufs = &mut bufs[size..];
-                                        continue;
+                        }
+                        let mut bufs = &mut vec_buf[..];
+                        let fd = udp.as_raw_fd();
+                        loop {
+                            if bufs.len() == 1 {
+                                let (buf, addr) = unsafe { bufs.get_unchecked(0) };
+                                if let Err(e) = udp.send_to(buf, *addr).await {
+                                    log::warn!("send_to {addr:?},{e:?}")
+                                }
+                                break;
+                            } else {
+                                let rs = write_with(&udp, || sendmmsg(fd, bufs)).await;
+                                match rs {
+                                    Ok(size) => {
+                                        if size < bufs.len() {
+                                            bufs = &mut bufs[size..];
+                                            continue;
+                                        }
+                                        break;
                                     }
-                                    break;
-                                }
-                                Err(e) => {
-                                    log::warn!("sendmmsg {e:?}");
+                                    Err(e) => {
+                                        log::warn!("sendmmsg {e:?}");
+                                    }
                                 }
                             }
                         }
+                        if let Some(recycle_buf) = recycle_buf.as_ref() {
+                            while let Some((buf, _)) = vec_buf.pop() {
+                                recycle_buf.push(buf);
+                            }
+                        } else {
+                            vec_buf.clear();
+                        }
                     }
-                    if let Some(recycle_buf) = recycle_buf.as_ref() {
-                        while let Some((buf, _)) = vec_buf.pop() {
+                    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+                    {
+                        let rs = udp.send_to(&buf, addr).await;
+                        if let Some(recycle_buf) = recycle_buf.as_ref() {
                             recycle_buf.push(buf);
                         }
-                    } else {
-                        vec_buf.clear();
+                        if let Err(e) = rs {
+                            log::debug!("{addr:?},{e:?}")
+                        }
                     }
                 }
-                #[cfg(not(any(target_os = "linux", target_os = "android")))]
-                {
-                    let rs = udp.send_to(&buf, addr).await;
-                    if let Some(recycle_buf) = recycle_buf.as_ref() {
-                        recycle_buf.push(buf);
-                    }
-                    if let Err(e) = rs {
-                        log::debug!("{addr:?},{e:?}")
-                    }
-                }
-            }
-            socket_layer.sender_map.remove(&index);
-        });
-        Ok(line)
-    }
-    /// The number of pipelines established by main `UDP` sockets(IPv4)
-    #[inline]
-    pub fn main_pipeline_len(&self) -> usize {
-        self.socket_layer.main_pipeline_len()
-    }
-    /// The number of pipelines established by main `UDP` sockets(IPv4)
-    #[inline]
-    pub fn v4_pipeline_len(&self) -> usize {
-        self.socket_layer.v4_pipeline_len()
-    }
-    /// The number of pipelines established by main `UDP` sockets(IPv6)
-    #[inline]
-    pub fn v6_pipeline_len(&self) -> usize {
-        self.socket_layer.v6_pipeline_len()
-    }
-    /// Acquire a shared reference for writing to the pipe
-    pub fn writer_ref(&self) -> UdpPipeWriterRef<'_> {
-        UdpPipeWriterRef {
-            socket_layer: &self.socket_layer,
+                socket_layer.sender_map.remove(&index);
+            });
         }
+        if udp_tunnel.reusable {
+            Ok(UdpTunnel::main_new(
+                udp_tunnel.index,
+                udp_tunnel.udp,
+                self.tunnel_dispatcher.clone(),
+                Arc::downgrade(&self.socket_manager),
+            ))
+        } else {
+            Ok(UdpTunnel::sub_new(
+                udp_tunnel.index,
+                udp_tunnel.udp,
+                udp_tunnel.close_notify.unwrap(),
+                Arc::downgrade(&self.socket_manager),
+            ))
+        }
+    }
+}
+
+impl Deref for UdpTunnelFactory {
+    type Target = SocketManager;
+
+    fn deref(&self) -> &Self::Target {
+        &self.socket_manager
     }
 }
 
@@ -644,128 +629,129 @@ fn socket_addr_to_sockaddr(addr: &SocketAddr) -> sockaddr_storage {
     storage
 }
 
-#[derive(Clone)]
-pub struct UdpPipeWriter {
-    socket_layer: Arc<SocketLayer>,
-}
-
-impl Deref for UdpPipeWriter {
-    type Target = SocketLayer;
-
-    fn deref(&self) -> &Self::Target {
-        &self.socket_layer
-    }
-}
-
-pub struct UdpPipeWriterIndex<'a> {
-    shadow: &'a SocketLayer,
-    addr: SocketAddr,
-    index: usize,
-}
-
-impl UdpPipeWriterIndex<'_> {
-    pub async fn send(&self, buf: &[u8]) -> io::Result<()> {
-        self.shadow
-            .send_to_addr_via_index(buf, self.addr, self.index)
-            .await
-    }
-    pub fn try_send(&self, buf: &[u8]) -> io::Result<()> {
-        self.shadow
-            .try_send_to_addr_via_index(buf, self.addr, self.index)
-    }
-}
-
-#[derive(Clone, Copy)]
-pub struct UdpPipeWriterRef<'a> {
-    socket_layer: &'a Arc<SocketLayer>,
-}
-
-impl UdpPipeWriterRef<'_> {
-    pub fn to_owned(&self) -> UdpPipeWriter {
-        UdpPipeWriter {
-            socket_layer: self.socket_layer.clone(),
-        }
-    }
-}
-
-impl Deref for UdpPipeWriterRef<'_> {
-    type Target = Arc<SocketLayer>;
-
-    fn deref(&self) -> &Self::Target {
-        self.socket_layer
-    }
-}
-
-pub struct UdpPipeLine {
-    active: bool,
+pub struct UdpTunnel {
     index: Index,
     udp: Option<Arc<UdpSocket>>,
     close_notify: Option<async_broadcast::Receiver<()>>,
-    re_sender: Option<Sender<UdpPipeLine>>,
-    socket_layer: Option<Arc<SocketLayer>>,
+    re_dispatcher: Option<Sender<InactiveUdpTunnel>>,
+    socket_manager_weak: Option<UdpTunnelWeak>,
 }
-
-impl Drop for UdpPipeLine {
-    fn drop(&mut self) {
-        if self.udp.is_none() || !self.active {
-            if let Some(socket_layer) = self.socket_layer.take() {
-                socket_layer.sender_map.remove(&self.index);
-            }
-            return;
+struct UdpTunnelWeak {
+    index: Index,
+    socket_manager_weak: Weak<SocketManager>,
+}
+struct InactiveUdpTunnel {
+    reusable: bool,
+    index: Index,
+    udp: Arc<UdpSocket>,
+    close_notify: Option<async_broadcast::Receiver<()>>,
+    _socket_manager_weak: Option<UdpTunnelWeak>,
+}
+impl InactiveUdpTunnel {
+    fn new(
+        reusable: bool,
+        index: Index,
+        udp: Arc<UdpSocket>,
+        close_notify: Option<async_broadcast::Receiver<()>>,
+    ) -> Self {
+        Self {
+            reusable,
+            index,
+            udp,
+            close_notify,
+            _socket_manager_weak: None,
         }
-        if let Some(re_sender) = &self.re_sender {
-            let rs = re_sender.try_send(UdpPipeLine {
-                active: false,
-                index: self.index,
-                udp: self.udp.take(),
-                close_notify: self.close_notify.take(),
-                re_sender: self.re_sender.clone(),
-                socket_layer: self.socket_layer.take(),
-            });
-            if let Err(TrySendError::Full(_)) = rs {
-                log::warn!("UdpPipeLine TrySendError full");
-            }
+    }
+    fn redistribute(
+        index: Index,
+        udp: Arc<UdpSocket>,
+        close_notify: Option<async_broadcast::Receiver<()>>,
+        socket_manager_weak: UdpTunnelWeak,
+    ) -> Self {
+        Self {
+            reusable: true,
+            index,
+            udp,
+            close_notify,
+            _socket_manager_weak: Some(socket_manager_weak),
+        }
+    }
+}
+impl Drop for UdpTunnelWeak {
+    fn drop(&mut self) {
+        if let Some(socket_manager) = self.socket_manager_weak.upgrade() {
+            socket_manager.sender_map.remove(&self.index);
+        }
+    }
+}
+impl Drop for UdpTunnel {
+    fn drop(&mut self) {
+        let Some(udp) = self.udp.take() else {
+            return;
+        };
+        let Some(re_dispatcher) = self.re_dispatcher.take() else {
+            return;
+        };
+        let Some(socket_manager_weak) = self.socket_manager_weak.take() else {
+            return;
+        };
+        let rs = re_dispatcher.try_send(InactiveUdpTunnel::redistribute(
+            self.index,
+            udp,
+            None,
+            socket_manager_weak,
+        ));
+        if let Err(TrySendError::Full(_)) = rs {
+            log::warn!("Udp Tunnel TrySendError full");
         }
     }
 }
 
-impl UdpPipeLine {
-    pub(crate) fn sub_new(
-        index: UDPIndex,
+impl UdpTunnel {
+    fn sub_new(
+        index: Index,
         udp: Arc<UdpSocket>,
         close_notify: async_broadcast::Receiver<()>,
+        socket_manager_weak: Weak<SocketManager>,
     ) -> Self {
         Self {
-            active: false,
-            index: Index::Udp(index),
+            index,
             udp: Some(udp),
             close_notify: Some(close_notify),
-            re_sender: None,
-            socket_layer: None,
+            re_dispatcher: None,
+            socket_manager_weak: Some(UdpTunnelWeak {
+                index,
+                socket_manager_weak,
+            }),
         }
     }
-    pub(crate) fn main_new(
-        index: UDPIndex,
+    fn main_new(
+        index: Index,
         udp: Arc<UdpSocket>,
-        re_sender: Sender<UdpPipeLine>,
+        re_sender: Sender<InactiveUdpTunnel>,
+        socket_manager_weak: Weak<SocketManager>,
     ) -> Self {
         Self {
-            active: false,
-            index: Index::Udp(index),
+            index,
             udp: Some(udp),
             close_notify: None,
-            re_sender: Some(re_sender),
-            socket_layer: None,
+            re_dispatcher: Some(re_sender),
+            socket_manager_weak: Some(UdpTunnelWeak {
+                index,
+                socket_manager_weak,
+            }),
         }
     }
     pub fn done(&mut self) {
         let _ = self.udp.take();
         let _ = self.close_notify.take();
+        let _ = self.re_dispatcher.take();
+        let _ = self.socket_manager_weak.take();
     }
 }
 
-impl UdpPipeLine {
-    /// Writing `buf` to the target denoted by SocketAddr via this pipeline
+impl UdpTunnel {
+    /// Writing `buf` to the target denoted by SocketAddr via this tunnel
     pub async fn send_to_addr<A: Into<SocketAddr>>(&self, buf: &[u8], addr: A) -> io::Result<()> {
         if let Some(udp) = &self.udp {
             udp.send_to(buf, addr.into()).await?;
@@ -774,7 +760,7 @@ impl UdpPipeLine {
             Err(io::Error::new(io::ErrorKind::Other, "closed"))
         }
     }
-    /// Try to write `buf` to the target denoted by SocketAddr via this pipeline
+    /// Try to write `buf` to the target denoted by SocketAddr via this tunnel
     pub fn try_send_to_addr<A: Into<SocketAddr>>(&self, buf: &[u8], addr: A) -> io::Result<()> {
         if let Some(udp) = &self.udp {
             udp.try_send_to(buf, addr.into())?;
@@ -784,18 +770,7 @@ impl UdpPipeLine {
         }
     }
 
-    pub async fn send_buf_to(&self, buf: BytesMut, route_key: &RouteKey) -> io::Result<()> {
-        if self.index != route_key.index() {
-            Err(io::Error::new(io::ErrorKind::Other, "mismatch"))?
-        }
-        if let Some(s) = &self.socket_layer {
-            s.send_buf_to(buf, route_key).await
-        } else {
-            Err(io::Error::new(io::ErrorKind::Other, "miss"))
-        }
-    }
-
-    /// Receving buf from this PipeLine
+    /// Receving buf from this tunnel
     /// `usize` in the `Ok` branch indicates how many bytes are received
     /// `RouteKey` in the `Ok` branch denotes the source where these bytes are received from
     pub async fn recv_from(&mut self, buf: &mut [u8]) -> Option<io::Result<(usize, RouteKey)>> {
@@ -806,7 +781,7 @@ impl UdpPipeLine {
         };
         loop {
             if let Some(close_notify) = &mut self.close_notify {
-                crate::select! {
+                tokio::select! {
                     _rs=close_notify.recv()=>{
                          self.done();
                          return None
@@ -891,7 +866,7 @@ impl UdpPipeLine {
         let fd = udp.as_raw_fd();
         loop {
             let rs = if let Some(close_notify) = &mut self.close_notify {
-                crate::select! {
+                tokio::select! {
                     _rs=close_notify.recv()=>{
                         self.done();
                         return None
@@ -991,24 +966,23 @@ fn should_ignore_error(e: &io::Error) -> bool {
 }
 
 #[cfg(test)]
-#[cfg(feature = "use-tokio")]
 mod tests {
     use std::time::Duration;
 
-    use crate::pipe::udp_pipe::{Model, UdpPipeLine};
+    use crate::tunnel::udp::{Model, UdpTunnel};
 
     #[tokio::test]
-    pub async fn create_udp_pipe() {
-        let config = crate::pipe::config::UdpPipeConfig::default()
-            .set_main_pipeline_num(2)
-            .set_sub_pipeline_num(10)
+    pub async fn create_udp_tunnel() {
+        let config = crate::tunnel::config::UdpTunnelConfig::default()
+            .set_main_udp_count(2)
+            .set_sub_udp_count(10)
             .set_model(Model::Low)
             .set_use_v6(false);
-        let mut udp_pipe = crate::pipe::udp_pipe::udp_pipe(config).unwrap();
+        let mut udp_pipe = crate::tunnel::udp::create_tunnel_factory(config).unwrap();
         let mut count = 0;
         let mut join = Vec::new();
-        while let Ok(rs) = tokio::time::timeout(Duration::from_secs(1), udp_pipe.accept()).await {
-            join.push(tokio::spawn(pipe_line_recv(rs.unwrap())));
+        while let Ok(rs) = tokio::time::timeout(Duration::from_secs(1), udp_pipe.dispatch()).await {
+            join.push(tokio::spawn(tunnel_recv(rs.unwrap())));
             count += 1;
         }
         assert_eq!(count, 2)
@@ -1016,28 +990,30 @@ mod tests {
 
     #[tokio::test]
     pub async fn create_sub_udp_pipe() {
-        let config = crate::pipe::config::UdpPipeConfig::default()
-            .set_main_pipeline_num(2)
-            .set_sub_pipeline_num(10)
+        let config = crate::tunnel::config::UdpTunnelConfig::default()
+            .set_main_udp_count(2)
+            .set_sub_udp_count(10)
             .set_use_v6(false)
             .set_model(Model::High);
-        let mut udp_pipe = crate::pipe::udp_pipe::udp_pipe(config).unwrap();
+        let mut tunnel_factory = crate::tunnel::udp::create_tunnel_factory(config).unwrap();
         let mut count = 0;
         let mut join = Vec::new();
-        while let Ok(rs) = tokio::time::timeout(Duration::from_secs(1), udp_pipe.accept()).await {
-            join.push(tokio::spawn(pipe_line_recv(rs.unwrap())));
+        while let Ok(rs) =
+            tokio::time::timeout(Duration::from_secs(1), tunnel_factory.dispatch()).await
+        {
+            join.push(tokio::spawn(tunnel_recv(rs.unwrap())));
             count += 1;
         }
-        udp_pipe.writer_ref().switch_low();
+        tunnel_factory.switch_low();
 
-        let mut close_pipe_line_count = 0;
+        let mut close_tunnel_count = 0;
         for x in join {
             let rs = tokio::time::timeout(Duration::from_secs(1), x).await;
             match rs {
                 Ok(rs) => {
                     if rs.unwrap() {
-                        // pipe_line_recv task done
-                        close_pipe_line_count += 1;
+                        // tunnel task done
+                        close_tunnel_count += 1;
                     }
                 }
                 Err(_e) => {
@@ -1046,11 +1022,11 @@ mod tests {
             }
         }
         assert_eq!(count, 12);
-        assert_eq!(close_pipe_line_count, 10);
+        assert_eq!(close_tunnel_count, 10);
     }
 
-    async fn pipe_line_recv(mut udp_pipe_line: UdpPipeLine) -> bool {
+    async fn tunnel_recv(mut tunnel: UdpTunnel) -> bool {
         let mut buf = [0; 1400];
-        udp_pipe_line.recv_from(&mut buf).await.is_none()
+        tunnel.recv_from(&mut buf).await.is_none()
     }
 }

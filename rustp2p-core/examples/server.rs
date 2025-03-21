@@ -1,10 +1,10 @@
 use bytes::{BufMut, BytesMut};
 use env_logger::Env;
 
-use rust_p2p_core::pipe::config::{PipeConfig, TcpPipeConfig, UdpPipeConfig};
-use rust_p2p_core::pipe::tcp_pipe::LengthPrefixedInitCodec;
-use rust_p2p_core::pipe::{pipe, PipeLine, PipeWriter};
 use rust_p2p_core::route::route_table::RouteTable;
+use rust_p2p_core::tunnel::config::{TcpTunnelConfig, TunnelConfig, UdpTunnelConfig};
+use rust_p2p_core::tunnel::tcp::LengthPrefixedInitCodec;
+use rust_p2p_core::tunnel::{new_tunnel_component, UnifiedSocketManager, UnifiedTunnel};
 
 /*Demo Protocol
    0                                            15                                              31
@@ -35,25 +35,30 @@ pub const MY_SERVER_ID: u32 = 0;
 #[tokio::main]
 async fn main() {
     env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
-    let udp_config = UdpPipeConfig::default().set_simple_udp_port(3000);
-    let tcp_config = TcpPipeConfig::new(Box::new(LengthPrefixedInitCodec)).set_tcp_port(3000);
-    let config = PipeConfig::empty()
-        .set_main_pipeline_num(1)
-        .set_tcp_pipe_config(tcp_config)
-        .set_udp_pipe_config(udp_config);
-    let (mut pipe, _puncher, _idle_route_manager) = pipe::<u32>(config).unwrap();
-    let writer = pipe.writer_ref().to_owned();
+    let udp_config = UdpTunnelConfig::default().set_simple_udp_port(3000);
+    let tcp_config = TcpTunnelConfig::new(Box::new(LengthPrefixedInitCodec)).set_tcp_port(3000);
+    let config = TunnelConfig::empty()
+        .set_tcp_multi_count(1)
+        .set_tcp_tunnel_config(tcp_config)
+        .set_udp_tunnel_config(udp_config);
+    let (mut tunnel_factory, _puncher, _idle_route_manager) =
+        new_tunnel_component::<u32>(config).unwrap();
+    let writer = tunnel_factory.socket_manager();
     log::info!("listen 3000");
     loop {
-        let line = pipe.accept().await.unwrap();
-        let table = pipe.route_table().clone();
+        let line = tunnel_factory.dispatch().await.unwrap();
+        let table = tunnel_factory.route_table().clone();
         let writer = writer.clone();
         tokio::spawn(async move {
             handler(table, line, writer).await;
         });
     }
 }
-async fn handler(route_table: RouteTable<u32>, mut line: PipeLine, writer: PipeWriter<u32>) {
+async fn handler(
+    route_table: RouteTable<u32>,
+    mut line: UnifiedTunnel,
+    writer: UnifiedSocketManager<u32>,
+) {
     let mut buf = [0; 65536];
     while let Some(rs) = line.recv_from(&mut buf).await {
         let (len, route_key) = match rs {

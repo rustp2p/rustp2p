@@ -8,9 +8,9 @@ description = "A decentralized p2p library powered by Rust, which is devoted to 
 repository = "https://github.com/rustp2p/rustp2p"
 
 [dependencies]
-rust-p2p-core = { path = "rustp2p-core", version = "0.2", default-features = false }
+rust-p2p-core = { path = "rustp2p-core", version = "0.2"}
 async-trait = { workspace = true }
-tokio = { workspace = true, optional = true }
+tokio = { workspace = true }
 log = { workspace = true }
 thiserror = { workspace = true }
 bytes = { workspace = true }
@@ -19,10 +19,7 @@ dashmap = { workspace = true }
 rand = { workspace = true }
 crossbeam-utils = { workspace = true }
 crossbeam-queue = { workspace = true }
-tachyonix = { workspace = true }
-async-std = { workspace = true, optional = true }
-async-io = { workspace = true, optional = true }
-futures-util = { workspace = true, optional = true }
+
 
 
 async-shutdown = "0.2"
@@ -31,6 +28,7 @@ dns-parser = "0.8"
 
 ring = { version = "0.17", optional = true }
 sha2 = "0.10"
+flume = {version = "0.11.1", features = ["async"]}
 
 [dev-dependencies]
 rustp2p = { path = "../rustp2p", features = ["aes-gcm"] }
@@ -39,8 +37,6 @@ log = "0.4.22"
 env_logger = "0.11.5"
 tun-rs = { version = "2.0.1", features = ["async_tokio"] }
 pnet_packet = "0.35.0"
-ctrlc2 = { version = "3", features = ["termination"] }
-async-std = { version = "1.13.0", features = ["attributes", "unstable"] }
 tokio = { version = "1.42", features = ["full"] }
 ctrlc = "3.4.5"
 
@@ -55,11 +51,7 @@ members = [
 ]
 
 [workspace.dependencies]
-futures-util = "0.3"
-async-io = "2.3"
-async-std = "1.13"
 tachyonix = "0.3"
-anyhow = "1"
 thiserror = "2"
 tokio = { version = "1.42", features = ["full"] }
 async-trait = "0.1"
@@ -72,8 +64,6 @@ crossbeam-utils = "0.8"
 crossbeam-queue = "0.3"
 
 [features]
-default = ["use-tokio"]
+default = []
 aes-gcm = ["ring"]
 chacha20-poly1305 = ["ring"]
-use-tokio = ["rust-p2p-core/use-tokio", "tokio"]
-use-async-std = ["rust-p2p-core/use-async-std", "async-std", "async-io", "futures-util"]
