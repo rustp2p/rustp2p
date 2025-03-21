@@ -19,10 +19,7 @@ dashmap = { workspace = true }
 rand = { workspace = true }
 crossbeam-utils = { workspace = true }
 crossbeam-queue = { workspace = true }
-tachyonix = { workspace = true }
-async-std = { workspace = true, optional = true }
-async-io = { workspace = true, optional = true }
-futures-util = { workspace = true, optional = true }
+
 
 
 async-shutdown = "0.2"
@@ -40,8 +37,6 @@ log = "0.4.22"
 env_logger = "0.11.5"
 tun-rs = { version = "2.0.1", features = ["async_tokio"] }
 pnet_packet = "0.35.0"
-ctrlc2 = { version = "3", features = ["termination"] }
-async-std = { version = "1.13.0", features = ["attributes", "unstable"] }
 tokio = { version = "1.42", features = ["full"] }
 ctrlc = "3.4.5"
 
@@ -56,11 +51,7 @@ members = [
 ]
 
 [workspace.dependencies]
-futures-util = "0.3"
-async-io = "2.3"
-async-std = "1.13"
 tachyonix = "0.3"
-anyhow = "1"
 thiserror = "2"
 tokio = { version = "1.42", features = ["full"] }
 async-trait = "0.1"
