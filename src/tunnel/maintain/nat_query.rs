@@ -1,15 +1,15 @@
-use crate::tunnel::pipe_context::PipeContext;
+use crate::tunnel::node_context::NodeContext;
 use crate::tunnel::TunnelTransmit;
 use rand::seq::SliceRandom;
 use rust_p2p_core::socket::LocalInterface;
 use std::time::Duration;
 
 pub(crate) async fn nat_test_loop(
-    pipe_writer: TunnelTransmit,
+    tunnel_tx: TunnelTransmit,
     mut udp_stun_servers: Vec<String>,
     default_interface: Option<LocalInterface>,
 ) {
-    let pipe_context = pipe_writer.pipe_context();
+    let node_context = tunnel_tx.node_context();
     loop {
         udp_stun_servers.shuffle(&mut rand::rng());
         let udp_stun_servers = if udp_stun_servers.len() > 3 {
@@ -18,13 +18,13 @@ pub(crate) async fn nat_test_loop(
             &udp_stun_servers
         };
         nat_test(
-            &pipe_writer,
-            pipe_writer.pipe_context(),
+            &tunnel_tx,
+            tunnel_tx.node_context(),
             udp_stun_servers,
             default_interface.as_ref(),
         )
         .await;
-        if pipe_context.exists_nat_info() {
+        if node_context.exists_nat_info() {
             tokio::time::sleep(Duration::from_secs(10 * 60)).await;
         } else {
             tokio::time::sleep(Duration::from_secs(10)).await;
@@ -33,15 +33,15 @@ pub(crate) async fn nat_test_loop(
 }
 
 async fn nat_test(
-    pipe_writer: &TunnelTransmit,
-    pipe_context: &PipeContext,
+    tunnel_tx: &TunnelTransmit,
+    node_context: &NodeContext,
     udp_stun_servers: &[String],
     default_interface: Option<&LocalInterface>,
 ) {
     let local_ipv4 = rust_p2p_core::extend::addr::local_ipv4().await;
     let local_ipv6 = rust_p2p_core::extend::addr::local_ipv6().await;
     {
-        let mut guard = pipe_context.punch_info().write();
+        let mut guard = node_context.punch_info().write();
         match local_ipv4 {
             Ok(local_ipv4) => {
                 guard.local_ipv4 = local_ipv4;
@@ -65,10 +65,10 @@ async fn nat_test(
 
     match rs {
         Ok((nat_type, ips, port_range)) => {
-            if let Err(err) = pipe_writer.switch_model(nat_type) {
+            if let Err(err) = tunnel_tx.switch_model(nat_type) {
                 log::error!("switch to {nat_type:?} model error:{err:?}");
             }
-            let mut guard = pipe_context.punch_info().write();
+            let mut guard = node_context.punch_info().write();
             guard.nat_type = nat_type;
             guard.set_public_ip(ips);
             guard.public_port_range = port_range;

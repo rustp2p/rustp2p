@@ -6,8 +6,8 @@ use crate::tunnel::recycle::RecycleBuf;
 use crate::tunnel::tcp::{BytesInitCodec, InitCodec};
 use crate::tunnel::udp::Model;
 
-pub(crate) const MAX_SYMMETRIC_PIPELINE_NUM: usize = 200;
-pub(crate) const MAX_MAIN_PIPELINE_NUM: usize = 10;
+pub(crate) const MAX_SYMMETRIC_SOCKET_COUNT: usize = 200;
+pub(crate) const MAX_MAIN_SOCKET_COUNT: usize = 10;
 pub(crate) const ROUTE_IDLE_TIME: Duration = Duration::from_secs(10);
 
 #[derive(Clone, Copy, Eq, PartialEq, Debug)]
@@ -24,7 +24,7 @@ pub enum LoadBalance {
 #[derive(Clone)]
 pub struct TunnelConfig {
     pub load_balance: LoadBalance,
-    pub multi_pipeline: usize,
+    pub major_socket_count: usize,
     pub route_idle_time: Duration,
     pub udp_tunnel_config: Option<UdpTunnelConfig>,
     pub tcp_tunnel_config: Option<TcpTunnelConfig>,
@@ -35,7 +35,7 @@ impl Default for TunnelConfig {
     fn default() -> Self {
         Self {
             load_balance: LoadBalance::MinHopLowestLatency,
-            multi_pipeline: MULTI_PIPELINE,
+            major_socket_count: MAX_MAJOR_SOCKET_COUNT,
             enable_extend: false,
             udp_tunnel_config: Some(Default::default()),
             tcp_tunnel_config: Some(Default::default()),
@@ -44,19 +44,19 @@ impl Default for TunnelConfig {
     }
 }
 
-pub(crate) const MULTI_PIPELINE: usize = 2;
-pub(crate) const UDP_SUB_PIPELINE_NUM: usize = 82;
+pub(crate) const MAX_MAJOR_SOCKET_COUNT: usize = 2;
+pub(crate) const MAX_UDP_SUB_SOCKET_COUNT: usize = 82;
 
 impl TunnelConfig {
     pub fn new(tcp_init_codec: Box<dyn InitCodec>) -> TunnelConfig {
-        let udp_pipe_config = Some(UdpTunnelConfig::default());
-        let tcp_pipe_config = Some(TcpTunnelConfig::new(tcp_init_codec));
+        let udp_tunnel_config = Some(UdpTunnelConfig::default());
+        let tcp_tunnel_config = Some(TcpTunnelConfig::new(tcp_init_codec));
         Self {
             load_balance: LoadBalance::MinHopLowestLatency,
-            multi_pipeline: MULTI_PIPELINE,
+            major_socket_count: MAX_MAJOR_SOCKET_COUNT,
             enable_extend: false,
-            udp_tunnel_config: udp_pipe_config,
-            tcp_tunnel_config: tcp_pipe_config,
+            udp_tunnel_config,
+            tcp_tunnel_config,
             route_idle_time: ROUTE_IDLE_TIME,
         }
     }
@@ -70,7 +70,7 @@ impl TunnelConfig {
     pub fn empty() -> Self {
         Self {
             load_balance: LoadBalance::MinHopLowestLatency,
-            multi_pipeline: MULTI_PIPELINE,
+            major_socket_count: MAX_MAJOR_SOCKET_COUNT,
             enable_extend: false,
             udp_tunnel_config: None,
             tcp_tunnel_config: None,
@@ -81,28 +81,28 @@ impl TunnelConfig {
         self.load_balance = load_balance;
         self
     }
-    pub fn set_main_pipeline_num(mut self, main_pipeline_num: usize) -> Self {
-        self.multi_pipeline = main_pipeline_num;
+    pub fn set_tcp_multi_count(mut self, count: usize) -> Self {
+        self.major_socket_count = count;
         self
     }
     pub fn set_enable_extend(mut self, enable_extend: bool) -> Self {
         self.enable_extend = enable_extend;
         self
     }
-    pub fn set_udp_pipe_config(mut self, udp_pipe_config: UdpTunnelConfig) -> Self {
-        self.udp_tunnel_config.replace(udp_pipe_config);
+    pub fn set_udp_tunnel_config(mut self, config: UdpTunnelConfig) -> Self {
+        self.udp_tunnel_config.replace(config);
         self
     }
-    pub fn set_tcp_pipe_config(mut self, tcp_pipe_config: TcpTunnelConfig) -> Self {
-        self.tcp_tunnel_config.replace(tcp_pipe_config);
+    pub fn set_tcp_tunnel_config(mut self, config: TcpTunnelConfig) -> Self {
+        self.tcp_tunnel_config.replace(config);
         self
     }
     pub fn check(&self) -> io::Result<()> {
-        if let Some(udp_pipe_config) = self.udp_tunnel_config.as_ref() {
-            udp_pipe_config.check()?;
+        if let Some(udp_tunnel_config) = self.udp_tunnel_config.as_ref() {
+            udp_tunnel_config.check()?;
         }
-        if let Some(tcp_pipe_config) = self.tcp_tunnel_config.as_ref() {
-            tcp_pipe_config.check()?;
+        if let Some(tcp_tunnel_config) = self.tcp_tunnel_config.as_ref() {
+            tcp_tunnel_config.check()?;
         }
         Ok(())
     }
@@ -123,7 +123,7 @@ impl Default for TcpTunnelConfig {
     fn default() -> Self {
         Self {
             route_idle_time: ROUTE_IDLE_TIME,
-            tcp_multiplexing_limit: MULTI_PIPELINE,
+            tcp_multiplexing_limit: MAX_MAJOR_SOCKET_COUNT,
             default_interface: None,
             tcp_port: 0,
             use_v6: true,
@@ -137,7 +137,7 @@ impl TcpTunnelConfig {
     pub fn new(init_codec: Box<dyn InitCodec>) -> TcpTunnelConfig {
         Self {
             route_idle_time: ROUTE_IDLE_TIME,
-            tcp_multiplexing_limit: MULTI_PIPELINE,
+            tcp_multiplexing_limit: MAX_MAJOR_SOCKET_COUNT,
             default_interface: None,
             tcp_port: 0,
             use_v6: true,
@@ -152,7 +152,7 @@ impl TcpTunnelConfig {
                 "tcp_multiplexing_limit cannot be 0",
             ));
         }
-        if self.tcp_multiplexing_limit > MAX_MAIN_PIPELINE_NUM {
+        if self.tcp_multiplexing_limit > MAX_MAIN_SOCKET_COUNT {
             return Err(io::Error::new(
                 io::ErrorKind::Other,
                 "tcp_multiplexing_limit cannot too large",
@@ -199,8 +199,8 @@ pub struct UdpTunnelConfig {
 impl Default for UdpTunnelConfig {
     fn default() -> Self {
         Self {
-            main_udp_count: MULTI_PIPELINE,
-            sub_udp_count: UDP_SUB_PIPELINE_NUM,
+            main_udp_count: MAX_MAJOR_SOCKET_COUNT,
+            sub_udp_count: MAX_UDP_SUB_SOCKET_COUNT,
             model: Model::Low,
             default_interface: None,
             udp_ports: vec![0, 0],
@@ -215,19 +215,19 @@ impl UdpTunnelConfig {
         if self.main_udp_count == 0 {
             return Err(io::Error::new(
                 io::ErrorKind::Other,
-                "main_pipeline_num cannot be 0",
+                "main socket count cannot be 0",
             ));
         }
-        if self.main_udp_count > MAX_MAIN_PIPELINE_NUM {
+        if self.main_udp_count > MAX_MAIN_SOCKET_COUNT {
             return Err(io::Error::new(
                 io::ErrorKind::Other,
-                "main_pipeline_num is too large",
+                "main socket count is too large",
             ));
         }
-        if self.sub_udp_count > MAX_SYMMETRIC_PIPELINE_NUM {
+        if self.sub_udp_count > MAX_SYMMETRIC_SOCKET_COUNT {
             return Err(io::Error::new(
                 io::ErrorKind::Other,
-                "symmetric_pipeline_num is too large",
+                "socket count for symmetric nat is too large",
             ));
         }
         if self.use_v6 {

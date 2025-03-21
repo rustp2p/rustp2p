@@ -21,7 +21,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 #[derive(Clone)]
-pub struct PipeContext {
+pub struct NodeContext {
     self_node_id: Arc<AtomicCell<Option<NodeID>>>,
     group_code: Arc<AtomicCell<GroupCode>>,
     direct_node_address_list: Arc<RwLock<Vec<(PeerNodeAddress, u16, Vec<NodeAddress>)>>>,
@@ -34,12 +34,12 @@ pub struct PipeContext {
     pub(crate) other_route_table: Arc<DashMap<GroupCode, RouteTable<NodeID>>>,
     #[cfg(any(feature = "aes-gcm", feature = "chacha20-poly1305"))]
     pub(crate) cipher: Option<Cipher>,
-    pub(crate) multi_pipeline: usize,
+    pub(crate) major_tunnel_count: usize,
 }
 pub type DirectNodes = Vec<(NodeAddress, u16, Option<(GroupCode, NodeID)>)>;
-impl PipeContext {
+impl NodeContext {
     pub(crate) fn new(
-        multi_pipeline: usize,
+        major_tunnel_count: usize,
         local_udp_ports: Vec<u16>,
         local_tcp_port: u16,
         default_interface: Option<LocalInterface>,
@@ -48,7 +48,7 @@ impl PipeContext {
     ) -> Self {
         let punch_info = NodePunchInfo::new(local_udp_ports, local_tcp_port);
         Self {
-            multi_pipeline,
+            major_tunnel_count,
             self_node_id: Arc::new(Default::default()),
             group_code: Arc::new(Default::default()),
             direct_node_address_list: Arc::new(Default::default()),

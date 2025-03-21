@@ -6,7 +6,7 @@ pub mod extend;
 pub mod tunnel;
 
 use cipher::Algorithm;
-use config::{TcpPipeConfig, TunnelManagerConfig, UdpPipeConfig};
+use config::{TcpTunnelConfig, TunnelManagerConfig, UdpTunnelConfig};
 use flume::{Receiver, Sender};
 use protocol::node_id::{GroupCode, NodeID};
 use std::sync::Arc;
@@ -88,10 +88,12 @@ impl Builder {
     }
     pub async fn build(self) -> std::io::Result<EndPoint> {
         let mut config = TunnelManagerConfig::empty()
-            .set_udp_pipe_config(
-                UdpPipeConfig::default().set_udp_ports(self.udp_ports.unwrap_or_default()),
+            .set_udp_tunnel_config(
+                UdpTunnelConfig::default().set_udp_ports(self.udp_ports.unwrap_or_default()),
             )
-            .set_tcp_pipe_config(TcpPipeConfig::default().set_tcp_port(self.tcp_port.unwrap_or(0)))
+            .set_tcp_tunnel_config(
+                TcpTunnelConfig::default().set_tcp_port(self.tcp_port.unwrap_or(0)),
+            )
             .set_group_code(self.group_code.ok_or(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 "group_code is required",

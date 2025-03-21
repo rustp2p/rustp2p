@@ -5,7 +5,6 @@ use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 
 use crate::idle::IdleRouteManager;
 use crate::tunnel::config::TunnelConfig;
-use crate::tunnel::extensible_pipe::{ExtensiblePipe, ExtensiblePipeLine, ExtensiblePipeWriter};
 
 use crate::punch::Puncher;
 use crate::route::route_table::RouteTable;
@@ -13,7 +12,7 @@ use crate::route::{ConnectProtocol, RouteKey};
 use std::sync::Arc;
 
 pub mod config;
-pub mod extensible_pipe;
+
 pub mod recycle;
 pub mod tcp;
 pub mod udp;
@@ -31,33 +30,28 @@ pub type TunnelComponent<PeerID> = (
 pub fn new_tunnel_component<PeerID: Hash + Eq + Clone>(
     config: TunnelConfig,
 ) -> io::Result<TunnelComponent<PeerID>> {
-    let route_table = RouteTable::new(config.load_balance, config.multi_pipeline);
-    let udp_tunnel_manager = if let Some(mut udp_pipe_config) = config.udp_tunnel_config {
-        udp_pipe_config.main_udp_count = config.multi_pipeline;
-        Some(udp::UdpTunnelFactory::new(udp_pipe_config)?)
+    let route_table = RouteTable::new(config.load_balance, config.major_socket_count);
+    let udp_tunnel_manager = if let Some(mut udp_tunnel_config) = config.udp_tunnel_config {
+        udp_tunnel_config.main_udp_count = config.major_socket_count;
+        Some(udp::UdpTunnelFactory::new(udp_tunnel_config)?)
     } else {
         None
     };
-    let tcp_tunnel_manager = if let Some(mut tcp_pipe_config) = config.tcp_tunnel_config {
-        tcp_pipe_config.tcp_multiplexing_limit = config.multi_pipeline;
-        Some(tcp::TcpTunnelFactory::new(tcp_pipe_config)?)
+    let tcp_tunnel_manager = if let Some(mut tcp_tunnel_config) = config.tcp_tunnel_config {
+        tcp_tunnel_config.tcp_multiplexing_limit = config.major_socket_count;
+        Some(tcp::TcpTunnelFactory::new(tcp_tunnel_config)?)
     } else {
         None
     };
-    let extensible_pipe = if config.enable_extend {
-        Some(ExtensiblePipe::new())
-    } else {
-        None
-    };
-    let pipe = UnifiedTunnelFactory {
+
+    let tunnel_factory = UnifiedTunnelFactory {
         route_table: route_table.clone(),
         udp_tunnel_factory: udp_tunnel_manager,
         tcp_tunnel_factory: tcp_tunnel_manager,
-        extensible_pipe,
     };
-    let puncher = Puncher::from(&pipe);
+    let puncher = Puncher::from(&tunnel_factory);
     Ok((
-        pipe,
+        tunnel_factory,
         puncher,
         IdleRouteManager::new(config.route_idle_time, route_table),
     ))
@@ -67,13 +61,11 @@ pub struct UnifiedTunnelFactory<PeerID> {
     route_table: RouteTable<PeerID>,
     udp_tunnel_factory: Option<udp::UdpTunnelFactory>,
     tcp_tunnel_factory: Option<tcp::TcpTunnelFactory>,
-    extensible_pipe: Option<ExtensiblePipe>,
 }
 
 pub enum UnifiedTunnel {
     Udp(udp::UdpTunnel),
     Tcp(tcp::TcpTunnel),
-    Extend(ExtensiblePipeLine),
 }
 
 #[derive(Clone)]
@@ -81,20 +73,16 @@ pub struct UnifiedSocketManager<PeerID> {
     route_table: RouteTable<PeerID>,
     udp_socket_manager: Option<Arc<udp::SocketManager>>,
     tcp_socket_manager: Option<Arc<tcp::SocketManager>>,
-    extensible_pipe_writer: Option<ExtensiblePipeWriter>,
 }
 
 impl<PeerID> UnifiedTunnelFactory<PeerID> {
-    /// Accept pipelines from a given `tunnel`
+    /// Accept tunnels from a given `factory`
     pub async fn dispatch(&mut self) -> io::Result<UnifiedTunnel> {
         tokio::select! {
             rs=dispatch_udp_tunnel(self.udp_tunnel_factory.as_mut())=>{
                 rs
             }
             rs=accept_tcp(self.tcp_tunnel_factory.as_mut())=>{
-                rs
-            }
-            rs=accept_extend(self.extensible_pipe.as_mut())=>{
                 rs
             }
         }
@@ -114,7 +102,6 @@ impl<PeerID> UnifiedTunnelFactory<PeerID> {
             route_table: self.route_table.clone(),
             udp_socket_manager: self.shared_udp_socket_manager(),
             tcp_socket_manager: self.shared_tcp_socket_manager(),
-            extensible_pipe_writer: None,
         }
     }
     pub fn udp_socket_manager_as_ref(&self) -> Option<&Arc<udp::SocketManager>> {
@@ -139,8 +126,8 @@ impl<PeerID> UnifiedTunnelFactory<PeerID> {
 }
 
 async fn accept_tcp(tcp: Option<&mut tcp::TcpTunnelFactory>) -> io::Result<UnifiedTunnel> {
-    if let Some(tcp_pipe) = tcp {
-        Ok(UnifiedTunnel::Tcp(tcp_pipe.accept().await?))
+    if let Some(tcp_tunnel_factory) = tcp {
+        Ok(UnifiedTunnel::Tcp(tcp_tunnel_factory.accept().await?))
     } else {
         futures::future::pending().await
     }
@@ -154,19 +141,8 @@ async fn dispatch_udp_tunnel(
         futures::future::pending().await
     }
 }
-async fn accept_extend(extend: Option<&mut ExtensiblePipe>) -> io::Result<UnifiedTunnel> {
-    if let Some(extend) = extend {
-        Ok(UnifiedTunnel::Extend(extend.accept().await?))
-    } else {
-        futures::future::pending().await
-    }
-}
 
 impl<PeerID> UnifiedSocketManager<PeerID> {
-    /// Acquire a owned `writer` for writing to the tunnel established by other extended protocols
-    pub fn extensible_pipe_writer(&self) -> Option<&ExtensiblePipeWriter> {
-        self.extensible_pipe_writer.as_ref()
-    }
     pub fn route_table(&self) -> &RouteTable<PeerID> {
         &self.route_table
     }
@@ -193,11 +169,6 @@ impl<PeerID> UnifiedSocketManager<PeerID> {
                     return w.send_to(buf, route_key).await;
                 }
             }
-            ConnectProtocol::Extend => {
-                if let Some(w) = self.extensible_pipe_writer.as_ref() {
-                    return w.send_to(buf, route_key).await;
-                }
-            }
         }
         Err(io::Error::from(io::ErrorKind::InvalidInput))
     }
@@ -220,7 +191,6 @@ impl<PeerID> UnifiedSocketManager<PeerID> {
                     return w.send_to_addr(buf, addr).await;
                 }
             }
-            ConnectProtocol::Extend => {}
         }
         Err(io::Error::from(io::ErrorKind::InvalidInput))
     }
@@ -250,14 +220,13 @@ impl<PeerID: Hash + Eq> UnifiedSocketManager<PeerID> {
 }
 
 impl UnifiedTunnel {
-    /// Receving buf from the associated PipeLine
+    /// Receving buf from the associated tunnel
     /// `usize` in the `Ok` branch indicates how many bytes are received
     /// `RouteKey` in the `Ok` branch denotes the source where these bytes are received from
     pub async fn recv_from(&mut self, buf: &mut [u8]) -> Option<io::Result<(usize, RouteKey)>> {
         match self {
             UnifiedTunnel::Udp(line) => line.recv_from(buf).await,
             UnifiedTunnel::Tcp(line) => Some(line.recv_from(buf).await),
-            UnifiedTunnel::Extend(line) => Some(line.recv_from(buf).await),
         }
     }
     pub async fn recv_multi_from<B: AsMut<[u8]>>(
@@ -280,42 +249,28 @@ impl UnifiedTunnel {
                     Err(e) => Some(Err(e)),
                 }
             }
-            UnifiedTunnel::Extend(line) => {
-                let rs = line.recv_from(bufs[0].as_mut()).await;
-                match rs {
-                    Ok((len, addr)) => {
-                        sizes[0] = len;
-                        addrs[0] = addr;
-                        Some(Ok(1))
-                    }
-                    Err(e) => Some(Err(e)),
-                }
-            }
         }
     }
     pub fn done(&mut self) {
         match self {
             UnifiedTunnel::Udp(line) => line.done(),
             UnifiedTunnel::Tcp(line) => line.done(),
-            UnifiedTunnel::Extend(line) => line.done(),
         }
     }
 }
 
 impl UnifiedTunnel {
-    /// The protocol this pipeline is using
+    /// The protocol this tunnel is using
     pub fn protocol(&self) -> ConnectProtocol {
         match self {
             UnifiedTunnel::Udp(_) => ConnectProtocol::UDP,
             UnifiedTunnel::Tcp(_) => ConnectProtocol::TCP,
-            UnifiedTunnel::Extend(_) => ConnectProtocol::Extend,
         }
     }
     pub fn remote_addr(&self) -> Option<SocketAddr> {
         match self {
             UnifiedTunnel::Udp(_) => None,
             UnifiedTunnel::Tcp(tcp) => Some(tcp.route_key().addr()),
-            UnifiedTunnel::Extend(_) => None,
         }
     }
 }

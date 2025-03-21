@@ -8,7 +8,7 @@ use tokio::net::TcpStream;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 pub(crate) async fn query_tcp_public_addr_loop(
-    pipe_writer: TunnelTransmit,
+    tunnel_tx: TunnelTransmit,
     tcp_stun_servers: Vec<String>,
 ) {
     log::debug!("tcp_stun_servers = {tcp_stun_servers:?}");
@@ -28,7 +28,7 @@ pub(crate) async fn query_tcp_public_addr_loop(
             match stun.to_socket_addrs() {
                 Ok(mut addr) => {
                     if let Some(addr) = addr.next() {
-                        if let Some(w) = pipe_writer.socket_manager.tcp_socket_manager_as_ref() {
+                        if let Some(w) = tunnel_tx.socket_manager.tcp_socket_manager_as_ref() {
                             match tokio::time::timeout(
                                 Duration::from_secs(5),
                                 w.connect_reuse_port_raw(addr),
@@ -68,7 +68,7 @@ pub(crate) async fn query_tcp_public_addr_loop(
                         match stun_tcp_read(&mut tcp_stream).await {
                             Ok(addr) => {
                                 log::debug!("update_tcp_public_addr {cur_index},{stun} {addr}");
-                                pipe_writer.pipe_context().update_tcp_public_addr(addr);
+                                tunnel_tx.node_context().update_tcp_public_addr(addr);
                                 let mut buf = [0; 1024];
                                 loop {
                                     tokio::time::sleep(Duration::from_secs(10)).await;
@@ -107,7 +107,7 @@ pub(crate) async fn query_tcp_public_addr_loop(
 }
 
 pub(crate) async fn query_udp_public_addr_loop(
-    pipe_writer: TunnelTransmit,
+    tunnel_tx: TunnelTransmit,
     udp_stun_servers: Vec<String>,
 ) {
     log::debug!("udp_stun_servers = {udp_stun_servers:?}");
@@ -124,7 +124,7 @@ pub(crate) async fn query_udp_public_addr_loop(
             match stun.to_socket_addrs() {
                 Ok(mut addr) => {
                     if let Some(addr) = addr.next() {
-                        if let Some(w) = pipe_writer.socket_manager.udp_socket_manager_as_ref() {
+                        if let Some(w) = tunnel_tx.socket_manager.udp_socket_manager_as_ref() {
                             if let Err(e) = w.detect_pub_addrs(&stun_request, addr).await {
                                 log::debug!("detect_pub_addrs {e:?} {addr:?}");
                             }

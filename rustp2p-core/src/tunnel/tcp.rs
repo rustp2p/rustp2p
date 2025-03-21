@@ -66,7 +66,7 @@ impl TcpTunnelFactory {
 }
 
 impl TcpTunnelFactory {
-    /// Accept `TCP` pipelines from this kind tunnel
+    /// Accept `TCP` tunnel from this kind factory
     pub async fn accept(&mut self) -> io::Result<TcpTunnel> {
         tokio::select! {
             rs=self.connect_receiver.recv()=>{
@@ -129,7 +129,7 @@ impl Drop for TcpTunnel {
 }
 
 impl TcpTunnel {
-    /// Writing `buf` to the target denoted by `route_key` via this pipeline
+    /// Writing `buf` to the target denoted by `route_key` via this tunnel
     pub async fn send(&self, buf: BytesMut) -> io::Result<()> {
         self.write_half_collect.send_to(buf, &self.route_key).await
     }
@@ -181,7 +181,7 @@ impl TcpTunnel {
             Err(_) => Err(io::Error::from(io::ErrorKind::TimedOut)),
         }
     }
-    /// Receive bytes from this pipeline, which the configured Decoder pre-processes
+    /// Receive bytes from this tunnel, which the configured Decoder pre-processes
     /// `usize` in the `Ok` branch indicates how many bytes are received
     /// `RouteKey` in the `Ok` branch denotes the source where these bytes are received from
     pub async fn recv_from(&mut self, buf: &mut [u8]) -> io::Result<(usize, RouteKey)> {
@@ -679,7 +679,6 @@ pub trait Encoder: Send + Sync {
 }
 
 #[cfg(test)]
-#[cfg(feature = "use-tokio")]
 mod tests {
     use async_trait::async_trait;
     use std::io;
@@ -691,17 +690,17 @@ mod tests {
     use crate::tunnel::tcp::{Decoder, Encoder, InitCodec, TcpTunnelFactory};
 
     #[tokio::test]
-    pub async fn create_tcp_pipe() {
+    pub async fn create_tcp_tunnel() {
         let config: TcpTunnelConfig = TcpTunnelConfig::default();
-        let tcp_pipe = TcpTunnelFactory::new(config).unwrap();
-        drop(tcp_pipe)
+        let tcp_tunnel_factory = TcpTunnelFactory::new(config).unwrap();
+        drop(tcp_tunnel_factory)
     }
 
     #[tokio::test]
-    pub async fn create_codec_tcp_pipe() {
+    pub async fn create_codec_tcp_tunnel() {
         let config = TcpTunnelConfig::new(Box::new(MyInitCodeC));
-        let tcp_pipe = TcpTunnelFactory::new(config).unwrap();
-        drop(tcp_pipe)
+        let tcp_tunnel_factory = TcpTunnelFactory::new(config).unwrap();
+        drop(tcp_tunnel_factory)
     }
 
     #[derive(Clone)]

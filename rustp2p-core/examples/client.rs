@@ -71,18 +71,18 @@ async fn main() {
     let udp_config = UdpTunnelConfig::default();
     let tcp_config = TcpTunnelConfig::new(Box::new(LengthPrefixedInitCodec));
     let config = TunnelConfig::empty()
-        .set_udp_pipe_config(udp_config)
-        .set_tcp_pipe_config(tcp_config)
-        .set_main_pipeline_num(2);
-    let (mut pipe, puncher, idle_route_manager) = new_tunnel_component(config).unwrap();
-    let pipe_writer = pipe.socket_manager();
-    let nat_info = my_nat_info(&pipe_writer).await;
+        .set_udp_tunnel_config(udp_config)
+        .set_tcp_tunnel_config(tcp_config)
+        .set_tcp_multi_count(2);
+    let (mut tunnel_factory, puncher, idle_route_manager) = new_tunnel_component(config).unwrap();
+    let socket_manager = tunnel_factory.socket_manager();
+    let nat_info = my_nat_info(&socket_manager).await;
     {
         let mut request = BytesMut::new();
         request.put_u32(UP);
         request.put_u32(my_id);
         request.put_u32(MY_SERVER_ID);
-        pipe_writer
+        socket_manager
             .send_to_addr(connect_protocol, request, server)
             .await
             .unwrap();
@@ -90,7 +90,7 @@ async fn main() {
     let peer_list = Arc::new(Mutex::new(Vec::<u32>::new()));
     let peer_list1 = peer_list.clone();
     let puncher1 = puncher.clone();
-    let pipe_writer1 = pipe_writer.clone();
+    let socket_manager1 = socket_manager.clone();
     let nat_info1 = nat_info.clone();
     tokio::spawn(async move {
         loop {
@@ -121,7 +121,7 @@ async fn main() {
                         nat_info.seq = rand::random();
                         let data = serde_json::to_string(&nat_info).unwrap();
                         request.extend_from_slice(data.as_bytes());
-                        pipe_writer1
+                        socket_manager1
                             .send_to_addr(connect_protocol, request, server)
                             .await
                             .unwrap();
@@ -130,7 +130,7 @@ async fn main() {
             }
         }
     });
-    let pipe_writer2 = pipe_writer.clone();
+    let socket_manager2 = socket_manager.clone();
     tokio::spawn(async move {
         // Obtain public network address
         loop {
@@ -139,7 +139,7 @@ async fn main() {
             request.put_u32(PUBLIC_ADDR_REQ);
             request.put_u32(my_id);
             request.put_u32(MY_SERVER_ID);
-            pipe_writer2
+            socket_manager2
                 .send_to_addr(connect_protocol, request, server)
                 .await
                 .unwrap();
@@ -150,15 +150,15 @@ async fn main() {
         peer_list,
         puncher,
         nat_info,
-        route_table: pipe.route_table().clone(),
+        route_table: tunnel_factory.route_table().clone(),
         server,
-        pipe_writer,
+        socket_manager,
     };
     loop {
-        let pipe_line = pipe.dispatch().await.unwrap();
+        let tunnel = tunnel_factory.dispatch().await.unwrap();
         let context_handler = context_handler.clone();
         tokio::spawn(async move {
-            let _ = context_handler.handle(pipe_line).await;
+            let _ = context_handler.handle(tunnel).await;
         });
     }
 }
@@ -172,18 +172,18 @@ struct ContextHandler {
     route_table: RouteTable<u32>,
     #[allow(dead_code)]
     server: SocketAddr,
-    pipe_writer: UnifiedSocketManager<u32>,
+    socket_manager: UnifiedSocketManager<u32>,
 }
 
 impl ContextHandler {
-    async fn handle(&self, mut pipe_line: UnifiedTunnel) -> std::io::Result<()> {
+    async fn handle(&self, mut tunnel: UnifiedTunnel) -> std::io::Result<()> {
         let mut buf = [0; 65536];
-        while let Some(rs) = pipe_line.recv_from(&mut buf).await {
+        while let Some(rs) = tunnel.recv_from(&mut buf).await {
             let (len, route_key) = match rs {
                 Ok(rs) => rs,
                 Err(e) => {
                     log::warn!("{e:?}");
-                    if pipe_line.protocol().is_udp() {
+                    if tunnel.protocol().is_udp() {
                         continue;
                     }
                     break;
@@ -218,7 +218,10 @@ impl ContextHandler {
                     nat_info.seq = peer_nat_info.seq;
                     let data = serde_json::to_string(&nat_info).unwrap();
                     request.extend_from_slice(data.as_bytes());
-                    self.pipe_writer.send_to(request, &route_key).await.unwrap();
+                    self.socket_manager
+                        .send_to(request, &route_key)
+                        .await
+                        .unwrap();
 
                     {
                         let mut request = BytesMut::new();
@@ -268,7 +271,10 @@ impl ContextHandler {
                     request.put_u32(PUNCH_RES);
                     request.put_u32(self.my_id);
                     request.put_u32(src_id);
-                    self.pipe_writer.send_to(request, &route_key).await.unwrap();
+                    self.socket_manager
+                        .send_to(request, &route_key)
+                        .await
+                        .unwrap();
                     self.route_table.add_route(src_id, (route_key, 1));
                 }
                 PUNCH_RES => {
@@ -296,12 +302,12 @@ impl ContextHandler {
                 }
             }
         }
-        log::info!("pipe_line done");
+        log::info!("tunnel done");
         Ok(())
     }
 }
 
-async fn my_nat_info(pipe_writer: &UnifiedSocketManager<u32>) -> Arc<Mutex<NatInfo>> {
+async fn my_nat_info(socket_manager: &UnifiedSocketManager<u32>) -> Arc<Mutex<NatInfo>> {
     let stun_server = vec![
         "stun.miwifi.com:3478".to_string(),
         "stun.chat.bilibili.com:3478".to_string(),
@@ -312,12 +318,12 @@ async fn my_nat_info(pipe_writer: &UnifiedSocketManager<u32>) -> Arc<Mutex<NatIn
         .unwrap();
     log::info!("nat_type:{nat_type:?},public_ips:{public_ips:?},port_range={port_range}");
     let local_ipv4 = rust_p2p_core::extend::addr::local_ipv4().await.unwrap();
-    let local_udp_ports = pipe_writer
+    let local_udp_ports = socket_manager
         .udp_socket_manager_as_ref()
         .unwrap()
         .local_ports()
         .unwrap();
-    let local_tcp_port = pipe_writer
+    let local_tcp_port = socket_manager
         .tcp_socket_manager_as_ref()
         .unwrap()
         .local_addr()

@@ -466,13 +466,13 @@ impl UdpTunnelFactory {
     pub fn new(config: UdpTunnelConfig) -> io::Result<UdpTunnelFactory> {
         create_tunnel_factory(config)
     }
-    /// Accept `UDP` pipelines from this kind tunnel
+    /// Accept `UDP` tunnel from this kind factory
     pub async fn dispatch(&mut self) -> io::Result<UdpTunnel> {
         let mut udp_tunnel = self
             .tunnel_receiver
             .recv()
             .await
-            .map_err(|_| io::Error::new(io::ErrorKind::Other, "UdpPipe close"))?;
+            .map_err(|_| io::Error::new(io::ErrorKind::Other, "Udp tunnel close"))?;
         udp_tunnel.active = true;
         if udp_tunnel.socket_manager_weak.is_some() {
             return Ok(udp_tunnel);
@@ -686,7 +686,7 @@ impl Drop for UdpTunnel {
                 socket_manager_weak: self.socket_manager_weak.take(),
             });
             if let Err(TrySendError::Full(_)) = rs {
-                log::warn!("UdpPipeLine TrySendError full");
+                log::warn!("Udp Tunnel TrySendError full");
             }
         }
     }
@@ -964,7 +964,7 @@ mod tests {
     use crate::tunnel::udp::{Model, UdpTunnel};
 
     #[tokio::test]
-    pub async fn create_udp_pipe() {
+    pub async fn create_udp_tunnel() {
         let config = crate::tunnel::config::UdpTunnelConfig::default()
             .set_main_udp_count(2)
             .set_sub_udp_count(10)
@@ -974,7 +974,7 @@ mod tests {
         let mut count = 0;
         let mut join = Vec::new();
         while let Ok(rs) = tokio::time::timeout(Duration::from_secs(1), udp_pipe.dispatch()).await {
-            join.push(tokio::spawn(pipe_line_recv(rs.unwrap())));
+            join.push(tokio::spawn(tunnel_recv(rs.unwrap())));
             count += 1;
         }
         assert_eq!(count, 2)
@@ -987,23 +987,25 @@ mod tests {
             .set_sub_udp_count(10)
             .set_use_v6(false)
             .set_model(Model::High);
-        let mut udp_pipe = crate::tunnel::udp::create_tunnel_factory(config).unwrap();
+        let mut tunnel_factory = crate::tunnel::udp::create_tunnel_factory(config).unwrap();
         let mut count = 0;
         let mut join = Vec::new();
-        while let Ok(rs) = tokio::time::timeout(Duration::from_secs(1), udp_pipe.dispatch()).await {
-            join.push(tokio::spawn(pipe_line_recv(rs.unwrap())));
+        while let Ok(rs) =
+            tokio::time::timeout(Duration::from_secs(1), tunnel_factory.dispatch()).await
+        {
+            join.push(tokio::spawn(tunnel_recv(rs.unwrap())));
             count += 1;
         }
-        udp_pipe.switch_low();
+        tunnel_factory.switch_low();
 
-        let mut close_pipe_line_count = 0;
+        let mut close_tunnel_count = 0;
         for x in join {
             let rs = tokio::time::timeout(Duration::from_secs(1), x).await;
             match rs {
                 Ok(rs) => {
                     if rs.unwrap() {
-                        // pipe_line_recv task done
-                        close_pipe_line_count += 1;
+                        // tunnel task done
+                        close_tunnel_count += 1;
                     }
                 }
                 Err(_e) => {
@@ -1012,11 +1014,11 @@ mod tests {
             }
         }
         assert_eq!(count, 12);
-        assert_eq!(close_pipe_line_count, 10);
+        assert_eq!(close_tunnel_count, 10);
     }
 
-    async fn pipe_line_recv(mut udp_pipe_line: UdpTunnel) -> bool {
+    async fn tunnel_recv(mut tunnel: UdpTunnel) -> bool {
         let mut buf = [0; 1400];
-        udp_pipe_line.recv_from(&mut buf).await.is_none()
+        tunnel.recv_from(&mut buf).await.is_none()
     }
 }

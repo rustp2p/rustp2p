@@ -127,28 +127,28 @@ impl<PeerID: Hash + Eq + Clone> Puncher<PeerID> {
 
         type Scope<'a, T> = async_scoped::TokioScope<'a, T>;
         Scope::scope_and_block(|s| {
-            if let Some(tcp_pipe_writer) = self.tcp_socket_manager.as_ref() {
+            if let Some(tcp_socket_manager) = self.tcp_socket_manager.as_ref() {
                 for addr in &peer_nat_info.mapping_tcp_addr {
                     s.spawn(async move {
-                        Self::connect_tcp(tcp_pipe_writer, buf, *addr, ttl).await;
+                        Self::connect_tcp(tcp_socket_manager, buf, *addr, ttl).await;
                     })
                 }
                 if punch_model.is_match(PunchModel::IPv4Tcp) {
                     if let Some(addr) = peer_nat_info.local_ipv4_tcp() {
                         s.spawn(async move {
-                            Self::connect_tcp(tcp_pipe_writer, buf, addr, ttl).await;
+                            Self::connect_tcp(tcp_socket_manager, buf, addr, ttl).await;
                         })
                     }
                     for addr in peer_nat_info.public_ipv4_tcp() {
                         s.spawn(async move {
-                            Self::connect_tcp(tcp_pipe_writer, buf, addr, ttl).await;
+                            Self::connect_tcp(tcp_socket_manager, buf, addr, ttl).await;
                         })
                     }
                 }
                 if punch_model.is_match(PunchModel::IPv6Tcp) {
                     if let Some(addr) = peer_nat_info.ipv6_tcp_addr() {
                         s.spawn(async move {
-                            Self::connect_tcp(tcp_pipe_writer, buf, addr, ttl).await;
+                            Self::connect_tcp(tcp_socket_manager, buf, addr, ttl).await;
                         })
                     }
                 }
@@ -160,14 +160,14 @@ impl<PeerID: Hash + Eq + Clone> Puncher<PeerID> {
         Ok(())
     }
     async fn connect_tcp(
-        tcp_pipe_writer: &tcp::SocketManager,
+        tcp_socket_manager: &tcp::SocketManager,
         buf: &[u8],
         addr: SocketAddr,
         ttl: Option<u32>,
     ) {
         match tokio::time::timeout(
             Duration::from_secs(3),
-            tcp_pipe_writer.send_to_addr_multi0(buf.into(), addr, ttl),
+            tcp_socket_manager.send_to_addr_multi0(buf.into(), addr, ttl),
         )
         .await
         {
@@ -189,8 +189,9 @@ impl<PeerID: Hash + Eq + Clone> Puncher<PeerID> {
         peer_nat_info: &NatInfo,
         punch_model: &PunchModelBoxes,
     ) -> io::Result<()> {
-        let udp_pipe_writer = if let Some(udp_pipe_writer) = self.udp_socket_manager.as_ref() {
-            udp_pipe_writer
+        let udp_socket_manager = if let Some(udp_socket_manager) = self.udp_socket_manager.as_ref()
+        {
+            udp_socket_manager
         } else {
             return Ok(());
         };
@@ -201,7 +202,7 @@ impl<PeerID: Hash + Eq + Clone> Puncher<PeerID> {
                 .filter(|a| a.is_ipv4())
                 .copied()
                 .collect();
-            udp_pipe_writer.try_main_batch_send_to(buf, &mapping_udp_v4_addr);
+            udp_socket_manager.try_main_batch_send_to(buf, &mapping_udp_v4_addr);
 
             let mapping_udp_v6_addr: Vec<SocketAddr> = peer_nat_info
                 .mapping_udp_addr
@@ -209,16 +210,16 @@ impl<PeerID: Hash + Eq + Clone> Puncher<PeerID> {
                 .filter(|a| a.is_ipv6())
                 .copied()
                 .collect();
-            udp_pipe_writer.try_main_batch_send_to(buf, &mapping_udp_v6_addr);
+            udp_socket_manager.try_main_batch_send_to(buf, &mapping_udp_v6_addr);
         }
         let local_ipv4_addrs = peer_nat_info.local_ipv4_addrs();
         if !local_ipv4_addrs.is_empty() {
-            udp_pipe_writer.try_main_batch_send_to(buf, &local_ipv4_addrs);
+            udp_socket_manager.try_main_batch_send_to(buf, &local_ipv4_addrs);
         }
 
         if punch_model.is_match(PunchModel::IPv6Udp) {
             let v6_addr = peer_nat_info.ipv6_addr();
-            udp_pipe_writer.try_main_batch_send_to(buf, &v6_addr);
+            udp_socket_manager.try_main_batch_send_to(buf, &v6_addr);
         }
         if !punch_model.is_match(PunchModel::IPv4Udp) {
             return Ok(());
@@ -261,7 +262,7 @@ impl<PeerID: Hash + Eq + Clone> Puncher<PeerID> {
                     let mut nums: Vec<u16> = (min_port..=max_port).collect();
                     nums.shuffle(&mut rand::rng());
                     self.punch_symmetric(
-                        udp_pipe_writer,
+                        udp_socket_manager,
                         &nums[..k],
                         buf,
                         &peer_nat_info.public_ips,
@@ -282,7 +283,7 @@ impl<PeerID: Hash + Eq + Clone> Puncher<PeerID> {
                 let mut index = start
                     + self
                         .punch_symmetric(
-                            udp_pipe_writer,
+                            udp_socket_manager,
                             &self.port_vec[start..end],
                             buf,
                             &peer_nat_info.public_ips,
@@ -300,8 +301,8 @@ impl<PeerID: Hash + Eq + Clone> Puncher<PeerID> {
                 if addr.is_empty() {
                     return Ok(());
                 }
-                udp_pipe_writer.try_main_batch_send_to(buf, &addr);
-                udp_pipe_writer.try_sub_batch_send_to(buf, addr[0]);
+                udp_socket_manager.try_main_batch_send_to(buf, &addr);
+                udp_socket_manager.try_sub_batch_send_to(buf, addr[0]);
             }
         }
         Ok(())
@@ -309,7 +310,7 @@ impl<PeerID: Hash + Eq + Clone> Puncher<PeerID> {
 
     async fn punch_symmetric(
         &self,
-        udp_pipe_writer: &udp::SocketManager,
+        udp_socket_manager: &udp::SocketManager,
         ports: &[u16],
         buf: &[u8],
         ips: &Vec<Ipv4Addr>,
@@ -323,7 +324,7 @@ impl<PeerID: Hash + Eq + Clone> Puncher<PeerID> {
                     return Ok(index);
                 }
                 let addr: SocketAddr = SocketAddr::V4(SocketAddrV4::new(*pub_ip, *port));
-                if let Err(e) = udp_pipe_writer.try_send_to_addr(buf, addr) {
+                if let Err(e) = udp_socket_manager.try_send_to_addr(buf, addr) {
                     log::info!("{addr},{e:?}");
                 }
                 tokio::time::sleep(Duration::from_millis(2)).await
