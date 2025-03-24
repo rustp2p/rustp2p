@@ -253,17 +253,6 @@ impl SocketManager {
         Ok(())
     }
 
-    /// Acquire the underlying `UDP` socket by the index
-    #[inline]
-    fn get_sub_udp(&self, index: usize) -> io::Result<Arc<UdpSocket>> {
-        let guard = self.sub_udp.read();
-        let len = guard.len();
-        if len <= index {
-            Err(io::Error::new(io::ErrorKind::Other, "index out of bounds"))
-        } else {
-            Ok(guard[index].clone())
-        }
-    }
     #[inline]
     fn get_udp(&self, udp_index: UDPIndex) -> io::Result<Arc<UdpSocket>> {
         Ok(match udp_index {
@@ -277,7 +266,15 @@ impl SocketManager {
                 .get(index)
                 .ok_or(io::Error::new(io::ErrorKind::Other, "index out of bounds"))?
                 .clone(),
-            UDPIndex::SubV4(index) => self.get_sub_udp(index)?,
+            UDPIndex::SubV4(index) => {
+                let guard = self.sub_udp.read();
+                let len = guard.len();
+                if len <= index {
+                    return Err(io::Error::new(io::ErrorKind::Other, "index out of bounds"));
+                } else {
+                    guard[index].clone()
+                }
+            }
         })
     }
 
@@ -743,16 +740,17 @@ impl UdpTunnel {
         }
     }
     pub fn done(&mut self) {
-        let _ = self.udp.take();
-        let _ = self.close_notify.take();
-        let _ = self.re_dispatcher.take();
-        let _ = self.socket_manager_weak.take();
+        _ = self.udp.take();
+        _ = self.close_notify.take();
+        _ = self.re_dispatcher.take();
+        _ = self.re_dispatcher.take();
+        _ = self.socket_manager_weak.take();
     }
 }
 
 impl UdpTunnel {
     /// Writing `buf` to the target denoted by SocketAddr via this tunnel
-    pub async fn send_to_addr<A: Into<SocketAddr>>(&self, buf: &[u8], addr: A) -> io::Result<()> {
+    pub async fn send_to<A: Into<SocketAddr>>(&self, buf: &[u8], addr: A) -> io::Result<()> {
         if let Some(udp) = &self.udp {
             udp.send_to(buf, addr.into()).await?;
             Ok(())
@@ -761,7 +759,7 @@ impl UdpTunnel {
         }
     }
     /// Try to write `buf` to the target denoted by SocketAddr via this tunnel
-    pub fn try_send_to_addr<A: Into<SocketAddr>>(&self, buf: &[u8], addr: A) -> io::Result<()> {
+    pub fn try_send_to<A: Into<SocketAddr>>(&self, buf: &[u8], addr: A) -> io::Result<()> {
         if let Some(udp) = &self.udp {
             udp.try_send_to(buf, addr.into())?;
             Ok(())
