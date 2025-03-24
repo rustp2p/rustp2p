@@ -46,9 +46,9 @@ pub struct TunnelManager {
 
 impl TunnelManager {
     pub(crate) async fn new(config: TunnelManagerConfig) -> io::Result<TunnelManager> {
-        Box::pin(Self::new0(config)).await
+        Box::pin(Self::new_impl(config)).await
     }
-    pub(crate) async fn new0(mut config: TunnelManagerConfig) -> io::Result<TunnelManager> {
+    pub(crate) async fn new_impl(mut config: TunnelManagerConfig) -> io::Result<TunnelManager> {
         let major_socket_count = config.major_socket_count;
         let send_buffer_size = config.send_buffer_size;
         let recv_buffer_size = config.recv_buffer_size;
