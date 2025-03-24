@@ -1,5 +1,5 @@
 use crate::protocol::node_id::NodeID;
-use crate::tunnel::TunnelTransmit;
+use crate::tunnel::TunnelTransmitHub;
 use rust_p2p_core::punch::{PunchConsultInfo, Puncher};
 use rust_p2p_core::socket::LocalInterface;
 use std::time::Duration;
@@ -15,7 +15,7 @@ mod query_public_addr;
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn start_task(
-    tunnel_tx: &TunnelTransmit,
+    tunnel_tx: &TunnelTransmitHub,
     idle_route_manager: rust_p2p_core::idle::IdleRouteManager<NodeID>,
     puncher: Puncher<NodeID>,
     query_id_interval: Duration,

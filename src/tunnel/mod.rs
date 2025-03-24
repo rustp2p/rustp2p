@@ -128,7 +128,7 @@ impl TunnelManager {
             node_context.set_mapping_addrs(addrs);
         }
         let shutdown_manager = ShutdownManager::<()>::new();
-        let tunnel_tx = TunnelTransmit {
+        let tunnel_tx = TunnelTransmitHub {
             send_buffer_size,
             node_context: node_context.clone(),
             socket_manager: tunnel_factory.socket_manager(),
@@ -171,8 +171,8 @@ impl TunnelManager {
             recycle_buf,
         })
     }
-    pub(crate) fn tunnel_transmit(&self) -> TunnelTransmit {
-        TunnelTransmit {
+    pub(crate) fn tunnel_send_hub(&self) -> TunnelTransmitHub {
+        TunnelTransmitHub {
             send_buffer_size: self.send_buffer_size,
             node_context: self.node_context.clone(),
             socket_manager: self.tunnel_factory.socket_manager(),
@@ -189,7 +189,7 @@ impl Drop for TunnelManager {
 }
 
 impl TunnelManager {
-    pub(crate) async fn dispatch(&mut self) -> io::Result<TunnelReceive> {
+    pub(crate) async fn dispatch(&mut self) -> io::Result<Tunnel> {
         if self.shutdown_manager.is_shutdown_triggered() {
             return Err(io::Error::new(io::ErrorKind::Other, "shutdown"));
         }
@@ -204,11 +204,11 @@ impl TunnelManager {
         let recv_buff = Vec::with_capacity(BUF_SIZE);
         let recv_sizes = Vec::with_capacity(BUF_SIZE);
         let recv_addrs = Vec::with_capacity(BUF_SIZE);
-        Ok(TunnelReceive {
+        Ok(Tunnel {
             shutdown_manager: self.shutdown_manager.clone(),
             node_context: self.node_context.clone(),
             tunnel,
-            tunnel_transmit: self.tunnel_transmit(),
+            tunnel_transmit: self.tunnel_send_hub(),
             route_table: self.tunnel_factory.route_table().clone(),
             active_punch_sender: self.active_punch_sender.clone(),
             passive_punch_sender: self.passive_punch_sender.clone(),
@@ -222,7 +222,7 @@ impl TunnelManager {
 }
 
 #[derive(Clone)]
-pub struct TunnelTransmit {
+pub struct TunnelTransmitHub {
     send_buffer_size: usize,
     node_context: NodeContext,
     socket_manager: rust_p2p_core::tunnel::UnifiedSocketManager<NodeID>,
@@ -230,7 +230,7 @@ pub struct TunnelTransmit {
     recycle_buf: Option<RecycleBuf>,
 }
 
-impl TunnelTransmit {
+impl TunnelTransmitHub {
     pub fn node_context(&self) -> &NodeContext {
         &self.node_context
     }
@@ -505,11 +505,11 @@ impl TunnelTransmit {
     }
 }
 
-pub struct TunnelReceive {
+pub struct Tunnel {
     shutdown_manager: ShutdownManager<()>,
     node_context: NodeContext,
     tunnel: rust_p2p_core::tunnel::UnifiedTunnel,
-    tunnel_transmit: TunnelTransmit,
+    tunnel_transmit: TunnelTransmitHub,
     route_table: RouteTable<NodeID>,
     active_punch_sender: Sender<(NodeID, PunchConsultInfo)>,
     passive_punch_sender: Sender<(NodeID, PunchConsultInfo)>,
@@ -524,7 +524,7 @@ const BUF_SIZE: usize = 16;
 
 type RecvRs = Result<Result<RecvUserData, HandleError>, RecvError>;
 
-impl TunnelReceive {
+impl Tunnel {
     #[allow(dead_code)]
     pub(crate) async fn next(&mut self) -> Result<Result<RecvUserData, HandleError>, RecvError> {
         self.preprocess_next::<crate::config::DefaultInterceptor>(None)
@@ -1159,7 +1159,7 @@ impl TunnelReceive {
 }
 
 async fn id_route_reply(
-    tunnel_tx: TunnelTransmit,
+    tunnel_tx: TunnelTransmitHub,
     other_route_table: Arc<DashMap<GroupCode, RouteTable<NodeID>>>,
     route_key: RouteKey,
     self_group_code: GroupCode,

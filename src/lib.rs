@@ -13,12 +13,12 @@ use std::io;
 use std::ops::Deref;
 use std::sync::Arc;
 use tokio::task::JoinHandle;
-use tunnel::{PeerNodeAddress, RecvUserData, TunnelManager, TunnelReceive, TunnelTransmit};
+use tunnel::{PeerNodeAddress, RecvUserData, Tunnel, TunnelManager, TunnelTransmitHub};
 
 #[derive(Clone)]
 pub struct EndPoint {
     receiver: Receiver<RecvUserData>,
-    sender: TunnelTransmit,
+    sender: TunnelTransmitHub,
     _handle: Arc<HandleOwner>,
 }
 struct HandleOwner {
@@ -46,7 +46,7 @@ impl EndPoint {
 }
 
 impl Deref for EndPoint {
-    type Target = TunnelTransmit;
+    type Target = TunnelTransmitHub;
 
     fn deref(&self) -> &Self::Target {
         &self.sender
@@ -129,7 +129,7 @@ impl Builder {
 
         let (sender, receiver) = flume::unbounded();
         let mut tunnel_manager = TunnelManager::new(config).await?;
-        let writer = tunnel_manager.tunnel_transmit();
+        let writer = tunnel_manager.tunnel_send_hub();
         let handle = tokio::spawn(async move {
             while let Ok(tunnel_rx) = tunnel_manager.dispatch().await {
                 tokio::spawn(handle(tunnel_rx, sender.clone()));
@@ -149,7 +149,7 @@ impl Default for Builder {
     }
 }
 
-async fn handle(mut tunnel_rx: TunnelReceive, sender: Sender<RecvUserData>) {
+async fn handle(mut tunnel_rx: Tunnel, sender: Sender<RecvUserData>) {
     let mut list = Vec::with_capacity(16);
     loop {
         let rs = match tunnel_rx.batch_recv(&mut list).await {

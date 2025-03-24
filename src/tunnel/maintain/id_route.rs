@@ -2,14 +2,14 @@ use crate::protocol::node_id::NodeID;
 use crate::protocol::protocol_type::ProtocolType;
 use crate::protocol::NetPacket;
 use crate::tunnel::node_context::DirectNodes;
-use crate::tunnel::{NodeAddress, TunnelTransmit};
+use crate::tunnel::{NodeAddress, TunnelTransmitHub};
 use rand::seq::SliceRandom;
 use std::collections::HashSet;
 use std::io;
 use std::time::Duration;
 
 pub async fn id_route_query_loop(
-    tunnel_tx: TunnelTransmit,
+    tunnel_tx: TunnelTransmitHub,
     query_id_interval: Duration,
     query_id_max_num: usize,
 ) {
@@ -24,7 +24,7 @@ pub async fn id_route_query_loop(
     }
 }
 
-async fn id_route_query(tunnel_tx: &TunnelTransmit, query_id_max_num: usize) -> io::Result<()> {
+async fn id_route_query(tunnel_tx: &TunnelTransmitHub, query_id_max_num: usize) -> io::Result<()> {
     let mut packet =
         if let Ok(packet) = tunnel_tx.allocate_send_packet_proto(ProtocolType::IDRouteQuery, 4) {
             packet
@@ -45,7 +45,7 @@ async fn id_route_query(tunnel_tx: &TunnelTransmit, query_id_max_num: usize) -> 
 async fn poll_direct_peer_node(
     direct_nodes: DirectNodes,
     sent_ids: HashSet<NodeID>,
-    tunnel_tx: &TunnelTransmit,
+    tunnel_tx: &TunnelTransmitHub,
     buf: &mut [u8],
 ) {
     let self_group_code = tunnel_tx.node_context().load_group_code();
@@ -80,7 +80,7 @@ async fn poll_direct_peer_node(
 }
 
 async fn poll_route_table_peer_node(
-    tunnel_tx: &TunnelTransmit,
+    tunnel_tx: &TunnelTransmitHub,
     buf: &[u8],
     query_id_max_num: usize,
 ) -> HashSet<NodeID> {

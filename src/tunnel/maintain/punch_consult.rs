@@ -1,12 +1,12 @@
 use crate::protocol::node_id::NodeID;
 use crate::protocol::protocol_type::ProtocolType;
-use crate::tunnel::TunnelTransmit;
+use crate::tunnel::TunnelTransmitHub;
 use rand::seq::SliceRandom;
 use rust_p2p_core::punch::{PunchConsultInfo, PunchInfo, Puncher};
 use std::time::Duration;
 use tokio::sync::mpsc::Receiver;
 
-pub async fn punch_consult_loop(tunnel_tx: TunnelTransmit, puncher: Puncher<NodeID>) {
+pub async fn punch_consult_loop(tunnel_tx: TunnelTransmitHub, puncher: Puncher<NodeID>) {
     let mut seq = 0;
     tokio::time::sleep(Duration::from_secs(1)).await;
     let route_table = tunnel_tx.socket_manager.route_table();
@@ -65,7 +65,7 @@ pub async fn punch_consult_loop(tunnel_tx: TunnelTransmit, puncher: Puncher<Node
 pub async fn punch_loop(
     active: bool,
     mut receiver: Receiver<(NodeID, PunchConsultInfo)>,
-    tunnel_tx: TunnelTransmit,
+    tunnel_tx: TunnelTransmitHub,
     puncher: Puncher<NodeID>,
 ) {
     while let Some((node_id, info)) = receiver.recv().await {
