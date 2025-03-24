@@ -45,10 +45,10 @@ pub struct TunnelManager {
 }
 
 impl TunnelManager {
-    pub async fn new(config: TunnelManagerConfig) -> io::Result<TunnelManager> {
+    pub(crate) async fn new(config: TunnelManagerConfig) -> io::Result<TunnelManager> {
         Box::pin(Self::new0(config)).await
     }
-    async fn new0(mut config: TunnelManagerConfig) -> io::Result<TunnelManager> {
+    pub(crate) async fn new0(mut config: TunnelManagerConfig) -> io::Result<TunnelManager> {
         let major_socket_count = config.major_socket_count;
         let send_buffer_size = config.send_buffer_size;
         let recv_buffer_size = config.recv_buffer_size;
@@ -171,7 +171,7 @@ impl TunnelManager {
             recycle_buf,
         })
     }
-    pub fn tunnel_transmit(&self) -> TunnelTransmit {
+    pub(crate) fn tunnel_transmit(&self) -> TunnelTransmit {
         TunnelTransmit {
             send_buffer_size: self.send_buffer_size,
             node_context: self.node_context.clone(),
@@ -189,7 +189,7 @@ impl Drop for TunnelManager {
 }
 
 impl TunnelManager {
-    pub async fn dispatch(&mut self) -> io::Result<TunnelReceive> {
+    pub(crate) async fn dispatch(&mut self) -> io::Result<TunnelReceive> {
         if self.shutdown_manager.is_shutdown_triggered() {
             return Err(io::Error::new(io::ErrorKind::Other, "shutdown"));
         }
@@ -341,7 +341,7 @@ impl TunnelTransmit {
         dest_id: &NodeID,
     ) -> io::Result<()> {
         if dest_id.is_broadcast() {
-            self.send_broadcast0(&buf, group_code, src_id).await;
+            self.send_broadcast_impl(&buf, group_code, src_id).await;
             return Ok(());
         }
 
@@ -373,7 +373,7 @@ impl TunnelTransmit {
         Ok(())
     }
 
-    async fn send_broadcast0(&self, buf: &[u8], group_code: &GroupCode, src_id: &NodeID) {
+    async fn send_broadcast_impl(&self, buf: &[u8], group_code: &GroupCode, src_id: &NodeID) {
         let route_table = self.socket_manager.route_table();
         let table = route_table.route_table_one();
         let mut map: HashMap<NodeID, (Vec<NodeID>, Route)> = HashMap::new();
@@ -429,10 +429,14 @@ impl TunnelTransmit {
         }
     }
 
-    pub async fn broadcast_packet(&self, packet: SendPacket) -> io::Result<()> {
+    pub(crate) async fn broadcast_packet(&self, packet: SendPacket) -> io::Result<()> {
         self.send_packet_to(packet, &NodeID::broadcast()).await
     }
-    pub async fn send_packet_to(&self, mut packet: SendPacket, dest_id: &NodeID) -> io::Result<()> {
+    pub(crate) async fn send_packet_to(
+        &self,
+        mut packet: SendPacket,
+        dest_id: &NodeID,
+    ) -> io::Result<()> {
         let group_code = self.node_context.load_group_code();
         if let Some(src_id) = self.node_context.load_id() {
             packet.set_group_code(&group_code);
@@ -521,11 +525,12 @@ const BUF_SIZE: usize = 16;
 type RecvRs = Result<Result<RecvUserData, HandleError>, RecvError>;
 
 impl TunnelReceive {
-    pub async fn next(&mut self) -> Result<Result<RecvUserData, HandleError>, RecvError> {
+    #[allow(dead_code)]
+    pub(crate) async fn next(&mut self) -> Result<Result<RecvUserData, HandleError>, RecvError> {
         self.preprocess_next::<crate::config::DefaultInterceptor>(None)
             .await
     }
-    pub async fn batch_recv(
+    pub(crate) async fn batch_recv(
         &mut self,
         data_vec: &mut Vec<RecvUserData>,
     ) -> Result<Result<(), HandleError>, RecvError> {
@@ -533,7 +538,8 @@ impl TunnelReceive {
             .await
     }
     /// Receive a batch of data and use interceptors.
-    pub async fn preprocess_batch_recv<I: crate::config::DataInterceptor>(
+    #[allow(dead_code)]
+    pub(crate) async fn preprocess_batch_recv<I: crate::config::DataInterceptor>(
         &mut self,
         interceptor: Option<&I>,
         data_vec: &mut Vec<RecvUserData>,
@@ -607,7 +613,7 @@ impl TunnelReceive {
             }
         }
     }
-    pub async fn preprocess_next<I: crate::config::DataInterceptor>(
+    pub(crate) async fn preprocess_next<I: crate::config::DataInterceptor>(
         &mut self,
         interceptor: Option<&I>,
     ) -> RecvRs {
