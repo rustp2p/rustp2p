@@ -15,6 +15,46 @@ use std::sync::Arc;
 use tokio::task::JoinHandle;
 use tunnel::{PeerNodeAddress, RecvUserData, Tunnel, TunnelManager, TunnelTransmitHub};
 
+mod trait_help {
+    use crate::protocol::node_id::NodeID;
+    use crate::tunnel::{SendPacket, TunnelTransmitHub};
+    use rust_p2p_core::route::RouteKey;
+    use std::future::Future;
+    use std::io;
+
+    pub trait Destination {
+        fn send_to(
+            &self,
+            sender: &TunnelTransmitHub,
+            packet: SendPacket,
+        ) -> impl Future<Output = Result<(), io::Error>>;
+    }
+
+    impl Destination for NodeID {
+        async fn send_to(&self, sender: &TunnelTransmitHub, packet: SendPacket) -> io::Result<()> {
+            sender.send_packet_to(packet, self).await
+        }
+    }
+
+    impl Destination for &NodeID {
+        async fn send_to(&self, sender: &TunnelTransmitHub, packet: SendPacket) -> io::Result<()> {
+            sender.send_packet_to(packet, self).await
+        }
+    }
+
+    impl Destination for RouteKey {
+        async fn send_to(&self, sender: &TunnelTransmitHub, packet: SendPacket) -> io::Result<()> {
+            sender.send_to_route(packet.into_buf().as_ref(), self).await
+        }
+    }
+
+    impl Destination for &RouteKey {
+        async fn send_to(&self, sender: &TunnelTransmitHub, packet: SendPacket) -> io::Result<()> {
+            sender.send_to_route(packet.into_buf().as_ref(), self).await
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct EndPoint {
     receiver: Receiver<RecvUserData>,
@@ -32,10 +72,14 @@ impl EndPoint {
             .await
             .map_err(|_| std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "shutdown"))
     }
-    pub async fn send_to(&self, buf: &[u8], node_id: NodeID) -> std::io::Result<()> {
+    pub async fn send_to<D: trait_help::Destination>(
+        &self,
+        buf: &[u8],
+        dest: D,
+    ) -> std::io::Result<()> {
         let mut send_packet = self.sender.allocate_send_packet();
         send_packet.set_payload(buf);
-        self.sender.send_packet_to(send_packet, &node_id).await
+        dest.send_to(&self.sender, send_packet).await
     }
 
     pub async fn broadcast(&self, buf: &[u8]) -> io::Result<()> {

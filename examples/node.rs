@@ -9,7 +9,7 @@ use pnet_packet::icmp::IcmpTypes;
 use pnet_packet::ip::IpNextHeaderProtocols;
 use pnet_packet::Packet;
 use rustp2p::cipher::Algorithm;
-use rustp2p::protocol::node_id::GroupCode;
+use rustp2p::protocol::node_id::{GroupCode, NodeID};
 use rustp2p::tunnel::PeerNodeAddress;
 use rustp2p::{Builder, EndPoint};
 use tun_rs::AsyncDevice;
@@ -137,7 +137,10 @@ async fn tun_recv(
             }
         }
 
-        if let Err(e) = endpoint.send_to(&buf[..payload_len], dest_ip.into()).await {
+        if let Err(e) = endpoint
+            .send_to(&buf[..payload_len], NodeID::from(dest_ip))
+            .await
+        {
             log::warn!("{e:?},{dest_ip:?}");
         }
     }

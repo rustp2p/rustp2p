@@ -4,7 +4,7 @@ use std::net::Ipv4Addr;
 use clap::Parser;
 use env_logger::Env;
 use rustp2p::cipher::Algorithm;
-use rustp2p::protocol::node_id::GroupCode;
+use rustp2p::protocol::node_id::{GroupCode, NodeID};
 use rustp2p::tunnel::PeerNodeAddress;
 use rustp2p::Builder;
 
@@ -64,7 +64,7 @@ pub async fn main() -> io::Result<()> {
         .build()
         .await?;
     if let Some(request) = request {
-        endpoint.send_to(b"hello", request.into()).await?;
+        endpoint.send_to(b"hello", NodeID::from(request)).await?;
     } else {
         let data = endpoint.recv().await?;
         println!("recv: {:?} {:?}", data.payload(), data.src_id())
