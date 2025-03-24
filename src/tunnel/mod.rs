@@ -459,7 +459,7 @@ impl TunnelTransmitHub {
         }
     }
 
-    pub fn allocate_send_packet(&self) -> SendPacket {
+    pub(crate) fn allocate_send_packet(&self) -> SendPacket {
         let buf = if let Some(recycle_buf) = self.recycle_buf.as_ref() {
             recycle_buf.alloc(self.send_buffer_size)
         } else {
@@ -467,7 +467,8 @@ impl TunnelTransmitHub {
         };
         SendPacket::with_bytes_mut(buf)
     }
-    pub fn release_send_packet(&self, send_packet: SendPacket) {
+    #[allow(dead_code)]
+    pub(crate) fn release_send_packet(&self, send_packet: SendPacket) {
         if let Some(recycle_buf) = self.recycle_buf.as_ref() {
             recycle_buf.push(send_packet.into_buf());
         }
