@@ -13,7 +13,7 @@ For connecting two peers, all you need to do is to give the configuration as don
 
 ### Example
 
-```rust
+````rust
 use rustp2p::Builder;
 use rustp2p::protocol::node_id::GroupCode;
 use rustp2p::cipher::Algorithm;
@@ -42,7 +42,7 @@ async fn main(){
     endpoint.send(b"hello",peer_node_id);
     _ = h.await;
 }
-```
+````
 
 - [example/node](https://github.com/rustp2p/rustp2p/blob/master/examples/node.rs)
 - [https://github.com/rustp2p/netlink](https://github.com/rustp2p/netlink)
@@ -50,9 +50,14 @@ async fn main(){
 
 
 
-### 为什么rustp2p的打洞成功率这么高？
-> Why the rate of successful hole-punching of rustp2p is so high
-
-rustp2p打洞成功率这么高核心原理是什么呢？对于两个再Cone型Nat后的两个主机A和B, rustp2p会分别在A和B上创建一个udp socket并且通过公网服务获取公网地址和对外映射的端口，通过协调服务器向对方发送各自的NAT信息，假设A的公网地址是`10.0.0.1:8080`, B的公网地址是`20.0.0.1:9090`并且各自的NAT类型是Cone, 那么A将收到协调服务器发过来的B的信息`{ipaddr:20.0.0.1:9090,nat_type:Cone}`,同样的B将收到`{ipaddr:10.0.0.1:8080,nat_type:Cone}`,此时A向B的地址发送信息以刷新NAT的过滤规则，同样B向A的地址发送一些信息以刷新B的NAT的规律规则，此后A发送给B的信息以及B发送给A的信息就能顺利的被各自的NAT转发到内网了。这是Cone对Cone的场景，这种网络类型相对来说比较简单。
-
-如果A的NAT是`Cone`而B的NAT是`Symmetric`,这种网络环境就很不利于打洞，不过这也是rustp2p的核心所在。面对这种场景，对于探测出自身NAT类型是A的主机和上面一样只会创建一个udp socket并且公网IP地址是`10.0.0.1:8080`,而B的NAT类型是`Symmetric`除了创建一个用来对外探测出其NAT类型和公网地址为`20.0.0.1:9090`的主要udp socket外，还会再创建若干个备用udp socket, 此时B收到协调服务器发过来的A的信息`{ipaddr:10.0.0.1:8080,nat_type:Cone}`，B会同时通过主要udp和创建的若干个备用udp往A的地址发送消息，此时A收到协调服务器发过来的B的信息`{ipaddr:20.0.0.1:9090,nat_type:Symmetric}`, 那么A除了通过它的唯一的udp往该地址发送消息外，还会通过`9090`这个端口信息猜测以及枚举出B那些备用udp对公网的可能的端口号P，并通过唯一udp往`20.0.0.1:P`这些地址发送信息以碰撞出穿透概率。
+### 打洞原理
+1. 穿透原理，简单说是在双方nat留下映射记录，A、B的NAT均阻止外部流量进入，A主动访问B的地址，会在A的nat上留下映射，此后B就可以访问A。同理B端也一样。在A、B两端的的nat均留下映射，双方就能相互访问
+2. Cone，这种nat是像一个锥形访问外部，内部的相同地址会映射一个唯一的地址访问外网，这样就能在nat上留下确定映射，所以一般一轮相互访问就能穿透成功
+3. Symmetric，内部相同地址访问外部不同地址，会映射多个地址，（中继服务器看到的地址和对端看到的地址不相同，此时直接建立的映射关系就是错的，所以要猜测对方地址）
+4. Cone-Symmetric成功率高的原因：Sym端会建立一批socket，映射到外网也就有一批地址，假设ip不变只变端口（一般Sym nat的策略），那猜中一个socket端口的概率是1/65535 。如果建立一百个端口，并且每次探测都随机100个端口，那猜中的概率会接近1，也就是说很容易成功
+````
+// 假设对方绑定n个端口，通过NAT对外映射出n个 公网ip:公网端口，自己随机尝试k次的情况下
+// 猜中的概率 p = 1-((65535-n)/65535)*((65535-n-1)/(65535-1))*...*((65535-n-k+1)/(65535-k+1))
+// n取76，k取600，猜中的概率就超过50%了
+// 前提 自己是锥形网络，否则猜中了也通信不了
+````
