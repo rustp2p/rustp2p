@@ -140,7 +140,7 @@ pub(crate) fn create_tunnel_factory(config: UdpTunnelConfig) -> io::Result<UdpTu
     }
     let (tunnel_sender, tunnel_receiver) =
         tachyonix::channel(config.main_udp_count * 2 + config.sub_udp_count * 2);
-    let socket_layer = Arc::new(SocketManager {
+    let socket_manager = Arc::new(SocketManager {
         main_udp_v4,
         main_udp_v6,
         sub_udp: RwLock::new(Vec::with_capacity(config.sub_udp_count)),
@@ -152,7 +152,7 @@ pub(crate) fn create_tunnel_factory(config: UdpTunnelConfig) -> io::Result<UdpTu
     });
     let tunnel_factory = UdpTunnelFactory {
         tunnel_receiver,
-        socket_manager: socket_layer,
+        socket_manager,
         recycle_buf: config.recycle_buf,
     };
     tunnel_factory.init()?;
@@ -455,7 +455,7 @@ impl UdpTunnelFactory {
             let index = udp_tunnel.index;
             self.socket_manager.sender_map.insert(index, s);
 
-            let socket_layer = self.socket_manager.clone();
+            let socket_manager = self.socket_manager.clone();
             let udp = udp_tunnel.udp.clone();
             let recycle_buf = self.recycle_buf.clone();
             tokio::spawn(async move {
@@ -516,7 +516,7 @@ impl UdpTunnelFactory {
                         }
                     }
                 }
-                socket_layer.sender_map.remove(&index);
+                socket_manager.sender_map.remove(&index);
             });
         }
         if udp_tunnel.reusable {
@@ -976,10 +976,12 @@ mod tests {
             .set_sub_udp_count(10)
             .set_model(Model::Low)
             .set_use_v6(false);
-        let mut udp_pipe = crate::tunnel::udp::create_tunnel_factory(config).unwrap();
+        let mut udp_tunnel_factory = crate::tunnel::udp::create_tunnel_factory(config).unwrap();
         let mut count = 0;
         let mut join = Vec::new();
-        while let Ok(rs) = tokio::time::timeout(Duration::from_secs(1), udp_pipe.dispatch()).await {
+        while let Ok(rs) =
+            tokio::time::timeout(Duration::from_secs(1), udp_tunnel_factory.dispatch()).await
+        {
             join.push(tokio::spawn(tunnel_recv(rs.unwrap())));
             count += 1;
         }
@@ -987,7 +989,7 @@ mod tests {
     }
 
     #[tokio::test]
-    pub async fn create_sub_udp_pipe() {
+    pub async fn create_sub_udp_tunnel() {
         let config = crate::tunnel::config::UdpTunnelConfig::default()
             .set_main_udp_count(2)
             .set_sub_udp_count(10)
