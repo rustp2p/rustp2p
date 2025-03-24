@@ -167,7 +167,7 @@ impl<PeerID: Hash + Eq + Clone> Puncher<PeerID> {
     ) {
         match tokio::time::timeout(
             Duration::from_secs(3),
-            tcp_socket_manager.send_to_addr_multi0(buf.into(), addr, ttl),
+            tcp_socket_manager.multi_send_to_impl(buf.into(), addr, ttl),
         )
         .await
         {

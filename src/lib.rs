@@ -136,7 +136,7 @@ impl Default for Builder {
 async fn handle(mut line: TunnelReceive, sender: Sender<RecvUserData>) {
     let mut list = Vec::with_capacity(16);
     loop {
-        let rs = match line.recv_multi(&mut list).await {
+        let rs = match line.batch_recv(&mut list).await {
             Ok(rs) => rs,
             Err(e) => {
                 log::debug!("recv_from {e:?},{:?}", line.protocol());

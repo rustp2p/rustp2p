@@ -525,15 +525,15 @@ impl TunnelReceive {
         self.next_process::<crate::config::DefaultInterceptor>(None)
             .await
     }
-    pub async fn recv_multi(
+    pub async fn batch_recv(
         &mut self,
         data_vec: &mut Vec<RecvUserData>,
     ) -> Result<Result<(), HandleError>, RecvError> {
-        self.recv_multi_process::<crate::config::DefaultInterceptor>(None, data_vec)
+        self.batch_recv_process::<crate::config::DefaultInterceptor>(None, data_vec)
             .await
     }
     /// Receive a batch of data and use interceptors.
-    pub async fn recv_multi_process<I: crate::config::DataInterceptor>(
+    pub async fn batch_recv_process<I: crate::config::DataInterceptor>(
         &mut self,
         interceptor: Option<&I>,
         data_vec: &mut Vec<RecvUserData>,
@@ -551,7 +551,7 @@ impl TunnelReceive {
             }
             let num = if let Ok(v) = self
                 .shutdown_manager
-                .wrap_cancel(self.tunnel.recv_multi_from(
+                .wrap_cancel(self.tunnel.batch_recv_from(
                     &mut self.recv_buff,
                     &mut self.recv_sizes,
                     &mut self.recv_addrs,

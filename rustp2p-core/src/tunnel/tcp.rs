@@ -145,7 +145,7 @@ impl TcpTunnel {
             Err(_) => Err(io::Error::from(io::ErrorKind::TimedOut)),
         }
     }
-    pub(crate) async fn recv_multi<B: AsMut<[u8]>>(
+    pub(crate) async fn batch_recv<B: AsMut<[u8]>>(
         &mut self,
         bufs: &mut [B],
         sizes: &mut [usize],
@@ -190,12 +190,12 @@ impl TcpTunnel {
             Err(e) => Err(e),
         }
     }
-    pub async fn recv_multi_from<B: AsMut<[u8]>>(
+    pub async fn batch_recv_from<B: AsMut<[u8]>>(
         &mut self,
         bufs: &mut [B],
         sizes: &mut [usize],
     ) -> io::Result<(usize, RouteKey)> {
-        match self.recv_multi(bufs, sizes).await {
+        match self.batch_recv(bufs, sizes).await {
             Ok(len) => Ok((len, self.route_key())),
             Err(e) => Err(e),
         }
@@ -334,7 +334,7 @@ impl WriteHalfCollect {
 
         self.write_half_map.remove(&index_usize);
     }
-    pub(crate) fn get(&self, index: &usize) -> Option<Sender<BytesMut>> {
+    pub(crate) fn get_write_half(&self, index: &usize) -> Option<Sender<BytesMut>> {
         self.write_half_map.get(index).map(|v| v.value().clone())
     }
 
@@ -362,7 +362,7 @@ impl WriteHalfCollect {
     pub async fn send_to(&self, buf: BytesMut, route_key: &RouteKey) -> io::Result<()> {
         match route_key.index() {
             Index::Tcp(index) => {
-                let write_half = self.get(&index).ok_or_else(|| {
+                let write_half = self.get_write_half(&index).ok_or_else(|| {
                     io::Error::new(io::ErrorKind::Other, format!("not found {route_key:?}"))
                 })?;
                 if let Err(_e) = write_half.send(buf).await {
@@ -417,9 +417,9 @@ impl SocketManager {
         addr: SocketAddr,
         index_offset: usize,
     ) -> io::Result<RouteKey> {
-        self.multi_connect0(addr, index_offset, None).await
+        self.multi_connect_impl(addr, index_offset, None).await
     }
-    pub(crate) async fn multi_connect0(
+    pub(crate) async fn multi_connect_impl(
         &self,
         addr: SocketAddr,
         index_offset: usize,
@@ -439,7 +439,7 @@ impl SocketManager {
         {
             return Ok(route_key);
         }
-        self.connect0(0, addr, index_offset, ttl).await
+        self.connect_impl(0, addr, index_offset, ttl).await
     }
     /// Initiate a connection.
     pub async fn connect(&self, addr: SocketAddr) -> io::Result<RouteKey> {
@@ -447,7 +447,7 @@ impl SocketManager {
         if let Some(route_key) = self.write_half_collect.get_one_route_key(&addr) {
             return Ok(route_key);
         }
-        self.connect0(0, addr, 0, None).await
+        self.connect_impl(0, addr, 0, None).await
     }
     /// Reuse the bound port to initiate a connection, which can be used to penetrate NAT1 network type.
     pub async fn connect_reuse_port(&self, addr: SocketAddr) -> io::Result<RouteKey> {
@@ -455,7 +455,8 @@ impl SocketManager {
         if let Some(route_key) = self.write_half_collect.get_one_route_key(&addr) {
             return Ok(route_key);
         }
-        self.connect0(self.local_addr.port(), addr, 0, None).await
+        self.connect_impl(self.local_addr.port(), addr, 0, None)
+            .await
     }
     pub async fn connect_reuse_port_raw(&self, addr: SocketAddr) -> io::Result<TcpStream> {
         let stream = connect_tcp(
@@ -467,7 +468,7 @@ impl SocketManager {
         .await?;
         Ok(stream)
     }
-    async fn connect0(
+    async fn connect_impl(
         &self,
         bind_port: u16,
         addr: SocketAddr,
@@ -492,25 +493,27 @@ impl SocketManager {
 }
 
 impl SocketManager {
-    pub async fn send_to_addr_multi<A: Into<SocketAddr>>(
+    pub async fn multi_send_to<A: Into<SocketAddr>>(
         &self,
         buf: BytesMut,
         addr: A,
     ) -> io::Result<()> {
-        self.send_to_addr_multi0(buf, addr, None).await
+        self.multi_send_to_impl(buf, addr, None).await
     }
-    pub(crate) async fn send_to_addr_multi0<A: Into<SocketAddr>>(
+    pub(crate) async fn multi_send_to_impl<A: Into<SocketAddr>>(
         &self,
         buf: BytesMut,
         addr: A,
         ttl: Option<u32>,
     ) -> io::Result<()> {
         let index_offset = rand::rng().random_range(0..self.tcp_multiplexing_limit);
-        let route_key = self.multi_connect0(addr.into(), index_offset, ttl).await?;
+        let route_key = self
+            .multi_connect_impl(addr.into(), index_offset, ttl)
+            .await?;
         self.send_to(buf, &route_key).await
     }
     /// Reuse the bound port to initiate a connection, which can be used to penetrate NAT1 network type.
-    pub async fn send_to_addr_reuse_port<A: Into<SocketAddr>>(
+    pub async fn reuse_port_send_to<A: Into<SocketAddr>>(
         &self,
         buf: BytesMut,
         addr: A,
@@ -524,23 +527,6 @@ impl SocketManager {
         let route_key = ToRouteKeyForTcp::route_key(self, dest).await?;
         self.write_half_collect.send_to(buf, &route_key).await
     }
-    // pub async fn get_indexed_tcp(&self, addr: SocketAddr, index: usize) -> io::Result<IndexedTcpSocket<'_>> {
-    //     let route_key = self.multi_connect(addr, index).await?;
-    //     let write_half = self
-    //         .write_half_collect
-    //         .get(&route_key.index_usize())
-    //         .ok_or_else(|| {
-    //             io::Error::new(
-    //                 io::ErrorKind::Other,
-    //                 format!("not found with index={index}"),
-    //             )
-    //         })?;
-    //
-    //     Ok(IndexedTcpSocket {
-    //         shadow: write_half,
-    //         marker: Default::default(),
-    //     })
-    // }
 }
 pub trait ToRouteKeyForTcp<T> {
     fn route_key(_: &SocketManager, _: Self) -> impl Future<Output = io::Result<RouteKey>>;
@@ -568,21 +554,6 @@ impl<S: Into<SocketAddr>> ToRouteKeyForTcp<()> for S {
         socket_manager.connect(dest.into()).await
     }
 }
-
-// pub struct IndexedTcpSocket<'a> {
-//     shadow: Sender<BytesMut>,
-//     marker: PhantomData<&'a ()>,
-// }
-//
-// impl IndexedTcpSocket<'_> {
-//     pub async fn send(&self, buf: BytesMut) -> io::Result<()> {
-//         if let Err(_e) = self.shadow.send(buf).await {
-//             Err(io::Error::from(io::ErrorKind::WriteZero))?
-//         } else {
-//             Ok(())
-//         }
-//     }
-// }
 
 pub trait TcpStreamIndex {
     fn route_key(&self) -> io::Result<RouteKey>;

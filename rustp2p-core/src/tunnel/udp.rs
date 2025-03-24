@@ -347,7 +347,7 @@ impl SocketManager {
         Ok(())
     }
 
-    pub async fn send_multiple_to<T, D: ToRouteKeyForUdp<T>>(
+    pub async fn batch_send_to<T, D: ToRouteKeyForUdp<T>>(
         &self,
         bufs: &[IoSlice<'_>],
         dest: D,
@@ -812,7 +812,7 @@ impl UdpTunnel {
         }
     }
     #[cfg(not(any(target_os = "linux", target_os = "android")))]
-    pub async fn recv_multi_from<B: AsMut<[u8]>>(
+    pub async fn batch_recv_from<B: AsMut<[u8]>>(
         &mut self,
         bufs: &mut [B],
         sizes: &mut [usize],
@@ -844,7 +844,7 @@ impl UdpTunnel {
         }
     }
     #[cfg(any(target_os = "linux", target_os = "android"))]
-    pub async fn recv_multi_from<B: AsMut<[u8]>>(
+    pub async fn batch_recv_from<B: AsMut<[u8]>>(
         &mut self,
         bufs: &mut [B],
         sizes: &mut [usize],

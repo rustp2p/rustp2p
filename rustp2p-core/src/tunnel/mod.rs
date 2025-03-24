@@ -202,7 +202,7 @@ impl<PeerID: Hash + Eq> UnifiedSocketManager<PeerID> {
         self.send_to(buf, &route.route_key()).await
     }
     /// Writing `buf` to the target named by `peer_id`
-    pub async fn send_to_id_safe(
+    pub async fn avoid_loop_send_to_id(
         &self,
         buf: BytesMut,
         src_id: &PeerID,
@@ -229,19 +229,19 @@ impl UnifiedTunnel {
             UnifiedTunnel::Tcp(line) => Some(line.recv_from(buf).await),
         }
     }
-    pub async fn recv_multi_from<B: AsMut<[u8]>>(
+    pub async fn batch_recv_from<B: AsMut<[u8]>>(
         &mut self,
         bufs: &mut [B],
         sizes: &mut [usize],
         addrs: &mut [RouteKey],
     ) -> Option<io::Result<usize>> {
         match self {
-            UnifiedTunnel::Udp(line) => line.recv_multi_from(bufs, sizes, addrs).await,
+            UnifiedTunnel::Udp(line) => line.batch_recv_from(bufs, sizes, addrs).await,
             UnifiedTunnel::Tcp(line) => {
                 if addrs.len() != bufs.len() {
                     return Some(Err(io::Error::new(io::ErrorKind::Other, "addrs error")));
                 }
-                match line.recv_multi_from(bufs, sizes).await {
+                match line.batch_recv_from(bufs, sizes).await {
                     Ok((n, route_key)) => {
                         addrs[..n].fill(route_key);
                         Some(Ok(n))
