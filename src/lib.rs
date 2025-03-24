@@ -18,7 +18,7 @@ use tunnel::{PeerNodeAddress, RecvUserData, Tunnel, TunnelManager, TunnelTransmi
 #[derive(Clone)]
 pub struct EndPoint {
     receiver: Receiver<RecvUserData>,
-    sender: TunnelTransmitHub,
+    sender: Arc<TunnelTransmitHub>,
     _handle: Arc<HandleOwner>,
 }
 struct HandleOwner {
@@ -129,7 +129,7 @@ impl Builder {
 
         let (sender, receiver) = flume::unbounded();
         let mut tunnel_manager = TunnelManager::new(config).await?;
-        let writer = tunnel_manager.tunnel_send_hub();
+        let writer = Arc::new(tunnel_manager.tunnel_send_hub());
         let handle = tokio::spawn(async move {
             while let Ok(tunnel_rx) = tunnel_manager.dispatch().await {
                 tokio::spawn(handle(tunnel_rx, sender.clone()));
