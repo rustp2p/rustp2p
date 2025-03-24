@@ -225,8 +225,8 @@ impl UnifiedTunnel {
     /// `RouteKey` in the `Ok` branch denotes the source where these bytes are received from
     pub async fn recv_from(&mut self, buf: &mut [u8]) -> Option<io::Result<(usize, RouteKey)>> {
         match self {
-            UnifiedTunnel::Udp(line) => line.recv_from(buf).await,
-            UnifiedTunnel::Tcp(line) => Some(line.recv_from(buf).await),
+            UnifiedTunnel::Udp(tunnel) => tunnel.recv_from(buf).await,
+            UnifiedTunnel::Tcp(tunnel) => Some(tunnel.recv_from(buf).await),
         }
     }
     pub async fn batch_recv_from<B: AsMut<[u8]>>(
@@ -236,12 +236,12 @@ impl UnifiedTunnel {
         addrs: &mut [RouteKey],
     ) -> Option<io::Result<usize>> {
         match self {
-            UnifiedTunnel::Udp(line) => line.batch_recv_from(bufs, sizes, addrs).await,
-            UnifiedTunnel::Tcp(line) => {
+            UnifiedTunnel::Udp(tunnel) => tunnel.batch_recv_from(bufs, sizes, addrs).await,
+            UnifiedTunnel::Tcp(tunnel) => {
                 if addrs.len() != bufs.len() {
                     return Some(Err(io::Error::new(io::ErrorKind::Other, "addrs error")));
                 }
-                match line.batch_recv_from(bufs, sizes).await {
+                match tunnel.batch_recv_from(bufs, sizes).await {
                     Ok((n, route_key)) => {
                         addrs[..n].fill(route_key);
                         Some(Ok(n))
@@ -253,8 +253,8 @@ impl UnifiedTunnel {
     }
     pub fn done(&mut self) {
         match self {
-            UnifiedTunnel::Udp(line) => line.done(),
-            UnifiedTunnel::Tcp(line) => line.done(),
+            UnifiedTunnel::Udp(tunnel) => tunnel.done(),
+            UnifiedTunnel::Tcp(tunnel) => tunnel.done(),
         }
     }
 }

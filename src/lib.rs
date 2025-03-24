@@ -131,8 +131,8 @@ impl Builder {
         let mut tunnel_manager = TunnelManager::new(config).await?;
         let writer = tunnel_manager.tunnel_transmit();
         let handle = tokio::spawn(async move {
-            while let Ok(line) = tunnel_manager.dispatch().await {
-                tokio::spawn(handle(line, sender.clone()));
+            while let Ok(tunnel_rx) = tunnel_manager.dispatch().await {
+                tokio::spawn(handle(tunnel_rx, sender.clone()));
             }
         });
         Ok(EndPoint {
@@ -149,13 +149,13 @@ impl Default for Builder {
     }
 }
 
-async fn handle(mut line: TunnelReceive, sender: Sender<RecvUserData>) {
+async fn handle(mut tunnel_rx: TunnelReceive, sender: Sender<RecvUserData>) {
     let mut list = Vec::with_capacity(16);
     loop {
-        let rs = match line.batch_recv(&mut list).await {
+        let rs = match tunnel_rx.batch_recv(&mut list).await {
             Ok(rs) => rs,
             Err(e) => {
-                log::debug!("recv_from {e:?},{:?}", line.protocol());
+                log::debug!("recv_from {e:?},{:?}", tunnel_rx.protocol());
                 return;
             }
         };

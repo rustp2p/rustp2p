@@ -46,26 +46,26 @@ async fn main() {
     let writer = tunnel_factory.socket_manager();
     log::info!("listen 3000");
     loop {
-        let line = tunnel_factory.dispatch().await.unwrap();
+        let tunnel = tunnel_factory.dispatch().await.unwrap();
         let table = tunnel_factory.route_table().clone();
         let writer = writer.clone();
         tokio::spawn(async move {
-            handler(table, line, writer).await;
+            handler(table, tunnel, writer).await;
         });
     }
 }
 async fn handler(
     route_table: RouteTable<u32>,
-    mut line: UnifiedTunnel,
+    mut tunnel: UnifiedTunnel,
     writer: UnifiedSocketManager<u32>,
 ) {
     let mut buf = [0; 65536];
-    while let Some(rs) = line.recv_from(&mut buf).await {
+    while let Some(rs) = tunnel.recv_from(&mut buf).await {
         let (len, route_key) = match rs {
             Ok(rs) => rs,
             Err(e) => {
                 log::error!("err {e:?}");
-                if line.protocol().is_udp() {
+                if tunnel.protocol().is_udp() {
                     continue;
                 }
                 break;
