@@ -137,7 +137,7 @@ async fn tun_recv(
             }
         }
 
-        if let Err(e) = endpoint.send(&buf[..payload_len], dest_ip.into()).await {
+        if let Err(e) = endpoint.send_to(&buf[..payload_len], dest_ip.into()).await {
             log::warn!("{e:?},{dest_ip:?}");
         }
     }

@@ -30,7 +30,7 @@ impl EndPoint {
             .await
             .map_err(|_| std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "shutdown"))
     }
-    pub async fn send(&self, data: &[u8], node_id: NodeID) -> std::io::Result<()> {
+    pub async fn send_to(&self, data: &[u8], node_id: NodeID) -> std::io::Result<()> {
         let mut send_packet = self.sender.allocate_send_packet();
         send_packet.set_payload(data);
         self.sender.send_packet_to(send_packet, &node_id).await

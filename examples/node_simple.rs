@@ -64,7 +64,7 @@ pub async fn main() -> io::Result<()> {
         .build()
         .await?;
     if let Some(request) = request {
-        endpoint.send(b"hello", request.into()).await?;
+        endpoint.send_to(b"hello", request.into()).await?;
     } else {
         let data = endpoint.recv().await?;
         println!("recv: {:?} {:?}", data.payload(), data.src_id())

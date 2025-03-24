@@ -333,7 +333,7 @@ impl TunnelTransmit {
         self.socket_manager.send_to(buf.into(), route_key).await?;
         Ok(())
     }
-    async fn send_to0(
+    async fn send_to_impl(
         &self,
         buf: BytesMut,
         group_code: &GroupCode,
@@ -448,7 +448,7 @@ impl TunnelTransmit {
                     packet.set_encrypt_flag(true);
                 }
             }
-            self.send_to0(packet.into_buf(), &group_code, &src_id, dest_id)
+            self.send_to_impl(packet.into_buf(), &group_code, &src_id, dest_id)
                 .await
         } else {
             Err(io::Error::new(io::ErrorKind::Other, "no id specified"))
@@ -522,18 +522,18 @@ type RecvRs = Result<Result<RecvUserData, HandleError>, RecvError>;
 
 impl TunnelReceive {
     pub async fn next(&mut self) -> Result<Result<RecvUserData, HandleError>, RecvError> {
-        self.next_process::<crate::config::DefaultInterceptor>(None)
+        self.preprocess_next::<crate::config::DefaultInterceptor>(None)
             .await
     }
     pub async fn batch_recv(
         &mut self,
         data_vec: &mut Vec<RecvUserData>,
     ) -> Result<Result<(), HandleError>, RecvError> {
-        self.batch_recv_process::<crate::config::DefaultInterceptor>(None, data_vec)
+        self.preprocess_batch_recv::<crate::config::DefaultInterceptor>(None, data_vec)
             .await
     }
     /// Receive a batch of data and use interceptors.
-    pub async fn batch_recv_process<I: crate::config::DataInterceptor>(
+    pub async fn preprocess_batch_recv<I: crate::config::DataInterceptor>(
         &mut self,
         interceptor: Option<&I>,
         data_vec: &mut Vec<RecvUserData>,
@@ -607,7 +607,7 @@ impl TunnelReceive {
             }
         }
     }
-    pub async fn next_process<I: crate::config::DataInterceptor>(
+    pub async fn preprocess_next<I: crate::config::DataInterceptor>(
         &mut self,
         interceptor: Option<&I>,
     ) -> RecvRs {
