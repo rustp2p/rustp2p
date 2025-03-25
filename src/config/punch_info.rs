@@ -1,7 +1,7 @@
 use rust_p2p_core::nat::{NatInfo, NatType};
-use rust_p2p_core::pipe::udp_pipe::UDPIndex;
 use rust_p2p_core::punch::{PunchConsultInfo, PunchModelBox};
 use rust_p2p_core::route::Index;
+use rust_p2p_core::tunnel::udp::UDPIndex;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 
 #[derive(Debug, Clone)]
@@ -112,7 +112,7 @@ impl NodePunchInfo {
             seq,
         }
     }
-    pub fn punch_consult_info(&self, seq: u32) -> PunchConsultInfo {
+    pub(crate) fn punch_consult_info(&self, seq: u32) -> PunchConsultInfo {
         PunchConsultInfo::new(self.punch_model_box.clone(), self.nat_info(seq))
     }
 }

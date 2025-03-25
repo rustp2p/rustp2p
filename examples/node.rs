@@ -9,10 +9,9 @@ use pnet_packet::icmp::IcmpTypes;
 use pnet_packet::ip::IpNextHeaderProtocols;
 use pnet_packet::Packet;
 use rustp2p::cipher::Algorithm;
-use rustp2p::config::{PipeConfig, TcpPipeConfig, UdpPipeConfig};
-use rustp2p::pipe::{PeerNodeAddress, Pipe, PipeLine, PipeWriter, RecvUserData};
-use rustp2p::protocol::node_id::GroupCode;
-use tachyonix::{channel, Sender};
+use rustp2p::protocol::node_id::{GroupCode, NodeID};
+use rustp2p::tunnel::PeerNodeAddress;
+use rustp2p::{Builder, EndPoint};
 use tun_rs::AsyncDevice;
 
 #[derive(Parser, Debug)]
@@ -21,7 +20,7 @@ struct Args {
     /// Peer node address.
     /// example: --peer tcp://192.168.10.13:23333 --peer udp://192.168.10.23:23333
     #[arg(short, long)]
-    peer: Option<Vec<String>>,
+    peer: Option<Vec<PeerNodeAddress>>,
     /// Local node IP and mask.
     /// example: --local 10.26.0.2/24
     #[arg(short, long)]
@@ -34,21 +33,8 @@ struct Args {
     port: Option<u16>,
 }
 
-#[cfg(feature = "use-tokio")]
 #[tokio::main]
-async fn main() -> io::Result<()> {
-    main0().await
-}
-
-#[cfg(feature = "use-async-std")]
-#[::async_std::main]
-async fn main() -> io::Result<()> {
-    use futures_util::FutureExt;
-    main0().boxed().await
-}
-
-#[allow(unused_mut)]
-pub async fn main0() -> io::Result<()> {
+pub async fn main() -> io::Result<()> {
     let Args {
         peer,
         local,
@@ -59,14 +45,9 @@ pub async fn main0() -> io::Result<()> {
     let mut split = local.split('/');
     let self_id = Ipv4Addr::from_str(split.next().expect("--local error")).expect("--local error");
     let mask = u8::from_str(split.next().expect("--local error")).expect("--local error");
-    let mut addrs = Vec::new();
-    if let Some(peers) = peer {
-        for addr in peers {
-            addrs.push(addr.parse::<PeerNodeAddress>().expect("--peer"))
-        }
-    }
+    let addrs = peer.unwrap_or_default();
 
-    let (tx, mut quit) = rust_p2p_core::async_compat::mpsc::channel::<()>(1);
+    let (tx, mut quit) = tokio::sync::mpsc::channel::<()>(1);
 
     ctrlc::set_handler(move || {
         tx.try_send(()).expect("Could not send signal on channel.");
@@ -76,54 +57,46 @@ pub async fn main0() -> io::Result<()> {
     let dev_builder = tun_rs::DeviceBuilder::new()
         .ipv4(self_id, mask, None)
         .mtu(1400);
-    #[cfg(windows)]
-    let dev_builder = dev_builder.ring_capacity(4 * 1024 * 1024);
-    #[cfg(target_os = "linux")]
-    let dev_builder = dev_builder.tx_queue_len(1000);
 
-    let device = Arc::new(dev_builder.build_async().unwrap());
+    let device = Arc::new(dev_builder.build_async()?);
 
     let port = port.unwrap_or(23333);
-    let udp_config = UdpPipeConfig::default().set_udp_ports(vec![port]);
-    let tcp_config = TcpPipeConfig::default().set_tcp_port(port);
-    let config = PipeConfig::empty()
-        .set_udp_pipe_config(udp_config)
-        .set_tcp_pipe_config(tcp_config)
-        .set_direct_addrs(addrs)
-        .set_group_code(string_to_group_code(&group_code))
-        .set_encryption(Algorithm::AesGcm("password".to_string()))
-        .set_node_id(self_id.into());
 
-    let mut pipe = Pipe::new(config).await?;
-    let writer = pipe.writer();
-    let shutdown_writer = writer.clone();
-    let device_r = device.clone();
-    let (sender1, mut receiver1) = channel::<RecvUserData>(128);
-    rust_p2p_core::async_compat::spawn(async move {
-        tun_recv(writer, device_r, self_id).await.unwrap();
-    });
+    let endpoint = Builder::new()
+        .node_id(self_id.into())
+        .tcp_port(port)
+        .udp_ports(vec![port])
+        .peers(addrs)
+        .group_code(string_to_group_code(&group_code))
+        .encryption(Algorithm::AesGcm("password".to_string()))
+        .build()
+        .await?;
 
-    rust_p2p_core::async_compat::spawn(async move {
-        while let Ok(data) = receiver1.recv().await {
-            if let Err(e) = device.send(data.payload()).await {
+    log::info!("listen local port: {port}");
+
+    let endpoint_clone = endpoint.clone();
+    let device_clone = device.clone();
+    tokio::spawn(async move {
+        while let Ok(data) = endpoint_clone.recv().await {
+            log::debug!(
+                "recv from peer from addr: {:?}, {:?} ->{:?} is_relay:{}\n{:?}",
+                data.route_key().addr(),
+                data.src_id(),
+                data.dest_id(),
+                data.is_relay(),
+                pnet_packet::ipv4::Ipv4Packet::new(data.payload())
+            );
+            if let Err(e) = device_clone.send(data.payload()).await {
                 log::warn!("device.send {e:?}")
             }
         }
     });
-    log::info!("listen local port: {port}");
 
-    rust_p2p_core::async_compat::spawn(async move {
-        loop {
-            let line = pipe.accept().await?;
-            let writer = pipe.writer();
-            rust_p2p_core::async_compat::spawn(recv(line, sender1.clone(), writer));
-        }
-        #[allow(unreachable_code)]
-        Ok::<(), io::Error>(())
+    tokio::spawn(async move {
+        tun_recv(endpoint, device, self_id).await.unwrap();
     });
 
     quit.recv().await.expect("quit error");
-    _ = shutdown_writer.shutdown();
     log::info!("exit!!!!");
     Ok(())
 }
@@ -134,52 +107,9 @@ fn string_to_group_code(input: &str) -> GroupCode {
     array[..len].copy_from_slice(&bytes[..len]);
     array.into()
 }
-async fn recv(mut line: PipeLine, sender: Sender<RecvUserData>, _pipe_wirter: PipeWriter) {
-    let mut list = Vec::with_capacity(16);
-    loop {
-        let rs = match line.recv_multi(&mut list).await {
-            Ok(rs) => rs,
-            Err(e) => {
-                log::warn!("recv_from {e:?},{:?}", line.protocol());
-                return;
-            }
-        };
-        if let Err(e) = rs {
-            log::warn!("recv_data_handle {e:?}");
-            continue;
-        };
-        // log::info!(
-        //     "recv from peer from addr: {:?}, {:?} ->{:?} is_relay:{}\n{:?}",
-        //     handle_rs.route_key().addr(),
-        //     handle_rs.src_id(),
-        //     handle_rs.dest_id(),
-        //     handle_rs.is_relay(),
-        //     pnet_packet::ipv4::Ipv4Packet::new(handle_rs.payload())
-        // );
 
-        // if is_icmp_request(payload).await {
-        //     if let Err(err) = process_icmp(payload, &mut _pipe_wirter).await {
-        //         log::error!("reply icmp error: {err:?}");
-        //     }
-        //     continue;
-        // }
-        for x in list.drain(..) {
-            log::info!(
-                "------------------------------\nrecv from peer from addr: {:?}, {:?} ->{:?} is_relay:{}\n data:\n{:?}\n------------------------------",
-                x.route_key().addr(),
-                x.src_id(),
-                x.dest_id(),
-                x.is_relay(),
-                pnet_packet::ipv4::Ipv4Packet::new(x.payload())
-            );
-            if sender.send(x).await.is_err() {
-                break;
-            }
-        }
-    }
-}
 async fn tun_recv(
-    pipe_writer: PipeWriter,
+    endpoint: EndPoint,
     device: Arc<AsyncDevice>,
     _self_id: Ipv4Addr,
 ) -> io::Result<()> {
@@ -206,18 +136,12 @@ async fn tun_recv(
                 continue;
             }
         }
-        // log::info!(
-        //     "read tun pkt: {:?}",
-        //     pnet_packet::ipv4::Ipv4Packet::new(&buf[..payload_len])
-        // );
-        let mut send_packet = pipe_writer.allocate_send_packet();
-        send_packet.set_payload(&buf[..payload_len]);
 
-        if let Err(e) = pipe_writer
-            .send_packet_to(send_packet, &dest_ip.into())
+        if let Err(e) = endpoint
+            .send_to(&buf[..payload_len], NodeID::from(dest_ip))
             .await
         {
-            log::warn!("{e:?},{dest_ip:?}")
+            log::warn!("{e:?},{dest_ip:?}");
         }
     }
 }

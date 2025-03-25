@@ -1,28 +1,24 @@
-use crate::pipe::PipeWriter;
 use crate::protocol::node_id::NodeID;
 use crate::protocol::protocol_type::ProtocolType;
+use crate::tunnel::TunnelTransmitHub;
 use rand::seq::SliceRandom;
 use rust_p2p_core::punch::{PunchConsultInfo, PunchInfo, Puncher};
 use std::time::Duration;
-#[cfg(feature = "use-tokio")]
 use tokio::sync::mpsc::Receiver;
 
-#[cfg(feature = "use-async-std")]
-use async_std::channel::Receiver;
-
-pub async fn punch_consult_loop(pipe_writer: PipeWriter, puncher: Puncher<NodeID>) {
+pub async fn punch_consult_loop(tunnel_tx: TunnelTransmitHub, puncher: Puncher<NodeID>) {
     let mut seq = 0;
-    rust_p2p_core::async_compat::time::sleep(Duration::from_secs(1)).await;
-    let route_table = pipe_writer.pipe_writer.route_table();
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let route_table = tunnel_tx.socket_manager.route_table();
     loop {
-        rust_p2p_core::async_compat::time::sleep(Duration::from_secs(5)).await;
+        tokio::time::sleep(Duration::from_secs(5)).await;
         seq += 1;
-        let self_id = if let Some(self_id) = pipe_writer.pipe_context.load_id() {
+        let self_id = if let Some(self_id) = tunnel_tx.node_context.load_id() {
             self_id
         } else {
             continue;
         };
-        let consult_info = pipe_writer.pipe_context().gen_punch_info(seq);
+        let consult_info = tunnel_tx.node_context().gen_punch_info(seq);
         let data = match rmp_serde::to_vec(&consult_info) {
             Ok(data) => data,
             Err(e) => {
@@ -30,7 +26,7 @@ pub async fn punch_consult_loop(pipe_writer: PipeWriter, puncher: Puncher<NodeID
                 continue;
             }
         };
-        let mut send_packet = match pipe_writer
+        let mut send_packet = match tunnel_tx
             .allocate_send_packet_proto(ProtocolType::PunchConsultRequest, data.len())
         {
             Ok(send_packet) => send_packet,
@@ -51,7 +47,7 @@ pub async fn punch_consult_loop(pipe_writer: PipeWriter, puncher: Puncher<NodeID
             if !puncher.need_punch(&node_id) {
                 continue;
             }
-            if pipe_writer
+            if tunnel_tx
                 .send_packet_to(send_packet.clone(), &node_id)
                 .await
                 .is_ok()
@@ -69,30 +65,16 @@ pub async fn punch_consult_loop(pipe_writer: PipeWriter, puncher: Puncher<NodeID
 pub async fn punch_loop(
     active: bool,
     mut receiver: Receiver<(NodeID, PunchConsultInfo)>,
-    pipe_writer: PipeWriter,
+    tunnel_tx: TunnelTransmitHub,
     puncher: Puncher<NodeID>,
 ) {
-    #[cfg(feature = "use-tokio")]
     while let Some((node_id, info)) = receiver.recv().await {
         let punch_info = PunchInfo::new(
             active,
-            info.peer_punch_model & pipe_writer.pipe_context().punch_model_box(),
+            info.peer_punch_model & tunnel_tx.node_context().punch_model_box(),
             info.peer_nat_info,
         );
-        if let Ok(packet) = pipe_writer.allocate_send_packet_proto(ProtocolType::PunchRequest, 0) {
-            if let Err(e) = puncher.punch(node_id, packet.buf(), punch_info).await {
-                log::warn!("punch {e:?} {node_id:?}");
-            }
-        }
-    }
-    #[cfg(feature = "use-async-std")]
-    while let Ok((node_id, info)) = receiver.recv().await {
-        let punch_info = PunchInfo::new(
-            active,
-            info.peer_punch_model & pipe_writer.pipe_context().punch_model_box(),
-            info.peer_nat_info,
-        );
-        if let Ok(packet) = pipe_writer.allocate_send_packet_proto(ProtocolType::PunchRequest, 0) {
+        if let Ok(packet) = tunnel_tx.allocate_send_packet_proto(ProtocolType::PunchRequest, 0) {
             if let Err(e) = puncher.punch(node_id, packet.buf(), punch_info).await {
                 log::warn!("punch {e:?} {node_id:?}");
             }

@@ -1,24 +1,23 @@
-use crate::config::PipeConfig;
+use crate::config::TunnelManagerConfig;
 use crate::extend::byte_pool::{Block, BufferPool};
-use crate::pipe::pipe_context::PipeContext;
 use crate::protocol::broadcast::RangeBroadcastPacket;
 use crate::protocol::id_route::IDRouteReplyPacket;
 use crate::protocol::node_id::{GroupCode, NodeID};
 use crate::protocol::protocol_type::ProtocolType;
 use crate::protocol::{broadcast, NetPacket, HEAD_LEN};
+use crate::tunnel::node_context::NodeContext;
 use async_shutdown::ShutdownManager;
-#[cfg(feature = "use-async-std")]
-use async_std::channel::Sender;
+
 use bytes::BytesMut;
 use dashmap::DashMap;
-pub use pipe_context::NodeAddress;
-pub use pipe_context::PeerNodeAddress;
+pub use node_context::NodeAddress;
+pub use node_context::PeerNodeAddress;
 use rust_p2p_core::nat::NatType;
-use rust_p2p_core::pipe::config::LoadBalance;
-use rust_p2p_core::pipe::recycle::RecycleBuf;
 use rust_p2p_core::punch::PunchConsultInfo;
 use rust_p2p_core::route::route_table::RouteTable;
 use rust_p2p_core::route::{ConnectProtocol, Route, RouteKey};
+use rust_p2p_core::tunnel::config::LoadBalance;
+use rust_p2p_core::tunnel::recycle::RecycleBuf;
 pub use send_packet::SendPacket;
 use std::collections::HashMap;
 use std::io;
@@ -26,19 +25,18 @@ use std::net::SocketAddr;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 use std::time::UNIX_EPOCH;
-#[cfg(feature = "use-tokio")]
 use tokio::sync::mpsc::Sender;
 
 mod maintain;
-mod pipe_context;
+mod node_context;
 
 mod send_packet;
 
-pub struct Pipe {
+pub struct TunnelManager {
     send_buffer_size: usize,
     recv_buffer_size: usize,
-    pipe_context: PipeContext,
-    pipe: rust_p2p_core::pipe::Pipe<NodeID>,
+    node_context: NodeContext,
+    tunnel_factory: rust_p2p_core::tunnel::UnifiedTunnelFactory<NodeID>,
     shutdown_manager: ShutdownManager<()>,
     active_punch_sender: Sender<(NodeID, PunchConsultInfo)>,
     passive_punch_sender: Sender<(NodeID, PunchConsultInfo)>,
@@ -46,12 +44,12 @@ pub struct Pipe {
     recycle_buf: Option<RecycleBuf>,
 }
 
-impl Pipe {
-    pub async fn new(config: PipeConfig) -> io::Result<Pipe> {
-        Box::pin(Self::new0(config)).await
+impl TunnelManager {
+    pub(crate) async fn new(config: TunnelManagerConfig) -> io::Result<TunnelManager> {
+        Box::pin(Self::new_impl(config)).await
     }
-    async fn new0(mut config: PipeConfig) -> io::Result<Pipe> {
-        let multi_pipeline = config.multi_pipeline;
+    pub(crate) async fn new_impl(mut config: TunnelManagerConfig) -> io::Result<TunnelManager> {
+        let major_socket_count = config.major_socket_count;
         let send_buffer_size = config.send_buffer_size;
         let recv_buffer_size = config.recv_buffer_size;
         let query_id_interval = config.query_id_interval;
@@ -88,27 +86,27 @@ impl Pipe {
         #[cfg(any(feature = "aes-gcm", feature = "chacha20-poly1305"))]
         let cipher = config.encryption.clone().map(crate::cipher::Cipher::from);
 
-        let config: rust_p2p_core::pipe::config::PipeConfig = config.into();
+        let config: rust_p2p_core::tunnel::config::TunnelConfig = config.into();
         let mut recycle_buf: Option<RecycleBuf> = None;
-        if let Some(v) = config.tcp_pipe_config.as_ref() {
+        if let Some(v) = config.tcp_tunnel_config.as_ref() {
             recycle_buf.clone_from(&v.recycle_buf);
-        } else if let Some(v) = config.udp_pipe_config.as_ref() {
+        } else if let Some(v) = config.udp_tunnel_config.as_ref() {
             recycle_buf.clone_from(&v.recycle_buf);
         };
-        let (pipe, puncher, idle_route_manager) = rust_p2p_core::pipe::pipe::<NodeID>(config)?;
-        let writer_ref = pipe.writer_ref();
-        let local_tcp_port = if let Some(v) = writer_ref.tcp_pipe_writer_ref() {
+        let (tunnel_factory, puncher, idle_route_manager) =
+            rust_p2p_core::tunnel::new_tunnel_component::<NodeID>(config)?;
+        let local_tcp_port = if let Some(v) = tunnel_factory.shared_tcp_socket_manager() {
             v.local_addr().port()
         } else {
             0
         };
-        let local_udp_ports = if let Some(v) = writer_ref.udp_pipe_writer_ref() {
+        let local_udp_ports = if let Some(v) = tunnel_factory.shared_udp_socket_manager() {
             v.local_ports()?
         } else {
             vec![]
         };
-        let pipe_context = PipeContext::new(
-            multi_pipeline,
+        let node_context = NodeContext::new(
+            major_socket_count,
             local_udp_ports,
             local_tcp_port,
             default_interface.clone(),
@@ -117,32 +115,29 @@ impl Pipe {
             cipher,
         );
         if let Some(group_code) = group_code {
-            pipe_context.store_group_code(group_code)?;
+            node_context.store_group_code(group_code)?;
         }
         if let Some(node_id) = self_id {
-            pipe_context.store_self_id(node_id)?;
+            node_context.store_self_id(node_id)?;
         }
         if let Some(addrs) = direct_addrs {
-            pipe_context.set_direct_nodes(addrs);
+            node_context.update_direct_nodes(addrs).await?;
         }
-        pipe_context.update_direct_nodes().await?;
         if let Some(addrs) = mapping_addrs {
-            pipe_context.set_mapping_addrs(addrs);
+            node_context.set_mapping_addrs(addrs);
         }
         let shutdown_manager = ShutdownManager::<()>::new();
-        let pipe_writer = PipeWriter {
+        let tunnel_tx = TunnelTransmitHub {
             send_buffer_size,
-            pipe_context: pipe_context.clone(),
-            pipe_writer: pipe.writer_ref().to_owned(),
+            node_context: node_context.clone(),
+            socket_manager: tunnel_factory.socket_manager(),
             shutdown_manager: shutdown_manager.clone(),
             recycle_buf: recycle_buf.clone(),
         };
-        let (active_punch_sender, active_punch_receiver) =
-            rust_p2p_core::async_compat::mpsc::channel(3);
-        let (passive_punch_sender, passive_punch_receiver) =
-            rust_p2p_core::async_compat::mpsc::channel(3);
+        let (active_punch_sender, active_punch_receiver) = tokio::sync::mpsc::channel(3);
+        let (passive_punch_sender, passive_punch_receiver) = tokio::sync::mpsc::channel(3);
         let join_set = maintain::start_task(
-            &pipe_writer,
+            &tunnel_tx,
             idle_route_manager,
             puncher,
             query_id_interval,
@@ -155,16 +150,10 @@ impl Pipe {
             active_punch_receiver,
             passive_punch_receiver,
         );
-        #[cfg(feature = "use-tokio")]
         let mut join_set = join_set;
-        #[cfg(feature = "use-tokio")]
         let fut = shutdown_manager
             .wrap_cancel(async move { while join_set.join_next().await.is_some() {} });
-        #[cfg(feature = "use-async-std")]
-        let fut = shutdown_manager.wrap_cancel(async move {
-            join_set.await;
-        });
-        rust_p2p_core::async_compat::spawn(async move {
+        tokio::spawn(async move {
             if fut.await.is_err() {
                 log::debug!("recv shutdown signal: built-in maintain tasks are shutdown");
             }
@@ -172,8 +161,8 @@ impl Pipe {
         Ok(Self {
             send_buffer_size,
             recv_buffer_size,
-            pipe_context,
-            pipe,
+            node_context,
+            tunnel_factory,
             shutdown_manager,
             active_punch_sender,
             passive_punch_sender,
@@ -181,41 +170,45 @@ impl Pipe {
             recycle_buf,
         })
     }
-    pub fn writer(&self) -> PipeWriter {
-        PipeWriter {
+    pub(crate) fn tunnel_send_hub(&self) -> TunnelTransmitHub {
+        TunnelTransmitHub {
             send_buffer_size: self.send_buffer_size,
-            pipe_context: self.pipe_context.clone(),
-            pipe_writer: self.pipe.writer_ref().to_owned(),
+            node_context: self.node_context.clone(),
+            socket_manager: self.tunnel_factory.socket_manager(),
             shutdown_manager: self.shutdown_manager.clone(),
             recycle_buf: self.recycle_buf.clone(),
         }
     }
 }
 
-impl Drop for Pipe {
+impl Drop for TunnelManager {
     fn drop(&mut self) {
         _ = self.shutdown_manager.trigger_shutdown(());
     }
 }
 
-impl Pipe {
-    pub async fn accept(&mut self) -> io::Result<PipeLine> {
+impl TunnelManager {
+    pub(crate) async fn dispatch(&mut self) -> io::Result<Tunnel> {
         if self.shutdown_manager.is_shutdown_triggered() {
-            return Err(io::Error::new(io::ErrorKind::BrokenPipe, "shutdown"));
+            return Err(io::Error::new(io::ErrorKind::Other, "shutdown"));
         }
-        let Ok(pipe_line) = self.shutdown_manager.wrap_cancel(self.pipe.accept()).await else {
-            return Err(io::Error::new(io::ErrorKind::BrokenPipe, "shutdown"));
+        let Ok(tunnel) = self
+            .shutdown_manager
+            .wrap_cancel(self.tunnel_factory.dispatch())
+            .await
+        else {
+            return Err(io::Error::new(io::ErrorKind::Other, "shutdown"));
         };
-        let pipe_line = pipe_line?;
+        let tunnel = tunnel?;
         let recv_buff = Vec::with_capacity(BUF_SIZE);
         let recv_sizes = Vec::with_capacity(BUF_SIZE);
         let recv_addrs = Vec::with_capacity(BUF_SIZE);
-        Ok(PipeLine {
+        Ok(Tunnel {
             shutdown_manager: self.shutdown_manager.clone(),
-            pipe_context: self.pipe_context.clone(),
-            pipe_line,
-            pipe_writer: self.writer(),
-            route_table: self.pipe.route_table().clone(),
+            node_context: self.node_context.clone(),
+            tunnel,
+            tunnel_transmit: self.tunnel_send_hub(),
+            route_table: self.tunnel_factory.route_table().clone(),
             active_punch_sender: self.active_punch_sender.clone(),
             passive_punch_sender: self.passive_punch_sender.clone(),
             buffer_pool: self.buffer_pool.clone(),
@@ -228,52 +221,52 @@ impl Pipe {
 }
 
 #[derive(Clone)]
-pub struct PipeWriter {
+pub struct TunnelTransmitHub {
     send_buffer_size: usize,
-    pipe_context: PipeContext,
-    pipe_writer: rust_p2p_core::pipe::PipeWriter<NodeID>,
+    node_context: NodeContext,
+    socket_manager: rust_p2p_core::tunnel::UnifiedSocketManager<NodeID>,
     shutdown_manager: ShutdownManager<()>,
     recycle_buf: Option<RecycleBuf>,
 }
 
-impl PipeWriter {
-    pub fn pipe_context(&self) -> &PipeContext {
-        &self.pipe_context
+impl TunnelTransmitHub {
+    pub fn node_context(&self) -> &NodeContext {
+        &self.node_context
     }
     pub fn switch_model(&self, nat_type: NatType) -> io::Result<()> {
         if self.shutdown_manager.is_shutdown_triggered() {
-            return Err(io::Error::new(io::ErrorKind::BrokenPipe, "shutdown"));
+            return Err(io::Error::new(io::ErrorKind::Other, "shutdown"));
         }
-        use rust_p2p_core::pipe::udp_pipe::Model;
+        use rust_p2p_core::tunnel::udp::Model;
         match nat_type {
             NatType::Cone => {
-                if let Some(writer) = self.pipe_writer.udp_pipe_writer() {
-                    writer.switch_model(Model::Low)?;
+                if let Some(socket_manager) = self.socket_manager.udp_socket_manager_as_ref() {
+                    socket_manager.switch_model(Model::Low)?;
                 }
             }
             NatType::Symmetric => {
-                if let Some(writer) = self.pipe_writer.udp_pipe_writer() {
-                    writer.switch_model(Model::High)?;
+                if let Some(socket_manager) = self.socket_manager.udp_socket_manager_as_ref() {
+                    socket_manager.switch_model(Model::High)?;
                 }
             }
         }
         Ok(())
     }
     pub fn lookup_route(&self, node_id: &NodeID) -> Option<Vec<Route>> {
-        self.pipe_writer.route_table().route(node_id)
+        self.socket_manager.route_table().route(node_id)
     }
     pub fn nodes(&self) -> Vec<NodeID> {
-        self.pipe_writer.route_table().route_table_ids()
+        self.socket_manager.route_table().route_table_ids()
     }
     pub fn other_group_codes(&self) -> Vec<GroupCode> {
-        self.pipe_context
+        self.node_context
             .other_route_table
             .iter()
             .map(|v| *v.key())
             .collect()
     }
     pub fn other_group_nodes(&self, group_code: &GroupCode) -> Option<Vec<NodeID>> {
-        self.pipe_context
+        self.node_context
             .other_route_table
             .get(group_code)
             .map(|v| v.route_table_ids())
@@ -283,23 +276,23 @@ impl PipeWriter {
         group_code: &GroupCode,
         node_id: &NodeID,
     ) -> Option<Vec<Route>> {
-        self.pipe_context
+        self.node_context
             .other_route_table
             .get(group_code)
             .map(|v| v.route(node_id))?
     }
     pub fn current_group_code(&self) -> GroupCode {
-        self.pipe_context.load_group_code()
+        self.node_context.load_group_code()
     }
     pub fn route_to_node_id(&self, route: &RouteKey) -> Option<NodeID> {
-        self.pipe_writer.route_table().route_to_id(route)
+        self.socket_manager.route_table().route_to_id(route)
     }
     pub fn other_route_to_node_id(
         &self,
         group_code: &GroupCode,
         route: &RouteKey,
     ) -> Option<NodeID> {
-        self.pipe_context
+        self.node_context
             .other_route_table
             .get(group_code)
             .map(|v| v.route_to_id(route))?
@@ -310,11 +303,11 @@ impl PipeWriter {
         group_code: &GroupCode,
         id: &NodeID,
     ) -> io::Result<()> {
-        let code = self.pipe_context.load_group_code();
+        let code = self.node_context.load_group_code();
         if &code == group_code {
             self.send_to_id(buf, id).await
         } else {
-            let route = if let Some(v) = self.pipe_context.other_route_table.get(group_code) {
+            let route = if let Some(v) = self.node_context.other_route_table.get(group_code) {
                 v.get_route_by_id(id)?
             } else {
                 return Err(io::Error::new(
@@ -330,14 +323,16 @@ impl PipeWriter {
         buf: &NetPacket<B>,
         id: &NodeID,
     ) -> io::Result<()> {
-        self.pipe_writer.send_to_id(buf.buffer().into(), id).await?;
+        self.socket_manager
+            .send_to_id(buf.buffer().into(), id)
+            .await?;
         Ok(())
     }
     pub(crate) async fn send_to_route(&self, buf: &[u8], route_key: &RouteKey) -> io::Result<()> {
-        self.pipe_writer.send_to(buf.into(), route_key).await?;
+        self.socket_manager.send_to(buf.into(), route_key).await?;
         Ok(())
     }
-    async fn send_to0(
+    async fn send_to_impl(
         &self,
         buf: BytesMut,
         group_code: &GroupCode,
@@ -345,20 +340,20 @@ impl PipeWriter {
         dest_id: &NodeID,
     ) -> io::Result<()> {
         if dest_id.is_broadcast() {
-            self.send_broadcast0(&buf, group_code, src_id).await;
+            self.send_broadcast_impl(&buf, group_code, src_id).await;
             return Ok(());
         }
 
-        if let Ok(route) = self.pipe_writer.route_table().get_route_by_id(dest_id) {
-            self.pipe_writer.send_to(buf, &route.route_key()).await?
+        if let Ok(route) = self.socket_manager.route_table().get_route_by_id(dest_id) {
+            self.socket_manager.send_to(buf, &route.route_key()).await?
         } else if let Some((relay_group_code, relay_node_id)) =
-            self.pipe_context().reachable_node(group_code, dest_id)
+            self.node_context().reachable_node(group_code, dest_id)
         {
             if &relay_group_code == group_code {
-                self.pipe_writer.send_to_id(buf, &relay_node_id).await?
+                self.socket_manager.send_to_id(buf, &relay_node_id).await?
             } else {
                 let route;
-                if let Some(v) = self.pipe_context().other_route_table.get(&relay_group_code) {
+                if let Some(v) = self.node_context().other_route_table.get(&relay_group_code) {
                     route = v.get_route_by_id(&relay_node_id)?;
                 } else {
                     return Err(io::Error::new(
@@ -366,7 +361,7 @@ impl PipeWriter {
                         "group route not found",
                     ));
                 }
-                self.pipe_writer.send_to(buf, &route.route_key()).await?
+                self.socket_manager.send_to(buf, &route.route_key()).await?
             }
         } else {
             return Err(io::Error::new(
@@ -377,8 +372,8 @@ impl PipeWriter {
         Ok(())
     }
 
-    async fn send_broadcast0(&self, buf: &[u8], group_code: &GroupCode, src_id: &NodeID) {
-        let route_table = self.pipe_writer.route_table();
+    async fn send_broadcast_impl(&self, buf: &[u8], group_code: &GroupCode, src_id: &NodeID) {
+        let route_table = self.socket_manager.route_table();
         let table = route_table.route_table_one();
         let mut map: HashMap<NodeID, (Vec<NodeID>, Route)> = HashMap::new();
         for (id, route) in &table {
@@ -405,7 +400,7 @@ impl PipeWriter {
         for (owner_id, (list, route)) in map {
             if list.len() <= 1 && route.is_direct() {
                 if let Err(e) = self
-                    .pipe_writer
+                    .socket_manager
                     .send_to(buf.into(), &route.route_key())
                     .await
                 {
@@ -418,7 +413,7 @@ impl PipeWriter {
                         packet.set_dest_id(&owner_id);
                         packet.set_group_code(group_code);
                         if let Err(e) = self
-                            .pipe_writer
+                            .socket_manager
                             .send_to(packet.buffer().into(), &route.route_key())
                             .await
                         {
@@ -433,18 +428,22 @@ impl PipeWriter {
         }
     }
 
-    pub async fn broadcast_packet(&self, packet: SendPacket) -> io::Result<()> {
+    pub(crate) async fn broadcast_packet(&self, packet: SendPacket) -> io::Result<()> {
         self.send_packet_to(packet, &NodeID::broadcast()).await
     }
-    pub async fn send_packet_to(&self, mut packet: SendPacket, dest_id: &NodeID) -> io::Result<()> {
-        let group_code = self.pipe_context.load_group_code();
-        if let Some(src_id) = self.pipe_context.load_id() {
+    pub(crate) async fn send_packet_to(
+        &self,
+        mut packet: SendPacket,
+        dest_id: &NodeID,
+    ) -> io::Result<()> {
+        let group_code = self.node_context.load_group_code();
+        if let Some(src_id) = self.node_context.load_id() {
             packet.set_group_code(&group_code);
             packet.set_src_id(&src_id);
             packet.set_dest_id(dest_id);
             #[cfg(any(feature = "aes-gcm", feature = "chacha20-poly1305"))]
             if packet.is_user_data() {
-                if let Some(cipher) = self.pipe_context.cipher.as_ref() {
+                if let Some(cipher) = self.node_context.cipher.as_ref() {
                     let data_len = packet.len();
                     packet.resize(data_len + cipher.reserved_len(), 0);
 
@@ -452,14 +451,14 @@ impl PipeWriter {
                     packet.set_encrypt_flag(true);
                 }
             }
-            self.send_to0(packet.into_buf(), &group_code, &src_id, dest_id)
+            self.send_to_impl(packet.into_buf(), &group_code, &src_id, dest_id)
                 .await
         } else {
             Err(io::Error::new(io::ErrorKind::Other, "no id specified"))
         }
     }
 
-    pub fn allocate_send_packet(&self) -> SendPacket {
+    pub(crate) fn allocate_send_packet(&self) -> SendPacket {
         let buf = if let Some(recycle_buf) = self.recycle_buf.as_ref() {
             recycle_buf.alloc(self.send_buffer_size)
         } else {
@@ -467,7 +466,8 @@ impl PipeWriter {
         };
         SendPacket::with_bytes_mut(buf)
     }
-    pub fn release_send_packet(&self, send_packet: SendPacket) {
+    #[allow(dead_code)]
+    pub(crate) fn release_send_packet(&self, send_packet: SendPacket) {
         if let Some(recycle_buf) = self.recycle_buf.as_ref() {
             recycle_buf.push(send_packet.into_buf());
         }
@@ -477,8 +477,8 @@ impl PipeWriter {
         protocol_type: ProtocolType,
         payload_size: usize,
     ) -> io::Result<SendPacket> {
-        let group_code = self.pipe_context.load_group_code();
-        let src_id = if let Some(src_id) = self.pipe_context.load_id() {
+        let group_code = self.node_context.load_group_code();
+        let src_id = if let Some(src_id) = self.node_context.load_id() {
             src_id
         } else {
             return Err(io::Error::new(io::ErrorKind::Other, "no id specified"));
@@ -505,11 +505,11 @@ impl PipeWriter {
     }
 }
 
-pub struct PipeLine {
+pub struct Tunnel {
     shutdown_manager: ShutdownManager<()>,
-    pipe_context: PipeContext,
-    pipe_line: rust_p2p_core::pipe::PipeLine,
-    pipe_writer: PipeWriter,
+    node_context: NodeContext,
+    tunnel: rust_p2p_core::tunnel::UnifiedTunnel,
+    tunnel_transmit: TunnelTransmitHub,
     route_table: RouteTable<NodeID>,
     active_punch_sender: Sender<(NodeID, PunchConsultInfo)>,
     passive_punch_sender: Sender<(NodeID, PunchConsultInfo)>,
@@ -524,20 +524,22 @@ const BUF_SIZE: usize = 16;
 
 type RecvRs = Result<Result<RecvUserData, HandleError>, RecvError>;
 
-impl PipeLine {
-    pub async fn next(&mut self) -> Result<Result<RecvUserData, HandleError>, RecvError> {
-        self.next_process::<crate::config::DefaultInterceptor>(None)
+impl Tunnel {
+    #[allow(dead_code)]
+    pub(crate) async fn next(&mut self) -> Result<Result<RecvUserData, HandleError>, RecvError> {
+        self.preprocess_next::<crate::config::DefaultInterceptor>(None)
             .await
     }
-    pub async fn recv_multi(
+    pub(crate) async fn batch_recv(
         &mut self,
         data_vec: &mut Vec<RecvUserData>,
     ) -> Result<Result<(), HandleError>, RecvError> {
-        self.recv_multi_process::<crate::config::DefaultInterceptor>(None, data_vec)
+        self.preprocess_batch_recv::<crate::config::DefaultInterceptor>(None, data_vec)
             .await
     }
     /// Receive a batch of data and use interceptors.
-    pub async fn recv_multi_process<I: crate::config::DataInterceptor>(
+    #[allow(dead_code)]
+    pub(crate) async fn preprocess_batch_recv<I: crate::config::DataInterceptor>(
         &mut self,
         interceptor: Option<&I>,
         data_vec: &mut Vec<RecvUserData>,
@@ -550,12 +552,12 @@ impl PipeLine {
         }
         loop {
             if self.shutdown_manager.is_shutdown_triggered() {
-                self.pipe_line.done();
+                self.tunnel.done();
                 return Err(RecvError::Done);
             }
             let num = if let Ok(v) = self
                 .shutdown_manager
-                .wrap_cancel(self.pipe_line.recv_multi_from(
+                .wrap_cancel(self.tunnel.batch_recv_from(
                     &mut self.recv_buff,
                     &mut self.recv_sizes,
                     &mut self.recv_addrs,
@@ -570,7 +572,7 @@ impl PipeLine {
                     },
                 }
             } else {
-                self.pipe_line.done();
+                self.tunnel.done();
                 return Err(RecvError::Done);
             };
             for index in 0..num {
@@ -611,7 +613,7 @@ impl PipeLine {
             }
         }
     }
-    pub async fn next_process<I: crate::config::DataInterceptor>(
+    pub(crate) async fn preprocess_next<I: crate::config::DataInterceptor>(
         &mut self,
         interceptor: Option<&I>,
     ) -> RecvRs {
@@ -622,12 +624,12 @@ impl PipeLine {
                 block.set_len(capacity);
             }
             if self.shutdown_manager.is_shutdown_triggered() {
-                self.pipe_line.done();
+                self.tunnel.done();
                 return Err(RecvError::Done);
             }
             let (len, route_key) = if let Ok(v) = self
                 .shutdown_manager
-                .wrap_cancel(self.pipe_line.recv_from(&mut block))
+                .wrap_cancel(self.tunnel.recv_from(&mut block))
                 .await
             {
                 match v {
@@ -638,7 +640,7 @@ impl PipeLine {
                     },
                 }
             } else {
-                self.pipe_line.done();
+                self.tunnel.done();
                 return Err(RecvError::Done);
             };
 
@@ -676,7 +678,7 @@ impl PipeLine {
     ) -> Result<RecvRs, Data> {
         if rust_p2p_core::stun::is_stun_response(&block) {
             if let Some(pub_addr) = rust_p2p_core::stun::recv_stun_response(&block) {
-                self.pipe_context
+                self.node_context
                     .update_public_addr(route_key.index(), pub_addr);
             } else {
                 log::debug!("stun error {route_key:?}")
@@ -690,14 +692,14 @@ impl PipeLine {
             }
         }
 
-        return match self.handle(recv_result).await {
+        match self.handle(recv_result).await {
             Ok(handle_result) => {
                 if let Some(rs) = handle_result {
                     #[cfg(any(feature = "aes-gcm", feature = "chacha20-poly1305"))]
                     let mut rs = rs;
                     #[cfg(any(feature = "aes-gcm", feature = "chacha20-poly1305"))]
                     {
-                        if rs.is_encrypt != self.pipe_context.cipher.is_some() {
+                        if rs.is_encrypt != self.node_context.cipher.is_some() {
                             return Ok(Ok(Err(HandleError::new(
                                 route_key,
                                 io::Error::new(
@@ -705,12 +707,12 @@ impl PipeLine {
                                     format!(
                                     "Inconsistent encryption status: data tag-{} current tag-{}",
                                     rs.is_encrypt,
-                                    self.pipe_context.cipher.is_some()
+                                    self.node_context.cipher.is_some()
                                 ),
                                 ),
                             ))));
                         }
-                        if let Some(cipher) = self.pipe_context.cipher.as_ref() {
+                        if let Some(cipher) = self.node_context.cipher.as_ref() {
                             match cipher
                                 .decrypt(tag(&rs.src_id, &rs.dest_id), &mut block[rs.start..rs.end])
                             {
@@ -734,23 +736,23 @@ impl PipeLine {
                 }
             }
             Err(e) => Ok(Ok(Err(HandleError::new(route_key, e)))),
-        };
+        }
     }
     pub fn protocol(&self) -> ConnectProtocol {
-        self.pipe_line.protocol()
+        self.tunnel.protocol()
     }
     pub fn remote_addr(&self) -> Option<SocketAddr> {
-        self.pipe_line.remote_addr()
+        self.tunnel.remote_addr()
     }
     pub(crate) async fn send_to<B: AsRef<[u8]>>(
         &self,
         buf: &NetPacket<B>,
         id: &NodeID,
     ) -> io::Result<()> {
-        self.pipe_writer.send_to_id(buf, id).await
+        self.tunnel_transmit.send_to_id(buf, id).await
     }
     pub(crate) async fn send_to_route(&self, buf: &[u8], route_key: &RouteKey) -> io::Result<()> {
-        self.pipe_writer.send_to_route(buf, route_key).await
+        self.tunnel_transmit.send_to_route(buf, route_key).await
     }
     async fn other_group_handle(
         &mut self,
@@ -764,7 +766,7 @@ impl PipeLine {
         let src_id = NodeID::try_from(packet.src_id())?;
         {
             let ref_mut = self
-                .pipe_context
+                .node_context
                 .other_route_table
                 .entry(src_group_code)
                 .or_insert_with(|| RouteTable::new(LoadBalance::MinHopLowestLatency, 1));
@@ -831,7 +833,7 @@ impl PipeLine {
                     let time = u32::from_be_bytes(time.try_into().unwrap());
                     let now = now()?;
                     let rtt = now.saturating_sub(time);
-                    self.pipe_context
+                    self.node_context
                         .other_route_table
                         .get(&src_group_code)
                         .map(|v| v.add_route(src_id, Route::from(route_key, metric, rtt)));
@@ -841,7 +843,7 @@ impl PipeLine {
             return Ok(());
         }
 
-        if let Some(route_table) = self.pipe_context.other_route_table.get(&src_group_code) {
+        if let Some(route_table) = self.node_context.other_route_table.get(&src_group_code) {
             if dest_id.is_broadcast() {
                 // broadcast
             } else if let Ok(v) = route_table.get_route_by_id(&dest_id) {
@@ -849,11 +851,11 @@ impl PipeLine {
                     self.send_to_route(packet.buffer(), &v.route_key()).await?;
                 }
             } else if let Some((relay_group_code, relay_node_id)) =
-                self.pipe_context.reachable_node(&src_group_code, &dest_id)
+                self.node_context.reachable_node(&src_group_code, &dest_id)
             {
                 drop(route_table);
                 if let Some(route_table) =
-                    self.pipe_context.other_route_table.get(&relay_group_code)
+                    self.node_context.other_route_table.get(&relay_group_code)
                 {
                     if let Ok(v) = route_table.get_route_by_id(&relay_node_id) {
                         if !route_table.is_route_of_peer_id(&src_id, &v.route_key()) {
@@ -888,7 +890,7 @@ impl PipeLine {
                 "src id is unspecified",
             ));
         }
-        let self_id = if let Some(self_id) = self.pipe_context.load_id() {
+        let self_id = if let Some(self_id) = self.node_context.load_id() {
             self_id
         } else {
             return Err(io::Error::new(
@@ -896,7 +898,7 @@ impl PipeLine {
                 "self id is none",
             ));
         };
-        let group_code = self.pipe_context.load_group_code();
+        let group_code = self.node_context.load_group_code();
         let route_key = recv_result.route_key;
         if group_code.as_ref() != packet.group_code() {
             self.other_group_handle(packet, route_key, group_code, self_id)
@@ -1021,31 +1023,20 @@ impl PipeLine {
                     })?;
                 log::debug!("PunchConsultRequest {:?}", punch_info);
                 let consult_info = self
-                    .pipe_context
+                    .node_context
                     .gen_punch_info(punch_info.peer_nat_info.seq);
                 let data = rmp_serde::to_vec(&consult_info).map_err(|e| {
                     io::Error::new(io::ErrorKind::Other, format!("RmpEncodeError: {e:?}"))
                 })?;
                 let mut send_packet = self
-                    .pipe_writer
+                    .tunnel_transmit
                     .allocate_send_packet_proto(ProtocolType::PunchConsultReply, data.len())?;
                 send_packet.set_payload(&data);
-                #[cfg(feature = "use-tokio")]
                 if let Ok(sender) = self.passive_punch_sender.try_reserve() {
-                    self.pipe_writer
+                    self.tunnel_transmit
                         .send_packet_to(send_packet, &src_id)
                         .await?;
                     sender.send((src_id, punch_info))
-                }
-                #[cfg(feature = "use-async-std")]
-                if self
-                    .passive_punch_sender
-                    .try_send((src_id, punch_info))
-                    .is_ok()
-                {
-                    self.pipe_writer
-                        .send_packet_to(send_packet, &src_id)
-                        .await?;
                 }
             }
             ProtocolType::PunchConsultReply => {
@@ -1113,13 +1104,13 @@ impl PipeLine {
             self.send_to_route(packet.buffer(), &route_key).await?;
         }
 
-        if !self.pipe_context.other_route_table.is_empty() {
+        if !self.node_context.other_route_table.is_empty() {
             // Reply to reachable nodes of other groups
-            let pipe_writer = self.pipe_writer.clone();
-            let other_route_table = self.pipe_context.other_route_table.clone();
-            rust_p2p_core::async_compat::spawn(async move {
+            let tunnel_tx = self.tunnel_transmit.clone();
+            let other_route_table = self.node_context.other_route_table.clone();
+            tokio::spawn(async move {
                 if let Err(e) = id_route_reply(
-                    pipe_writer,
+                    tunnel_tx,
                     other_route_table,
                     route_key,
                     self_group_code,
@@ -1148,14 +1139,14 @@ impl PipeLine {
 
         let id = reply_packet.query_id();
         if id != 0 {
-            self.pipe_context
+            self.node_context
                 .update_direct_node_id(id, reachable_group_code, src_id);
         }
         for (reachable_id, metric) in reply_packet.iter() {
             if self_group_code == reachable_group_code && reachable_id == self_id {
                 continue;
             }
-            self.pipe_context.update_reachable_nodes(
+            self.node_context.update_reachable_nodes(
                 reachable_group_code,
                 reachable_id,
                 src_group_code,
@@ -1168,7 +1159,7 @@ impl PipeLine {
 }
 
 async fn id_route_reply(
-    pipe_writer: PipeWriter,
+    tunnel_tx: TunnelTransmitHub,
     other_route_table: Arc<DashMap<GroupCode, RouteTable<NodeID>>>,
     route_key: RouteKey,
     self_group_code: GroupCode,
@@ -1207,9 +1198,7 @@ async fn id_route_reply(
         packet.set_dest_id(&src_id);
         packet.set_src_id(&self_id);
         packet.set_group_code(&self_group_code);
-        pipe_writer
-            .send_to_route(packet.buffer(), &route_key)
-            .await?;
+        tunnel_tx.send_to_route(packet.buffer(), &route_key).await?;
     }
     Ok(())
 }

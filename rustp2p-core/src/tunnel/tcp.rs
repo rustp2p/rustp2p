@@ -1,37 +1,37 @@
-use crate::async_compat::net::tcp::{AsyncReadExt, AsyncWriteExt};
-use crate::async_compat::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
-use crate::async_compat::net::{TcpListener, TcpStream};
-use crate::pipe::config::TcpPipeConfig;
-use crate::pipe::recycle::RecycleBuf;
 use crate::route::{Index, RouteKey};
 use crate::socket::{connect_tcp, create_tcp_listener, LocalInterface};
+use crate::tunnel::config::TcpTunnelConfig;
+use crate::tunnel::recycle::RecycleBuf;
 use async_lock::Mutex;
 use async_trait::async_trait;
 use bytes::BytesMut;
 use dashmap::DashMap;
 use dyn_clone::DynClone;
 use rand::Rng;
+use std::future::Future;
 use std::io;
 use std::io::IoSlice;
-use std::marker::PhantomData;
 use std::net::SocketAddr;
-use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Duration;
 use tachyonix::{Receiver, Sender};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
+use tokio::net::{TcpListener, TcpStream};
 
-pub struct TcpPipe {
+pub struct TcpTunnelFactory {
     route_idle_time: Duration,
     tcp_listener: TcpListener,
     connect_receiver: Receiver<(RouteKey, ReadHalfBox)>,
-    tcp_pipe_writer: TcpPipeWriter,
+    #[allow(dead_code)]
+    pub(crate) socket_manager: Arc<SocketManager>,
     write_half_collect: WriteHalfCollect,
     init_codec: Arc<Box<dyn InitCodec>>,
 }
 
-impl TcpPipe {
-    /// Construct a `TCP` pipe with the specified configuration
-    pub fn new(config: TcpPipeConfig) -> io::Result<TcpPipe> {
+impl TcpTunnelFactory {
+    /// Construct a `TCP` tunnel with the specified configuration
+    pub fn new(config: TcpTunnelConfig) -> io::Result<TcpTunnelFactory> {
         config.check()?;
         let address: SocketAddr = if config.use_v6 {
             format!("[::]:{}", config.tcp_port).parse().unwrap()
@@ -46,41 +46,33 @@ impl TcpPipe {
         let write_half_collect =
             WriteHalfCollect::new(config.tcp_multiplexing_limit, config.recycle_buf);
         let init_codec = Arc::new(config.init_codec);
-        let tcp_pipe_writer = TcpPipeWriter {
-            socket_layer: Arc::new(SocketLayer::new(
-                local_addr,
-                config.tcp_multiplexing_limit,
-                write_half_collect.clone(),
-                connect_sender,
-                config.default_interface,
-                init_codec.clone(),
-            )),
-        };
-        Ok(TcpPipe {
+        let socket_manager = Arc::new(SocketManager::new(
+            local_addr,
+            config.tcp_multiplexing_limit,
+            write_half_collect.clone(),
+            connect_sender,
+            config.default_interface,
+            init_codec.clone(),
+        ));
+        Ok(TcpTunnelFactory {
             route_idle_time: config.route_idle_time,
             tcp_listener,
             connect_receiver,
-            tcp_pipe_writer,
+            socket_manager,
             write_half_collect,
             init_codec,
         })
     }
-    #[inline]
-    pub fn writer_ref(&self) -> TcpPipeWriterRef<'_> {
-        TcpPipeWriterRef {
-            shadow: &self.tcp_pipe_writer,
-        }
-    }
 }
 
-impl TcpPipe {
-    /// Accept `TCP` pipelines from this kind pipe
-    pub async fn accept(&mut self) -> io::Result<TcpPipeLine> {
-        crate::select! {
+impl TcpTunnelFactory {
+    /// Accept `TCP` tunnel from this kind factory
+    pub async fn accept(&mut self) -> io::Result<TcpTunnel> {
+        tokio::select! {
             rs=self.connect_receiver.recv()=>{
                 let (route_key,read_half) = rs.
                     map_err(|_| io::Error::new(io::ErrorKind::Other,"connect_receiver done"))?;
-                Ok(TcpPipeLine::new(self.route_idle_time,route_key,read_half,self.write_half_collect.clone()))
+                Ok(TcpTunnel::new(self.route_idle_time,route_key,read_half,self.write_half_collect.clone()))
             },
             rs=self.tcp_listener.accept()=>{
                 let (tcp_stream,addr) = rs?;
@@ -90,13 +82,13 @@ impl TcpPipe {
                 let (decoder,encoder) = self.init_codec.codec(addr)?;
                 let read_half = ReadHalfBox::new(read_half,decoder);
                 self.write_half_collect.add_write_half(route_key,0, write_half,encoder);
-                Ok(TcpPipeLine::new(self.route_idle_time,route_key,read_half,self.write_half_collect.clone()))
+                Ok(TcpTunnel::new(self.route_idle_time,route_key,read_half,self.write_half_collect.clone()))
             }
         }
     }
 }
 
-pub struct TcpPipeLine {
+pub struct TcpTunnel {
     route_key: RouteKey,
     route_idle_time: Duration,
     tcp_read: OwnedReadHalf,
@@ -104,7 +96,7 @@ pub struct TcpPipeLine {
     write_half_collect: WriteHalfCollect,
 }
 
-impl TcpPipeLine {
+impl TcpTunnel {
     pub(crate) fn new(
         route_idle_time: Duration,
         route_key: RouteKey,
@@ -130,20 +122,20 @@ impl TcpPipeLine {
     }
 }
 
-impl Drop for TcpPipeLine {
+impl Drop for TcpTunnel {
     fn drop(&mut self) {
         self.write_half_collect.remove(&self.route_key);
     }
 }
 
-impl TcpPipeLine {
-    /// Writing `buf` to the target denoted by `route_key` via this pipeline
+impl TcpTunnel {
+    /// Writing `buf` to the target denoted by `route_key` via this tunnel
     pub async fn send(&self, buf: BytesMut) -> io::Result<()> {
         self.write_half_collect.send_to(buf, &self.route_key).await
     }
 
     pub(crate) async fn recv(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        match crate::async_compat::time::timeout(
+        match tokio::time::timeout(
             self.route_idle_time,
             self.decoder.decode(&mut self.tcp_read, buf),
         )
@@ -153,7 +145,7 @@ impl TcpPipeLine {
             Err(_) => Err(io::Error::from(io::ErrorKind::TimedOut)),
         }
     }
-    pub(crate) async fn recv_multi<B: AsMut<[u8]>>(
+    pub(crate) async fn batch_recv<B: AsMut<[u8]>>(
         &mut self,
         bufs: &mut [B],
         sizes: &mut [usize],
@@ -161,7 +153,7 @@ impl TcpPipeLine {
         if bufs.is_empty() || bufs.len() != sizes.len() {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "bufs error"));
         }
-        match crate::async_compat::time::timeout(
+        match tokio::time::timeout(
             self.route_idle_time,
             self.decoder.decode(&mut self.tcp_read, bufs[0].as_mut()),
         )
@@ -189,7 +181,7 @@ impl TcpPipeLine {
             Err(_) => Err(io::Error::from(io::ErrorKind::TimedOut)),
         }
     }
-    /// Receive bytes from this pipeline, which the configured Decoder pre-processes
+    /// Receive bytes from this tunnel, which the configured Decoder pre-processes
     /// `usize` in the `Ok` branch indicates how many bytes are received
     /// `RouteKey` in the `Ok` branch denotes the source where these bytes are received from
     pub async fn recv_from(&mut self, buf: &mut [u8]) -> io::Result<(usize, RouteKey)> {
@@ -198,12 +190,12 @@ impl TcpPipeLine {
             Err(e) => Err(e),
         }
     }
-    pub async fn recv_multi_from<B: AsMut<[u8]>>(
+    pub async fn batch_recv_from<B: AsMut<[u8]>>(
         &mut self,
         bufs: &mut [B],
         sizes: &mut [usize],
     ) -> io::Result<(usize, RouteKey)> {
-        match self.recv_multi(bufs, sizes).await {
+        match self.batch_recv(bufs, sizes).await {
             Ok(len) => Ok((len, self.route_key())),
             Err(e) => Err(e),
         }
@@ -266,7 +258,7 @@ impl WriteHalfCollect {
         self.write_half_map.insert(index, s);
         let collect = self.clone();
         let recycle_buf = self.recycle_buf.clone();
-        crate::async_compat::spawn(async move {
+        tokio::spawn(async move {
             let mut vec_buf = Vec::with_capacity(16);
             const IO_SLICE_CAPACITY: usize = 16;
             let mut io_buffer: Vec<IoSlice> = Vec::with_capacity(IO_SLICE_CAPACITY);
@@ -342,7 +334,7 @@ impl WriteHalfCollect {
 
         self.write_half_map.remove(&index_usize);
     }
-    pub(crate) fn get(&self, index: &usize) -> Option<Sender<BytesMut>> {
+    pub(crate) fn get_write_half(&self, index: &usize) -> Option<Sender<BytesMut>> {
         self.write_half_map.get(index).map(|v| v.value().clone())
     }
 
@@ -370,7 +362,7 @@ impl WriteHalfCollect {
     pub async fn send_to(&self, buf: BytesMut, route_key: &RouteKey) -> io::Result<()> {
         match route_key.index() {
             Index::Tcp(index) => {
-                let write_half = self.get(&index).ok_or_else(|| {
+                let write_half = self.get_write_half(&index).ok_or_else(|| {
                     io::Error::new(io::ErrorKind::Other, format!("not found {route_key:?}"))
                 })?;
                 if let Err(_e) = write_half.send(buf).await {
@@ -384,7 +376,7 @@ impl WriteHalfCollect {
     }
 }
 
-pub struct SocketLayer {
+pub struct SocketManager {
     lock: Mutex<()>,
     local_addr: SocketAddr,
     tcp_multiplexing_limit: usize,
@@ -394,7 +386,7 @@ pub struct SocketLayer {
     init_codec: Arc<Box<dyn InitCodec>>,
 }
 
-impl SocketLayer {
+impl SocketManager {
     pub(crate) fn new(
         local_addr: SocketAddr,
         tcp_multiplexing_limit: usize,
@@ -418,16 +410,16 @@ impl SocketLayer {
     }
 }
 
-impl SocketLayer {
+impl SocketManager {
     /// Multiple connections can be initiated to the target address.
     pub async fn multi_connect(
         &self,
         addr: SocketAddr,
         index_offset: usize,
     ) -> io::Result<RouteKey> {
-        self.multi_connect0(addr, index_offset, None).await
+        self.multi_connect_impl(addr, index_offset, None).await
     }
-    pub(crate) async fn multi_connect0(
+    pub(crate) async fn multi_connect_impl(
         &self,
         addr: SocketAddr,
         index_offset: usize,
@@ -447,7 +439,7 @@ impl SocketLayer {
         {
             return Ok(route_key);
         }
-        self.connect0(0, addr, index_offset, ttl).await
+        self.connect_impl(0, addr, index_offset, ttl).await
     }
     /// Initiate a connection.
     pub async fn connect(&self, addr: SocketAddr) -> io::Result<RouteKey> {
@@ -455,7 +447,7 @@ impl SocketLayer {
         if let Some(route_key) = self.write_half_collect.get_one_route_key(&addr) {
             return Ok(route_key);
         }
-        self.connect0(0, addr, 0, None).await
+        self.connect_impl(0, addr, 0, None).await
     }
     /// Reuse the bound port to initiate a connection, which can be used to penetrate NAT1 network type.
     pub async fn connect_reuse_port(&self, addr: SocketAddr) -> io::Result<RouteKey> {
@@ -463,7 +455,8 @@ impl SocketLayer {
         if let Some(route_key) = self.write_half_collect.get_one_route_key(&addr) {
             return Ok(route_key);
         }
-        self.connect0(self.local_addr.port(), addr, 0, None).await
+        self.connect_impl(self.local_addr.port(), addr, 0, None)
+            .await
     }
     pub async fn connect_reuse_port_raw(&self, addr: SocketAddr) -> io::Result<TcpStream> {
         let stream = connect_tcp(
@@ -475,7 +468,7 @@ impl SocketLayer {
         .await?;
         Ok(stream)
     }
-    async fn connect0(
+    async fn connect_impl(
         &self,
         bind_port: u16,
         addr: SocketAddr,
@@ -499,26 +492,28 @@ impl SocketLayer {
     }
 }
 
-impl TcpPipeWriter {
-    pub async fn send_to_addr_multi<A: Into<SocketAddr>>(
+impl SocketManager {
+    pub async fn multi_send_to<A: Into<SocketAddr>>(
         &self,
         buf: BytesMut,
         addr: A,
     ) -> io::Result<()> {
-        self.send_to_addr_multi0(buf, addr, None).await
+        self.multi_send_to_impl(buf, addr, None).await
     }
-    pub(crate) async fn send_to_addr_multi0<A: Into<SocketAddr>>(
+    pub(crate) async fn multi_send_to_impl<A: Into<SocketAddr>>(
         &self,
         buf: BytesMut,
         addr: A,
         ttl: Option<u32>,
     ) -> io::Result<()> {
         let index_offset = rand::rng().random_range(0..self.tcp_multiplexing_limit);
-        let route_key = self.multi_connect0(addr.into(), index_offset, ttl).await?;
+        let route_key = self
+            .multi_connect_impl(addr.into(), index_offset, ttl)
+            .await?;
         self.send_to(buf, &route_key).await
     }
     /// Reuse the bound port to initiate a connection, which can be used to penetrate NAT1 network type.
-    pub async fn send_to_addr_reuse_port<A: Into<SocketAddr>>(
+    pub async fn reuse_port_send_to<A: Into<SocketAddr>>(
         &self,
         buf: BytesMut,
         addr: A,
@@ -526,90 +521,37 @@ impl TcpPipeWriter {
         let route_key = self.connect_reuse_port(addr.into()).await?;
         self.send_to(buf, &route_key).await
     }
-    pub async fn send_to_addr<A: Into<SocketAddr>>(
-        &self,
-        buf: BytesMut,
-        addr: A,
-    ) -> io::Result<()> {
-        let route_key = self.connect(addr.into()).await?;
-        self.send_to(buf, &route_key).await
-    }
+
     /// Writing `buf` to the target denoted by `route_key`
-    pub async fn send_to(&self, buf: BytesMut, route_key: &RouteKey) -> io::Result<()> {
-        self.write_half_collect.send_to(buf, route_key).await
+    pub async fn send_to<D: ToRouteKeyForTcp<()>>(&self, buf: BytesMut, dest: D) -> io::Result<()> {
+        let route_key = ToRouteKeyForTcp::route_key(self, dest).await?;
+        self.write_half_collect.send_to(buf, &route_key).await
     }
-    pub async fn get(&self, addr: SocketAddr, index: usize) -> io::Result<TcpPipeWriterIndex<'_>> {
-        let route_key = self.multi_connect(addr, index).await?;
-        let write_half = self
-            .write_half_collect
-            .get(&route_key.index_usize())
-            .ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("not found with index={index}"),
-                )
-            })?;
+}
+pub trait ToRouteKeyForTcp<T> {
+    fn route_key(_: &SocketManager, _: Self) -> impl Future<Output = io::Result<RouteKey>>;
+}
 
-        Ok(TcpPipeWriterIndex {
-            shadow: write_half,
-            marker: Default::default(),
-        })
+impl ToRouteKeyForTcp<()> for RouteKey {
+    async fn route_key(_: &SocketManager, dest: RouteKey) -> io::Result<RouteKey> {
+        Ok(dest)
     }
 }
 
-#[derive(Clone)]
-pub struct TcpPipeWriter {
-    socket_layer: Arc<SocketLayer>,
-}
-
-impl Deref for TcpPipeWriter {
-    type Target = Arc<SocketLayer>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.socket_layer
+impl ToRouteKeyForTcp<()> for &RouteKey {
+    async fn route_key(_: &SocketManager, dest: &RouteKey) -> io::Result<RouteKey> {
+        Ok(*dest)
     }
 }
 
-pub struct TcpPipeWriterRef<'a> {
-    shadow: &'a Arc<SocketLayer>,
-}
-
-impl Clone for TcpPipeWriterRef<'_> {
-    fn clone(&self) -> Self {
-        *self
+impl ToRouteKeyForTcp<()> for &mut RouteKey {
+    async fn route_key(_: &SocketManager, dest: &mut RouteKey) -> io::Result<RouteKey> {
+        Ok(*dest)
     }
 }
-
-impl Copy for TcpPipeWriterRef<'_> {}
-
-impl TcpPipeWriterRef<'_> {
-    pub fn to_owned(&self) -> TcpPipeWriter {
-        TcpPipeWriter {
-            socket_layer: self.shadow.clone(),
-        }
-    }
-}
-
-impl Deref for TcpPipeWriterRef<'_> {
-    type Target = Arc<SocketLayer>;
-
-    fn deref(&self) -> &Self::Target {
-        self.shadow
-    }
-}
-
-pub struct TcpPipeWriterIndex<'a> {
-    shadow: Sender<BytesMut>,
-    marker: PhantomData<&'a ()>,
-}
-
-impl TcpPipeWriterIndex<'_> {
-    pub async fn send(&self, buf: BytesMut) -> io::Result<()> {
-        if let Err(_e) = self.shadow.send(buf).await {
-            Err(io::Error::from(io::ErrorKind::WriteZero))?
-        } else {
-            Ok(())
-        }
+impl<S: Into<SocketAddr>> ToRouteKeyForTcp<()> for S {
+    async fn route_key(socket_manager: &SocketManager, dest: Self) -> io::Result<RouteKey> {
+        socket_manager.connect(dest.into()).await
     }
 }
 
@@ -728,7 +670,6 @@ pub trait Encoder: Send + Sync {
 }
 
 #[cfg(test)]
-#[cfg(feature = "use-tokio")]
 mod tests {
     use async_trait::async_trait;
     use std::io;
@@ -736,21 +677,21 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 
-    use crate::pipe::config::TcpPipeConfig;
-    use crate::pipe::tcp_pipe::{Decoder, Encoder, InitCodec, TcpPipe};
+    use crate::tunnel::config::TcpTunnelConfig;
+    use crate::tunnel::tcp::{Decoder, Encoder, InitCodec, TcpTunnelFactory};
 
     #[tokio::test]
-    pub async fn create_tcp_pipe() {
-        let config: TcpPipeConfig = TcpPipeConfig::default();
-        let tcp_pipe = TcpPipe::new(config).unwrap();
-        drop(tcp_pipe)
+    pub async fn create_tcp_tunnel() {
+        let config: TcpTunnelConfig = TcpTunnelConfig::default();
+        let tcp_tunnel_factory = TcpTunnelFactory::new(config).unwrap();
+        drop(tcp_tunnel_factory)
     }
 
     #[tokio::test]
-    pub async fn create_codec_tcp_pipe() {
-        let config = TcpPipeConfig::new(Box::new(MyInitCodeC));
-        let tcp_pipe = TcpPipe::new(config).unwrap();
-        drop(tcp_pipe)
+    pub async fn create_codec_tcp_tunnel() {
+        let config = TcpTunnelConfig::new(Box::new(MyInitCodeC));
+        let tcp_tunnel_factory = TcpTunnelFactory::new(config).unwrap();
+        drop(tcp_tunnel_factory)
     }
 
     #[derive(Clone)]
