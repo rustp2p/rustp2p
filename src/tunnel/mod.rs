@@ -121,9 +121,8 @@ impl TunnelManager {
             node_context.store_self_id(node_id)?;
         }
         if let Some(addrs) = direct_addrs {
-            node_context.set_direct_nodes(addrs);
+            node_context.update_direct_nodes(addrs).await?;
         }
-        node_context.update_direct_nodes().await?;
         if let Some(addrs) = mapping_addrs {
             node_context.set_mapping_addrs(addrs);
         }

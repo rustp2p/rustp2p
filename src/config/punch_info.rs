@@ -112,7 +112,7 @@ impl NodePunchInfo {
             seq,
         }
     }
-    pub fn punch_consult_info(&self, seq: u32) -> PunchConsultInfo {
+    pub(crate) fn punch_consult_info(&self, seq: u32) -> PunchConsultInfo {
         PunchConsultInfo::new(self.punch_model_box.clone(), self.nat_info(seq))
     }
 }

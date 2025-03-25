@@ -18,6 +18,7 @@ pub async fn id_route_query_loop(
             log::warn!("poll_peer_node, e={e:?}");
         }
         tokio::time::sleep(query_id_interval).await;
+        let _ = tunnel_tx.node_context().update_direct_nodes0().await;
         tunnel_tx
             .node_context()
             .clear_timeout_reachable_nodes(query_id_interval);
