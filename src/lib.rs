@@ -5,6 +5,7 @@ pub mod config;
 pub mod extend;
 pub mod tunnel;
 
+use crate::tunnel::RecvMetadata;
 use cipher::Algorithm;
 use config::{TcpTunnelConfig, TunnelManagerConfig, UdpTunnelConfig};
 use flume::{Receiver, Sender};
@@ -15,49 +16,9 @@ use std::sync::Arc;
 use tokio::task::JoinHandle;
 use tunnel::{PeerNodeAddress, RecvUserData, Tunnel, TunnelManager, TunnelTransmitHub};
 
-mod trait_help {
-    use crate::protocol::node_id::NodeID;
-    use crate::tunnel::{SendPacket, TunnelTransmitHub};
-    use rust_p2p_core::route::RouteKey;
-    use std::future::Future;
-    use std::io;
-
-    pub trait Destination {
-        fn send_to(
-            &self,
-            sender: &TunnelTransmitHub,
-            packet: SendPacket,
-        ) -> impl Future<Output = Result<(), io::Error>>;
-    }
-
-    impl Destination for NodeID {
-        async fn send_to(&self, sender: &TunnelTransmitHub, packet: SendPacket) -> io::Result<()> {
-            sender.send_packet_to(packet, self).await
-        }
-    }
-
-    impl Destination for &NodeID {
-        async fn send_to(&self, sender: &TunnelTransmitHub, packet: SendPacket) -> io::Result<()> {
-            sender.send_packet_to(packet, self).await
-        }
-    }
-
-    impl Destination for RouteKey {
-        async fn send_to(&self, sender: &TunnelTransmitHub, packet: SendPacket) -> io::Result<()> {
-            sender.send_to_route(packet.into_buf().as_ref(), self).await
-        }
-    }
-
-    impl Destination for &RouteKey {
-        async fn send_to(&self, sender: &TunnelTransmitHub, packet: SendPacket) -> io::Result<()> {
-            sender.send_to_route(packet.into_buf().as_ref(), self).await
-        }
-    }
-}
-
 #[derive(Clone)]
 pub struct EndPoint {
-    receiver: Receiver<RecvUserData>,
+    receiver: Receiver<(RecvUserData, RecvMetadata)>,
     sender: Arc<TunnelTransmitHub>,
     _handle: Arc<HandleOwner>,
 }
@@ -66,20 +27,17 @@ struct HandleOwner {
 }
 
 impl EndPoint {
-    pub async fn recv(&self) -> std::io::Result<RecvUserData> {
+    pub async fn recv_from(&self) -> io::Result<(RecvUserData, RecvMetadata)> {
         self.receiver
             .recv_async()
             .await
-            .map_err(|_| std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "shutdown"))
+            .map_err(|_| io::Error::new(io::ErrorKind::UnexpectedEof, "shutdown"))
     }
-    pub async fn send_to<D: trait_help::Destination>(
-        &self,
-        buf: &[u8],
-        dest: D,
-    ) -> std::io::Result<()> {
+
+    pub async fn send_to<D: Into<NodeID>>(&self, buf: &[u8], dest: D) -> io::Result<()> {
         let mut send_packet = self.sender.allocate_send_packet();
         send_packet.set_payload(buf);
-        dest.send_to(&self.sender, send_packet).await
+        self.sender.send_packet_to(send_packet, &dest.into()).await
     }
 
     pub async fn broadcast(&self, buf: &[u8]) -> io::Result<()> {
@@ -193,7 +151,7 @@ impl Default for Builder {
     }
 }
 
-async fn handle(mut tunnel_rx: Tunnel, sender: Sender<RecvUserData>) {
+async fn handle(mut tunnel_rx: Tunnel, sender: Sender<(RecvUserData, RecvMetadata)>) {
     let mut list = Vec::with_capacity(16);
     loop {
         let rs = match tunnel_rx.batch_recv(&mut list).await {

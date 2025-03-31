@@ -522,17 +522,17 @@ pub struct Tunnel {
 
 const BUF_SIZE: usize = 16;
 
-type RecvRs = Result<Result<RecvUserData, HandleError>, RecvError>;
+type RecvRs = Result<Result<(RecvUserData, RecvMetadata), HandleError>, RecvError>;
 
 impl Tunnel {
     #[allow(dead_code)]
-    pub(crate) async fn next(&mut self) -> Result<Result<RecvUserData, HandleError>, RecvError> {
+    pub(crate) async fn next(&mut self) -> RecvRs {
         self.preprocess_next::<crate::config::DefaultInterceptor>(None)
             .await
     }
     pub(crate) async fn batch_recv(
         &mut self,
-        data_vec: &mut Vec<RecvUserData>,
+        data_vec: &mut Vec<(RecvUserData, RecvMetadata)>,
     ) -> Result<Result<(), HandleError>, RecvError> {
         self.preprocess_batch_recv::<crate::config::DefaultInterceptor>(None, data_vec)
             .await
@@ -542,7 +542,7 @@ impl Tunnel {
     pub(crate) async fn preprocess_batch_recv<I: crate::config::DataInterceptor>(
         &mut self,
         interceptor: Option<&I>,
-        data_vec: &mut Vec<RecvUserData>,
+        data_vec: &mut Vec<(RecvUserData, RecvMetadata)>,
     ) -> Result<Result<(), HandleError>, RecvError> {
         self.recv_addrs.resize(BUF_SIZE, RouteKey::default());
         self.recv_sizes.resize(BUF_SIZE, 0);
@@ -705,10 +705,10 @@ impl Tunnel {
                                 io::Error::new(
                                     io::ErrorKind::Other,
                                     format!(
-                                    "Inconsistent encryption status: data tag-{} current tag-{}",
-                                    rs.is_encrypt,
-                                    self.node_context.cipher.is_some()
-                                ),
+                                        "Inconsistent encryption status: data tag-{} current tag-{}",
+                                        rs.is_encrypt,
+                                        self.node_context.cipher.is_some()
+                                    ),
                                 ),
                             ))));
                         }
@@ -722,15 +722,20 @@ impl Tunnel {
                         }
                     }
                     block.truncate(rs.end);
-                    Ok(Ok(Ok(RecvUserData {
-                        _offset: rs.start,
-                        _src_id: rs.src_id,
-                        _dest_id: rs.dest_id,
-                        _route_key: rs.route_key,
-                        _data: block,
-                        _ttl: rs.ttl,
-                        _max_ttl: rs.max_ttl,
-                    })))
+                    Ok(Ok(Ok((
+                        RecvUserData {
+                            _offset: rs.start,
+
+                            _data: block,
+                        },
+                        RecvMetadata {
+                            _src_id: rs.src_id,
+                            _dest_id: rs.dest_id,
+                            _route_key: rs.route_key,
+                            _ttl: rs.ttl,
+                            _max_ttl: rs.max_ttl,
+                        },
+                    ))))
                 } else {
                     Err(block)
                 }
@@ -1238,15 +1243,40 @@ struct HandleResultInner {
     #[cfg(any(feature = "aes-gcm", feature = "chacha20-poly1305"))]
     pub(crate) is_encrypt: bool,
 }
-
-pub struct RecvUserData {
-    _offset: usize,
-    _data: Data,
+#[derive(Copy, Clone, Debug)]
+pub struct RecvMetadata {
     _ttl: u8,
     _max_ttl: u8,
     _src_id: NodeID,
     _dest_id: NodeID,
     _route_key: RouteKey,
+}
+impl RecvMetadata {
+    pub fn ttl(&self) -> u8 {
+        self._ttl
+    }
+    pub fn max_ttl(&self) -> u8 {
+        self._max_ttl
+    }
+    pub fn src_id(&self) -> NodeID {
+        self._src_id
+    }
+    pub fn dest_id(&self) -> NodeID {
+        self._dest_id
+    }
+    pub fn route_key(&self) -> RouteKey {
+        self._route_key
+    }
+    pub fn is_relay(&self) -> bool {
+        (self._max_ttl - self._ttl) != 0
+    }
+    pub fn is_broadcast(&self) -> bool {
+        self._dest_id.is_broadcast()
+    }
+}
+pub struct RecvUserData {
+    _offset: usize,
+    _data: Data,
 }
 
 pub enum Data {
@@ -1299,29 +1329,11 @@ impl RecvUserData {
 }
 
 impl RecvUserData {
-    pub fn ttl(&self) -> u8 {
-        self._ttl
-    }
-    pub fn max_ttl(&self) -> u8 {
-        self._max_ttl
-    }
     pub fn payload(&self) -> &[u8] {
         &self._data[self._offset..]
     }
     pub fn payload_mut(&mut self) -> &mut [u8] {
         &mut self._data[self._offset..]
-    }
-    pub fn src_id(&self) -> NodeID {
-        self._src_id
-    }
-    pub fn dest_id(&self) -> NodeID {
-        self._dest_id
-    }
-    pub fn route_key(&self) -> RouteKey {
-        self._route_key
-    }
-    pub fn is_relay(&self) -> bool {
-        (self._max_ttl - self._ttl) != 0
     }
 }
 
