@@ -66,8 +66,8 @@ pub async fn main() -> io::Result<()> {
     if let Some(request) = request {
         endpoint.send_to(b"hello", NodeID::from(request)).await?;
     } else {
-        let data = endpoint.recv().await?;
-        println!("recv: {:?} {:?}", data.payload(), data.src_id())
+        let (data, metadata) = endpoint.recv_from().await?;
+        println!("recv: {:?} {:?}", data.payload(), metadata.src_id())
     }
     quit.recv().await.expect("quit error");
     log::info!("exit!!!!");

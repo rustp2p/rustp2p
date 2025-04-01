@@ -5,7 +5,8 @@ pub mod config;
 pub mod extend;
 pub mod tunnel;
 
-use crate::tunnel::RecvMetadata;
+use crate::tunnel::{RecvMetadata, RecvResult};
+use async_trait::async_trait;
 use cipher::Algorithm;
 use config::{TcpTunnelConfig, TunnelManagerConfig, UdpTunnelConfig};
 use flume::{Receiver, Sender};
@@ -68,6 +69,7 @@ pub struct Builder {
     group_code: Option<GroupCode>,
     encryption: Option<Algorithm>,
     node_id: Option<NodeID>,
+    interceptor: Option<Interceptor>,
 }
 impl Builder {
     pub fn new() -> Self {
@@ -78,6 +80,7 @@ impl Builder {
             group_code: None,
             encryption: None,
             node_id: None,
+            interceptor: None,
         }
     }
     pub fn udp_ports(mut self, ports: Vec<u16>) -> Self {
@@ -104,7 +107,13 @@ impl Builder {
         self.node_id = Some(node_id);
         self
     }
-    pub async fn build(self) -> std::io::Result<EndPoint> {
+    pub fn interceptor<I: config::DataInterceptor + 'static>(mut self, interceptor: I) -> Self {
+        self.interceptor = Some(Interceptor {
+            inner: Arc::new(interceptor),
+        });
+        self
+    }
+    pub async fn build(self) -> io::Result<EndPoint> {
         let mut config = TunnelManagerConfig::empty()
             .set_udp_tunnel_config(
                 UdpTunnelConfig::default().set_udp_ports(self.udp_ports.unwrap_or_default()),
@@ -112,29 +121,30 @@ impl Builder {
             .set_tcp_tunnel_config(
                 TcpTunnelConfig::default().set_tcp_port(self.tcp_port.unwrap_or(0)),
             )
-            .set_group_code(self.group_code.ok_or(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
+            .set_group_code(self.group_code.ok_or(io::Error::new(
+                io::ErrorKind::InvalidInput,
                 "group_code is required",
             ))?)
-            .set_node_id(self.node_id.ok_or(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
+            .set_node_id(self.node_id.ok_or(io::Error::new(
+                io::ErrorKind::InvalidInput,
                 "node_id is required",
             ))?);
         if let Some(peers) = self.peers {
             config = config.set_direct_addrs(peers);
         }
         #[cfg(any(feature = "aes-gcm", feature = "chacha20-poly1305"))]
-        let config = config.set_encryption(self.encryption.ok_or(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
+        let config = config.set_encryption(self.encryption.ok_or(io::Error::new(
+            io::ErrorKind::InvalidInput,
             "encryption is required",
         ))?);
 
         let (sender, receiver) = flume::unbounded();
         let mut tunnel_manager = TunnelManager::new(config).await?;
         let writer = Arc::new(tunnel_manager.tunnel_send_hub());
+        let interceptor = self.interceptor;
         let handle = tokio::spawn(async move {
             while let Ok(tunnel_rx) = tunnel_manager.dispatch().await {
-                tokio::spawn(handle(tunnel_rx, sender.clone()));
+                tokio::spawn(handle(tunnel_rx, sender.clone(), interceptor.clone()));
             }
         });
         Ok(EndPoint {
@@ -151,10 +161,18 @@ impl Default for Builder {
     }
 }
 
-async fn handle(mut tunnel_rx: Tunnel, sender: Sender<(RecvUserData, RecvMetadata)>) {
+async fn handle(
+    mut tunnel_rx: Tunnel,
+    sender: Sender<(RecvUserData, RecvMetadata)>,
+    interceptor: Option<Interceptor>,
+) {
     let mut list = Vec::with_capacity(16);
+    let interceptor = interceptor.as_ref();
     loop {
-        let rs = match tunnel_rx.batch_recv(&mut list).await {
+        let rs = match tunnel_rx
+            .preprocess_batch_recv(interceptor, &mut list)
+            .await
+        {
             Ok(rs) => rs,
             Err(e) => {
                 log::debug!("recv_from {e:?},{:?}", tunnel_rx.protocol());
@@ -170,5 +188,15 @@ async fn handle(mut tunnel_rx: Tunnel, sender: Sender<(RecvUserData, RecvMetadat
                 break;
             }
         }
+    }
+}
+#[derive(Clone)]
+pub(crate) struct Interceptor {
+    inner: Arc<dyn config::DataInterceptor>,
+}
+#[async_trait]
+impl config::DataInterceptor for Interceptor {
+    async fn pre_handle(&self, data: &mut RecvResult) -> bool {
+        self.inner.pre_handle(data).await
     }
 }

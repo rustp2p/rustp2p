@@ -521,10 +521,11 @@ impl InitCodec for LengthPrefixedInitCodec {
     }
 }
 #[async_trait]
-pub trait DataInterceptor {
+pub trait DataInterceptor: Send + Sync {
     async fn pre_handle(&self, data: &mut RecvResult) -> bool;
 }
-pub(crate) struct DefaultInterceptor;
+#[derive(Clone)]
+pub struct DefaultInterceptor;
 
 #[async_trait]
 impl DataInterceptor for DefaultInterceptor {

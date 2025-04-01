@@ -530,6 +530,7 @@ impl Tunnel {
         self.preprocess_next::<crate::config::DefaultInterceptor>(None)
             .await
     }
+    #[allow(dead_code)]
     pub(crate) async fn batch_recv(
         &mut self,
         data_vec: &mut Vec<(RecvUserData, RecvMetadata)>,
@@ -538,7 +539,6 @@ impl Tunnel {
             .await
     }
     /// Receive a batch of data and use interceptors.
-    #[allow(dead_code)]
     pub(crate) async fn preprocess_batch_recv<I: crate::config::DataInterceptor>(
         &mut self,
         interceptor: Option<&I>,

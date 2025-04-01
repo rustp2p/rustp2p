@@ -77,13 +77,13 @@ pub async fn main() -> io::Result<()> {
     let endpoint_clone = endpoint.clone();
     let device_clone = device.clone();
     tokio::spawn(async move {
-        while let Ok(data) = endpoint_clone.recv().await {
+        while let Ok((data, metadata)) = endpoint_clone.recv_from().await {
             log::debug!(
                 "recv from peer from addr: {:?}, {:?} ->{:?} is_relay:{}\n{:?}",
-                data.route_key().addr(),
-                data.src_id(),
-                data.dest_id(),
-                data.is_relay(),
+                metadata.route_key().addr(),
+                metadata.src_id(),
+                metadata.dest_id(),
+                metadata.is_relay(),
                 pnet_packet::ipv4::Ipv4Packet::new(data.payload())
             );
             if let Err(e) = device_clone.send(data.payload()).await {
