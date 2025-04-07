@@ -95,12 +95,12 @@ impl TunnelManager {
         };
         let (tunnel_factory, puncher, idle_route_manager) =
             rust_p2p_core::tunnel::new_tunnel_component::<NodeID>(config)?;
-        let local_tcp_port = if let Some(v) = tunnel_factory.shared_tcp_socket_manager() {
+        let local_tcp_port = if let Some(v) = tunnel_factory.tcp_socket_manager_as_ref() {
             v.local_addr().port()
         } else {
             0
         };
-        let local_udp_ports = if let Some(v) = tunnel_factory.shared_udp_socket_manager() {
+        let local_udp_ports = if let Some(v) = tunnel_factory.udp_socket_manager_as_ref() {
             v.local_ports()?
         } else {
             vec![]

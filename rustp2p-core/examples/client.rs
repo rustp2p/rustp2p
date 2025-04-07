@@ -201,8 +201,7 @@ impl ContextHandler {
                 PUSH_PEER_LIST => {
                     let mut guard = self.peer_list.lock();
                     *guard =
-                        serde_json::from_str(&String::from_utf8(buf[12..len].to_vec()).unwrap())
-                            .unwrap();
+                        serde_json::from_str(core::str::from_utf8(&buf[12..len]).unwrap()).unwrap();
                     log::info!("peer_list={guard:?}");
                 }
                 PUNCH_START_1 => {
@@ -211,8 +210,7 @@ impl ContextHandler {
                     request.put_u32(self.my_id);
                     request.put_u32(src_id);
                     let peer_nat_info: NatInfo =
-                        serde_json::from_str(&String::from_utf8(buf[12..len].to_vec()).unwrap())
-                            .unwrap();
+                        serde_json::from_str(core::str::from_utf8(&buf[12..len]).unwrap()).unwrap();
                     log::info!("peer_id={src_id},peer_nat_info={peer_nat_info:?}");
                     let mut nat_info = self.nat_info.lock().clone();
                     nat_info.seq = peer_nat_info.seq;
@@ -243,8 +241,7 @@ impl ContextHandler {
                 }
                 PUNCH_START_2 => {
                     let peer_nat_info: NatInfo =
-                        serde_json::from_str(&String::from_utf8(buf[12..len].to_vec()).unwrap())
-                            .unwrap();
+                        serde_json::from_str(core::str::from_utf8(&buf[12..len]).unwrap()).unwrap();
                     log::info!("peer_id={src_id},peer_nat_info={peer_nat_info:?}");
                     let mut request = BytesMut::new();
                     request.put_u32(PUNCH_REQ);
@@ -286,8 +283,7 @@ impl ContextHandler {
                 }
                 PUBLIC_ADDR_RES => {
                     let public_addr =
-                        SocketAddr::from_str(&String::from_utf8(buf[12..len].to_vec()).unwrap())
-                            .unwrap();
+                        SocketAddr::from_str(core::str::from_utf8(&buf[12..len]).unwrap()).unwrap();
                     log::info!("public_addr={public_addr}");
                     let mut guard = self.nat_info.lock();
                     if let Some(port) = guard.public_ports.get_mut(route_key.index_usize()) {

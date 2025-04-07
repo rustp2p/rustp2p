@@ -2,7 +2,7 @@ use std::io;
 use std::io::IoSlice;
 use std::net::SocketAddr;
 use std::ops::Deref;
-use std::sync::{Arc, Weak};
+use std::sync::Arc;
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
 use tokio::io::Interest;
@@ -441,18 +441,22 @@ impl UdpTunnelFactory {
     }
     /// Accept `UDP` tunnel from this kind factory
     pub async fn dispatch(&mut self) -> io::Result<UdpTunnel> {
-        let udp_tunnel = self
+        let mut udp_tunnel = self
             .tunnel_receiver
             .recv()
             .await
             .map_err(|_| io::Error::new(io::ErrorKind::Other, "Udp tunnel close"))?;
-        if !self
+        let option = self
             .socket_manager
             .sender_map
-            .contains_key(&udp_tunnel.index)
-        {
+            .get(&udp_tunnel.index)
+            .map(|v| v.value().clone());
+        let sender = if let Some(v) = option {
+            v
+        } else {
             let (s, mut r) = tachyonix::channel(32);
             let index = udp_tunnel.index;
+            let sender = s.clone();
             self.socket_manager.sender_map.insert(index, s);
 
             let socket_manager = self.socket_manager.clone();
@@ -518,29 +522,21 @@ impl UdpTunnelFactory {
                 }
                 socket_manager.sender_map.remove(&index);
             });
+            sender
+        };
+        if udp_tunnel.sender.is_none() {
+            udp_tunnel.sender.replace(UdpTunnelSenderBox { sender });
         }
         if udp_tunnel.reusable {
             Ok(UdpTunnel::main_new(
-                udp_tunnel.index,
-                udp_tunnel.udp,
-                self.tunnel_dispatcher.clone(),
-                Arc::downgrade(&self.socket_manager),
+                udp_tunnel,
+                self.manager().tunnel_dispatcher.clone(),
             ))
         } else {
-            Ok(UdpTunnel::sub_new(
-                udp_tunnel.index,
-                udp_tunnel.udp,
-                udp_tunnel.close_notify.unwrap(),
-                Arc::downgrade(&self.socket_manager),
-            ))
+            Ok(UdpTunnel::sub_new(udp_tunnel))
         }
     }
-}
-
-impl Deref for UdpTunnelFactory {
-    type Target = SocketManager;
-
-    fn deref(&self) -> &Self::Target {
+    pub fn manager(&self) -> &Arc<SocketManager> {
         &self.socket_manager
     }
 }
@@ -631,18 +627,17 @@ pub struct UdpTunnel {
     udp: Option<Arc<UdpSocket>>,
     close_notify: Option<async_broadcast::Receiver<()>>,
     re_dispatcher: Option<Sender<InactiveUdpTunnel>>,
-    socket_manager_weak: Option<UdpTunnelWeak>,
+    sender: Option<UdpTunnelSenderBox>,
 }
-struct UdpTunnelWeak {
-    index: Index,
-    socket_manager_weak: Weak<SocketManager>,
+struct UdpTunnelSenderBox {
+    sender: Sender<(BytesMut, SocketAddr)>,
 }
 struct InactiveUdpTunnel {
     reusable: bool,
     index: Index,
     udp: Arc<UdpSocket>,
     close_notify: Option<async_broadcast::Receiver<()>>,
-    _socket_manager_weak: Option<UdpTunnelWeak>,
+    sender: Option<UdpTunnelSenderBox>,
 }
 impl InactiveUdpTunnel {
     fn new(
@@ -656,48 +651,46 @@ impl InactiveUdpTunnel {
             index,
             udp,
             close_notify,
-            _socket_manager_weak: None,
+            sender: None,
         }
     }
-    fn redistribute(
-        index: Index,
-        udp: Arc<UdpSocket>,
-        close_notify: Option<async_broadcast::Receiver<()>>,
-        socket_manager_weak: UdpTunnelWeak,
-    ) -> Self {
+    fn redistribute(index: Index, udp: Arc<UdpSocket>, sender: UdpTunnelSenderBox) -> Self {
         Self {
             reusable: true,
             index,
             udp,
-            close_notify,
-            _socket_manager_weak: Some(socket_manager_weak),
+            close_notify: None,
+            sender: Some(sender),
         }
     }
 }
-impl Drop for UdpTunnelWeak {
+impl Deref for UdpTunnelSenderBox {
+    type Target = Sender<(BytesMut, SocketAddr)>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.sender
+    }
+}
+impl Drop for UdpTunnelSenderBox {
     fn drop(&mut self) {
-        if let Some(socket_manager) = self.socket_manager_weak.upgrade() {
-            socket_manager.sender_map.remove(&self.index);
-        }
+        self.sender.close();
     }
 }
 impl Drop for UdpTunnel {
     fn drop(&mut self) {
+        let Some(sender) = self.sender.take() else {
+            return;
+        };
+        if sender.is_closed() {
+            return;
+        }
         let Some(udp) = self.udp.take() else {
             return;
         };
         let Some(re_dispatcher) = self.re_dispatcher.take() else {
             return;
         };
-        let Some(socket_manager_weak) = self.socket_manager_weak.take() else {
-            return;
-        };
-        let rs = re_dispatcher.try_send(InactiveUdpTunnel::redistribute(
-            self.index,
-            udp,
-            None,
-            socket_manager_weak,
-        ));
+        let rs = re_dispatcher.try_send(InactiveUdpTunnel::redistribute(self.index, udp, sender));
         if let Err(TrySendError::Full(_)) = rs {
             log::warn!("Udp Tunnel TrySendError full");
         }
@@ -705,38 +698,25 @@ impl Drop for UdpTunnel {
 }
 
 impl UdpTunnel {
-    fn sub_new(
-        index: Index,
-        udp: Arc<UdpSocket>,
-        close_notify: async_broadcast::Receiver<()>,
-        socket_manager_weak: Weak<SocketManager>,
-    ) -> Self {
+    fn sub_new(inactive_udp_tunnel: InactiveUdpTunnel) -> Self {
         Self {
-            index,
-            udp: Some(udp),
-            close_notify: Some(close_notify),
+            index: inactive_udp_tunnel.index,
+            udp: Some(inactive_udp_tunnel.udp),
+            close_notify: inactive_udp_tunnel.close_notify,
             re_dispatcher: None,
-            socket_manager_weak: Some(UdpTunnelWeak {
-                index,
-                socket_manager_weak,
-            }),
+            sender: inactive_udp_tunnel.sender,
         }
     }
     fn main_new(
-        index: Index,
-        udp: Arc<UdpSocket>,
+        inactive_udp_tunnel: InactiveUdpTunnel,
         re_sender: Sender<InactiveUdpTunnel>,
-        socket_manager_weak: Weak<SocketManager>,
     ) -> Self {
         Self {
-            index,
-            udp: Some(udp),
+            index: inactive_udp_tunnel.index,
+            udp: Some(inactive_udp_tunnel.udp),
             close_notify: None,
             re_dispatcher: Some(re_sender),
-            socket_manager_weak: Some(UdpTunnelWeak {
-                index,
-                socket_manager_weak,
-            }),
+            sender: inactive_udp_tunnel.sender,
         }
     }
     pub fn done(&mut self) {
@@ -744,7 +724,7 @@ impl UdpTunnel {
         _ = self.close_notify.take();
         _ = self.re_dispatcher.take();
         _ = self.re_dispatcher.take();
-        _ = self.socket_manager_weak.take();
+        _ = self.sender.take();
     }
 }
 
@@ -763,6 +743,20 @@ impl UdpTunnel {
         if let Some(udp) = &self.udp {
             udp.try_send_to(buf, addr.into())?;
             Ok(())
+        } else {
+            Err(io::Error::new(io::ErrorKind::Other, "closed"))
+        }
+    }
+    pub async fn send_bytes_to<A: Into<SocketAddr>>(
+        &self,
+        buf: BytesMut,
+        addr: A,
+    ) -> io::Result<()> {
+        if let Some(sender) = &self.sender {
+            sender
+                .send((buf, addr.into()))
+                .await
+                .map_err(|_| io::Error::from(io::ErrorKind::WriteZero))
         } else {
             Err(io::Error::new(io::ErrorKind::Other, "closed"))
         }
@@ -1004,7 +998,7 @@ mod tests {
             join.push(tokio::spawn(tunnel_recv(rs.unwrap())));
             count += 1;
         }
-        tunnel_factory.switch_low();
+        tunnel_factory.manager().switch_low();
 
         let mut close_tunnel_count = 0;
         for x in join {

@@ -22,7 +22,7 @@ use tokio::net::{TcpListener, TcpStream};
 pub struct TcpTunnelFactory {
     route_idle_time: Duration,
     tcp_listener: TcpListener,
-    connect_receiver: Receiver<(RouteKey, ReadHalfBox)>,
+    connect_receiver: Receiver<(RouteKey, ReadHalfBox, Sender<BytesMut>)>,
     #[allow(dead_code)]
     pub(crate) socket_manager: Arc<SocketManager>,
     write_half_collect: WriteHalfCollect,
@@ -70,9 +70,9 @@ impl TcpTunnelFactory {
     pub async fn accept(&mut self) -> io::Result<TcpTunnel> {
         tokio::select! {
             rs=self.connect_receiver.recv()=>{
-                let (route_key,read_half) = rs.
+                let (route_key,read_half,sender) = rs.
                     map_err(|_| io::Error::new(io::ErrorKind::Other,"connect_receiver done"))?;
-                Ok(TcpTunnel::new(self.route_idle_time,route_key,read_half,self.write_half_collect.clone()))
+                Ok(TcpTunnel::new(self.route_idle_time,route_key,read_half,sender))
             },
             rs=self.tcp_listener.accept()=>{
                 let (tcp_stream,addr) = rs?;
@@ -81,10 +81,13 @@ impl TcpTunnelFactory {
                 let (read_half,write_half) = tcp_stream.into_split();
                 let (decoder,encoder) = self.init_codec.codec(addr)?;
                 let read_half = ReadHalfBox::new(read_half,decoder);
-                self.write_half_collect.add_write_half(route_key,0, write_half,encoder);
-                Ok(TcpTunnel::new(self.route_idle_time,route_key,read_half,self.write_half_collect.clone()))
+                let sender = self.write_half_collect.add_write_half(route_key,0, write_half,encoder);
+                Ok(TcpTunnel::new(self.route_idle_time,route_key,read_half,sender))
             }
         }
+    }
+    pub fn manager(&self) -> &Arc<SocketManager> {
+        &self.socket_manager
     }
 }
 
@@ -93,7 +96,7 @@ pub struct TcpTunnel {
     route_idle_time: Duration,
     tcp_read: OwnedReadHalf,
     decoder: Box<dyn Decoder>,
-    write_half_collect: WriteHalfCollect,
+    sender: Sender<BytesMut>,
 }
 
 impl TcpTunnel {
@@ -101,7 +104,7 @@ impl TcpTunnel {
         route_idle_time: Duration,
         route_key: RouteKey,
         read: ReadHalfBox,
-        write_half_collect: WriteHalfCollect,
+        sender: Sender<BytesMut>,
     ) -> Self {
         let decoder = read.decoder;
         let tcp_read = read.read_half;
@@ -110,7 +113,7 @@ impl TcpTunnel {
             route_idle_time,
             tcp_read,
             decoder,
-            write_half_collect,
+            sender,
         }
     }
     #[inline]
@@ -118,23 +121,26 @@ impl TcpTunnel {
         self.route_key
     }
     pub fn done(&mut self) {
-        self.write_half_collect.remove(&self.route_key);
+        self.sender.close();
     }
 }
 
 impl Drop for TcpTunnel {
     fn drop(&mut self) {
-        self.write_half_collect.remove(&self.route_key);
+        self.done();
     }
 }
 
 impl TcpTunnel {
     /// Writing `buf` to the target denoted by `route_key` via this tunnel
     pub async fn send(&self, buf: BytesMut) -> io::Result<()> {
-        self.write_half_collect.send_to(buf, &self.route_key).await
+        self.sender
+            .send(buf)
+            .await
+            .map_err(|_| io::Error::from(io::ErrorKind::WriteZero))
     }
 
-    pub(crate) async fn recv(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+    pub async fn recv(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         match tokio::time::timeout(
             self.route_idle_time,
             self.decoder.decode(&mut self.tcp_read, buf),
@@ -145,7 +151,7 @@ impl TcpTunnel {
             Err(_) => Err(io::Error::from(io::ErrorKind::TimedOut)),
         }
     }
-    pub(crate) async fn batch_recv<B: AsMut<[u8]>>(
+    pub async fn batch_recv<B: AsMut<[u8]>>(
         &mut self,
         bufs: &mut [B],
         sizes: &mut [usize],
@@ -239,7 +245,7 @@ impl WriteHalfCollect {
         index_offset: usize,
         mut writer: OwnedWriteHalf,
         mut decoder: Box<dyn Encoder>,
-    ) {
+    ) -> Sender<BytesMut> {
         assert!(index_offset < self.tcp_multiplexing_limit);
 
         let index = route_key.index_usize();
@@ -255,6 +261,7 @@ impl WriteHalfCollect {
                 v
             });
         let (s, mut r) = tachyonix::channel(32);
+        let sender = s.clone();
         self.write_half_map.insert(index, s);
         let collect = self.clone();
         let recycle_buf = self.recycle_buf.clone();
@@ -315,6 +322,7 @@ impl WriteHalfCollect {
             }
             collect.remove(&route_key);
         });
+        sender
     }
     pub(crate) fn remove(&self, route_key: &RouteKey) {
         let index_usize = route_key.index_usize();
@@ -336,6 +344,20 @@ impl WriteHalfCollect {
     }
     pub(crate) fn get_write_half(&self, index: &usize) -> Option<Sender<BytesMut>> {
         self.write_half_map.get(index).map(|v| v.value().clone())
+    }
+    pub(crate) fn get_write_half_by_key(
+        &self,
+        route_key: &RouteKey,
+    ) -> io::Result<Sender<BytesMut>> {
+        match route_key.index() {
+            Index::Tcp(index) => {
+                let sender = self.get_write_half(&index).ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::Other, format!("not found {route_key:?}"))
+                })?;
+                Ok(sender)
+            }
+            _ => Err(io::Error::from(io::ErrorKind::InvalidInput)),
+        }
     }
 
     pub(crate) fn get_one_route_key(&self, addr: &SocketAddr) -> Option<RouteKey> {
@@ -360,18 +382,11 @@ impl WriteHalfCollect {
         None
     }
     pub async fn send_to(&self, buf: BytesMut, route_key: &RouteKey) -> io::Result<()> {
-        match route_key.index() {
-            Index::Tcp(index) => {
-                let write_half = self.get_write_half(&index).ok_or_else(|| {
-                    io::Error::new(io::ErrorKind::Other, format!("not found {route_key:?}"))
-                })?;
-                if let Err(_e) = write_half.send(buf).await {
-                    Err(io::Error::from(io::ErrorKind::WriteZero))?
-                } else {
-                    Ok(())
-                }
-            }
-            _ => Err(io::Error::from(io::ErrorKind::InvalidInput)),
+        let write_half = self.get_write_half_by_key(route_key)?;
+        if let Err(_e) = write_half.send(buf).await {
+            Err(io::Error::from(io::ErrorKind::WriteZero))?
+        } else {
+            Ok(())
         }
     }
 }
@@ -381,7 +396,7 @@ pub struct SocketManager {
     local_addr: SocketAddr,
     tcp_multiplexing_limit: usize,
     write_half_collect: WriteHalfCollect,
-    connect_sender: Sender<(RouteKey, ReadHalfBox)>,
+    connect_sender: Sender<(RouteKey, ReadHalfBox, Sender<BytesMut>)>,
     default_interface: Option<LocalInterface>,
     init_codec: Arc<Box<dyn InitCodec>>,
 }
@@ -391,7 +406,7 @@ impl SocketManager {
         local_addr: SocketAddr,
         tcp_multiplexing_limit: usize,
         write_half_collect: WriteHalfCollect,
-        connect_sender: Sender<(RouteKey, ReadHalfBox)>,
+        connect_sender: Sender<(RouteKey, ReadHalfBox, Sender<BytesMut>)>,
         default_interface: Option<LocalInterface>,
         init_codec: Arc<Box<dyn InitCodec>>,
     ) -> Self {
@@ -480,9 +495,14 @@ impl SocketManager {
         let (read_half, write_half) = stream.into_split();
         let (decoder, encoder) = self.init_codec.codec(addr)?;
         let read_half = ReadHalfBox::new(read_half, decoder);
-        self.write_half_collect
-            .add_write_half(route_key, index_offset, write_half, encoder);
-        if let Err(_e) = self.connect_sender.send((route_key, read_half)).await {
+        let sender =
+            self.write_half_collect
+                .add_write_half(route_key, index_offset, write_half, encoder);
+        if let Err(_e) = self
+            .connect_sender
+            .send((route_key, read_half, sender))
+            .await
+        {
             Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
                 "connect close",
