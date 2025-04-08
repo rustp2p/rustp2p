@@ -818,7 +818,7 @@ impl UdpTunnel {
         let rs = self.recv_from(bufs[0].as_mut()).await?;
         match rs {
             Ok((len, addr)) => {
-                let udp = self.udp.as_ref().unwrap();
+                let udp = self.udp.as_ref()?;
                 sizes[0] = len;
                 addrs[0] = addr;
                 let mut num = 1;
@@ -850,11 +850,7 @@ impl UdpTunnel {
                 "bufs/sizes/addrs error",
             )));
         }
-        let udp = if let Some(udp) = &self.udp {
-            udp
-        } else {
-            return None;
-        };
+        let udp = self.udp.as_ref()?;
         let fd = udp.as_raw_fd();
         loop {
             let rs = if let Some(close_notify) = &mut self.close_notify {
