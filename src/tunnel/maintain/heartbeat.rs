@@ -100,7 +100,7 @@ async fn route_table_heartbeat_request(
     tunnel_tx: &TunnelTransmitHub,
     packet: &mut NetPacket<&mut [u8]>,
 ) -> (HashSet<NodeID>, HashSet<NodeID>) {
-    let table = tunnel_tx.socket_manager.route_table().route_table();
+    let table = tunnel_tx.route_table.route_table();
     let mut sent_p2p_ids = HashSet::with_capacity(table.len());
     let mut sent_relay_ids = HashSet::with_capacity(table.len());
     for (node_id, routes) in table {

@@ -85,7 +85,7 @@ async fn poll_route_table_peer_node(
     buf: &[u8],
     query_id_max_num: usize,
 ) -> HashSet<NodeID> {
-    let mut route_table = tunnel_tx.socket_manager.route_table().route_table_p2p();
+    let mut route_table = tunnel_tx.route_table.route_table_p2p();
     if route_table.is_empty() {
         return HashSet::new();
     }

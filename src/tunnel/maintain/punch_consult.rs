@@ -6,10 +6,10 @@ use rust_p2p_core::punch::{PunchConsultInfo, PunchInfo, Puncher};
 use std::time::Duration;
 use tokio::sync::mpsc::Receiver;
 
-pub async fn punch_consult_loop(tunnel_tx: TunnelTransmitHub, puncher: Puncher<NodeID>) {
+pub async fn punch_consult_loop(tunnel_tx: TunnelTransmitHub, puncher: Puncher) {
     let mut seq = 0;
     tokio::time::sleep(Duration::from_secs(1)).await;
-    let route_table = tunnel_tx.socket_manager.route_table();
+    let route_table = &tunnel_tx.route_table;
     loop {
         tokio::time::sleep(Duration::from_secs(5)).await;
         seq += 1;
@@ -44,7 +44,7 @@ pub async fn punch_consult_loop(tunnel_tx: TunnelTransmitHub, puncher: Puncher<N
             if node_id <= self_id {
                 continue;
             }
-            if !puncher.need_punch(&node_id) {
+            if !puncher.need_punch(&node_id.into()) || !route_table.need_punch(&node_id) {
                 continue;
             }
             if tunnel_tx
@@ -66,7 +66,7 @@ pub async fn punch_loop(
     active: bool,
     mut receiver: Receiver<(NodeID, PunchConsultInfo)>,
     tunnel_tx: TunnelTransmitHub,
-    puncher: Puncher<NodeID>,
+    puncher: Puncher,
 ) {
     while let Some((node_id, info)) = receiver.recv().await {
         let punch_info = PunchInfo::new(
@@ -75,7 +75,12 @@ pub async fn punch_loop(
             info.peer_nat_info,
         );
         if let Ok(packet) = tunnel_tx.allocate_send_packet_proto(ProtocolType::PunchRequest, 0) {
-            if let Err(e) = puncher.punch(node_id, packet.buf(), punch_info).await {
+            let peer_punch_id = node_id.into();
+            if !tunnel_tx.route_table.need_punch(&node_id) {
+                puncher.reset_record(&peer_punch_id);
+                continue;
+            }
+            if let Err(e) = puncher.punch(peer_punch_id, packet.buf(), punch_info).await {
                 log::warn!("punch {e:?} {node_id:?}");
             }
         }

@@ -10,9 +10,10 @@ pub(crate) const MAX_SYMMETRIC_SOCKET_COUNT: usize = 200;
 pub(crate) const MAX_MAIN_SOCKET_COUNT: usize = 10;
 pub(crate) const ROUTE_IDLE_TIME: Duration = Duration::from_secs(10);
 
-#[derive(Clone, Copy, Eq, PartialEq, Debug)]
+#[derive(Clone, Copy, Eq, PartialEq, Debug, Default)]
 pub enum LoadBalance {
     /// Use the route with the lowest latency among those with the fewest hops.
+    #[default]
     MinHopLowestLatency,
     /// Round-robin the route list.
     RoundRobin,
@@ -23,9 +24,7 @@ pub enum LoadBalance {
 }
 #[derive(Clone)]
 pub struct TunnelConfig {
-    pub load_balance: LoadBalance,
     pub major_socket_count: usize,
-    pub route_idle_time: Duration,
     pub udp_tunnel_config: Option<UdpTunnelConfig>,
     pub tcp_tunnel_config: Option<TcpTunnelConfig>,
     pub enable_extend: bool,
@@ -34,12 +33,10 @@ pub struct TunnelConfig {
 impl Default for TunnelConfig {
     fn default() -> Self {
         Self {
-            load_balance: LoadBalance::MinHopLowestLatency,
             major_socket_count: MAX_MAJOR_SOCKET_COUNT,
             enable_extend: false,
             udp_tunnel_config: Some(Default::default()),
             tcp_tunnel_config: Some(Default::default()),
-            route_idle_time: ROUTE_IDLE_TIME,
         }
     }
 }
@@ -52,12 +49,10 @@ impl TunnelConfig {
         let udp_tunnel_config = Some(UdpTunnelConfig::default());
         let tcp_tunnel_config = Some(TcpTunnelConfig::new(tcp_init_codec));
         Self {
-            load_balance: LoadBalance::MinHopLowestLatency,
             major_socket_count: MAX_MAJOR_SOCKET_COUNT,
             enable_extend: false,
             udp_tunnel_config,
             tcp_tunnel_config,
-            route_idle_time: ROUTE_IDLE_TIME,
         }
     }
 }
@@ -69,18 +64,13 @@ impl TunnelConfig {
 impl TunnelConfig {
     pub fn empty() -> Self {
         Self {
-            load_balance: LoadBalance::MinHopLowestLatency,
             major_socket_count: MAX_MAJOR_SOCKET_COUNT,
             enable_extend: false,
             udp_tunnel_config: None,
             tcp_tunnel_config: None,
-            route_idle_time: ROUTE_IDLE_TIME,
         }
     }
-    pub fn set_load_balance(mut self, load_balance: LoadBalance) -> Self {
-        self.load_balance = load_balance;
-        self
-    }
+
     pub fn set_tcp_multi_count(mut self, count: usize) -> Self {
         self.major_socket_count = count;
         self

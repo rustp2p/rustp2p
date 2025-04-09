@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::hash::Hash;
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::ops::{Div, Mul};
@@ -12,47 +11,39 @@ use rand::Rng;
 
 use crate::nat::{NatInfo, NatType};
 
-use crate::route::route_table::RouteTable;
 use crate::tunnel::UnifiedTunnelFactory;
 use crate::tunnel::{tcp, udp};
 pub use config::*;
 pub mod config;
 
 #[derive(Clone)]
-pub struct Puncher<PeerID> {
-    route_table: RouteTable<PeerID>,
+pub struct Puncher {
     // 端口顺序
     port_vec: Vec<u16>,
     // 指定IP的打洞记录
-    sym_record: Arc<Mutex<HashMap<PeerID, usize>>>,
-    count_record: Arc<Mutex<HashMap<PeerID, (usize, usize)>>>,
+    sym_record: Arc<Mutex<HashMap<u32, usize>>>,
+    count_record: Arc<Mutex<HashMap<u32, (usize, usize)>>>,
     udp_socket_manager: Option<Arc<udp::SocketManager>>,
     tcp_socket_manager: Option<Arc<tcp::SocketManager>>,
 }
 
-impl<PeerID> From<&UnifiedTunnelFactory<PeerID>> for Puncher<PeerID> {
-    fn from(value: &UnifiedTunnelFactory<PeerID>) -> Self {
+impl From<&UnifiedTunnelFactory> for Puncher {
+    fn from(value: &UnifiedTunnelFactory) -> Self {
         let tcp_socket_manager = value.shared_tcp_socket_manager();
         let udp_socket_manager = value.shared_udp_socket_manager();
-        Self::new(
-            value.route_table().clone(),
-            udp_socket_manager,
-            tcp_socket_manager,
-        )
+        Self::new(udp_socket_manager, tcp_socket_manager)
     }
 }
 
-impl<PeerID> Puncher<PeerID> {
+impl Puncher {
     pub fn new(
-        route_table: RouteTable<PeerID>,
         udp_socket_manager: Option<Arc<udp::SocketManager>>,
         tcp_socket_manager: Option<Arc<tcp::SocketManager>>,
-    ) -> Puncher<PeerID> {
+    ) -> Puncher {
         let mut port_vec: Vec<u16> = (1..=65535).collect();
         let mut rng = rand::rng();
         port_vec.shuffle(&mut rng);
         Self {
-            route_table,
             port_vec,
             sym_record: Arc::new(Mutex::new(HashMap::new())),
             count_record: Arc::new(Mutex::new(HashMap::new())),
@@ -62,27 +53,22 @@ impl<PeerID> Puncher<PeerID> {
     }
 }
 
-impl<PeerID: Hash + Eq + Clone> Puncher<PeerID> {
+impl Puncher {
     pub fn reset_all(&self) {
         self.sym_record.lock().clear();
         self.count_record.lock().clear();
     }
-    pub fn reset_record(&self, peer_id: &PeerID) {
+    pub fn reset_record(&self, peer_id: &u32) {
         self.sym_record.lock().remove(peer_id);
         self.count_record.lock().remove(peer_id);
     }
     /// Call `need_punch` at a certain frequency, and call [`punch_now`](Self::punch_now) after getting true.
     /// Determine whether punching is needed.
-    pub fn need_punch(&self, id: &PeerID) -> bool {
-        let need = self.route_table.need_punch(id);
-        if !need {
-            self.reset_record(id);
-            return false;
-        }
+    pub fn need_punch(&self, id: &u32) -> bool {
         let (count, _) = *self
             .count_record
             .lock()
-            .entry(id.clone())
+            .entry(*id)
             .and_modify(|(v, _)| *v += 1)
             .or_insert((0, 0));
         if count > 8 {
@@ -94,12 +80,7 @@ impl<PeerID: Hash + Eq + Clone> Puncher<PeerID> {
     }
 
     /// Call `punch` at a certain frequency
-    pub async fn punch(
-        &self,
-        peer_id: PeerID,
-        buf: &[u8],
-        punch_info: PunchInfo,
-    ) -> io::Result<()> {
+    pub async fn punch(&self, peer_id: u32, buf: &[u8], punch_info: PunchInfo) -> io::Result<()> {
         if !self.need_punch(&peer_id) {
             return Ok(());
         }
@@ -107,14 +88,14 @@ impl<PeerID: Hash + Eq + Clone> Puncher<PeerID> {
     }
     pub async fn punch_now(
         &self,
-        peer_id: PeerID,
+        peer_id: u32,
         buf: &[u8],
         punch_info: PunchInfo,
     ) -> io::Result<()> {
         let (_, count) = *self
             .count_record
             .lock()
-            .entry(peer_id.clone())
+            .entry(peer_id)
             .and_modify(|(_, v)| *v += 1)
             .or_insert((0, 0));
         let ttl = if punch_info.use_ttl() && count < 255 {
@@ -183,7 +164,7 @@ impl<PeerID: Hash + Eq + Clone> Puncher<PeerID> {
     }
     async fn punch_udp(
         &self,
-        peer_id: PeerID,
+        peer_id: u32,
         count: usize,
         buf: &[u8],
         peer_nat_info: &NatInfo,

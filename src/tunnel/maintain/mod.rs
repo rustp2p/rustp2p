@@ -17,7 +17,7 @@ mod query_public_addr;
 pub(crate) fn start_task(
     tunnel_tx: &TunnelTransmitHub,
     idle_route_manager: rust_p2p_core::idle::IdleRouteManager<NodeID>,
-    puncher: Puncher<NodeID>,
+    puncher: Puncher,
     query_id_interval: Duration,
     query_id_max_num: usize,
     heartbeat_interval: Duration,

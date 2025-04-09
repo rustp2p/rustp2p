@@ -4,62 +4,6 @@ pub mod route_table;
 
 pub const DEFAULT_RTT: u32 = 9999;
 
-#[derive(Copy, Clone, Debug)]
-pub struct Route {
-    index: Index,
-    addr: SocketAddr,
-    metric: u8,
-    rtt: u32,
-}
-impl Route {
-    pub fn from(route_key: RouteKey, metric: u8, rtt: u32) -> Self {
-        Self {
-            index: route_key.index,
-            addr: route_key.addr,
-            metric,
-            rtt,
-        }
-    }
-    pub fn from_default_rt(route_key: RouteKey, metric: u8) -> Self {
-        Self {
-            index: route_key.index,
-            addr: route_key.addr,
-            metric,
-            rtt: DEFAULT_RTT,
-        }
-    }
-    pub fn route_key(&self) -> RouteKey {
-        RouteKey {
-            index: self.index,
-            addr: self.addr,
-        }
-    }
-    pub fn sort_key(&self) -> RouteSortKey {
-        RouteSortKey {
-            metric: self.metric,
-            rtt: self.rtt,
-        }
-    }
-    pub fn is_direct(&self) -> bool {
-        self.metric == 0
-    }
-    pub fn is_relay(&self) -> bool {
-        self.metric > 0
-    }
-    pub fn rtt(&self) -> u32 {
-        self.rtt
-    }
-    pub fn metric(&self) -> u8 {
-        self.metric
-    }
-}
-
-impl From<(RouteKey, u8)> for Route {
-    fn from((key, metric): (RouteKey, u8)) -> Self {
-        Route::from_default_rt(key, metric)
-    }
-}
-
 use crate::tunnel::udp::UDPIndex;
 #[non_exhaustive]
 #[derive(Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash, Debug)]

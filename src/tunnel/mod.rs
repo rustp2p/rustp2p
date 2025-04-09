@@ -12,10 +12,11 @@ use bytes::BytesMut;
 use dashmap::DashMap;
 pub use node_context::NodeAddress;
 pub use node_context::PeerNodeAddress;
+use rust_p2p_core::idle::IdleRouteManager;
 use rust_p2p_core::nat::NatType;
 use rust_p2p_core::punch::PunchConsultInfo;
-use rust_p2p_core::route::route_table::RouteTable;
-use rust_p2p_core::route::{ConnectProtocol, Route, RouteKey};
+use rust_p2p_core::route::route_table::{Route, RouteTable};
+use rust_p2p_core::route::{ConnectProtocol, RouteKey};
 use rust_p2p_core::tunnel::config::LoadBalance;
 use rust_p2p_core::tunnel::recycle::RecycleBuf;
 pub(crate) use send_packet::SendPacket;
@@ -36,7 +37,8 @@ pub(crate) struct TunnelManager {
     send_buffer_size: usize,
     recv_buffer_size: usize,
     node_context: NodeContext,
-    tunnel_factory: rust_p2p_core::tunnel::UnifiedTunnelFactory<NodeID>,
+    route_table: RouteTable<NodeID>,
+    tunnel_factory: rust_p2p_core::tunnel::UnifiedTunnelFactory,
     shutdown_manager: ShutdownManager<()>,
     active_punch_sender: Sender<(NodeID, PunchConsultInfo)>,
     passive_punch_sender: Sender<(NodeID, PunchConsultInfo)>,
@@ -49,6 +51,7 @@ impl TunnelManager {
         Box::pin(Self::new_impl(config)).await
     }
     pub(crate) async fn new_impl(mut config: TunnelManagerConfig) -> io::Result<TunnelManager> {
+        let load_balance = config.load_balance;
         let major_socket_count = config.major_socket_count;
         let send_buffer_size = config.send_buffer_size;
         let recv_buffer_size = config.recv_buffer_size;
@@ -62,6 +65,7 @@ impl TunnelManager {
         let mapping_addrs = config.mapping_addrs.take();
         let dns = config.dns.take();
         let default_interface = config.default_interface.clone();
+
         let buffer_pool = if config.recycle_buf_cap > 0 {
             Some(BufferPool::new(
                 config.recycle_buf_cap,
@@ -93,8 +97,10 @@ impl TunnelManager {
         } else if let Some(v) = config.udp_tunnel_config.as_ref() {
             recycle_buf.clone_from(&v.recycle_buf);
         };
-        let (tunnel_factory, puncher, idle_route_manager) =
-            rust_p2p_core::tunnel::new_tunnel_component::<NodeID>(config)?;
+        let (tunnel_factory, puncher) = rust_p2p_core::tunnel::new_tunnel_component(config)?;
+        let route_table = RouteTable::<NodeID>::new(load_balance);
+        let idle_route_manager = IdleRouteManager::new(route_idle_time, route_table.clone());
+
         let local_tcp_port = if let Some(v) = tunnel_factory.tcp_socket_manager_as_ref() {
             v.local_addr().port()
         } else {
@@ -128,6 +134,7 @@ impl TunnelManager {
         }
         let shutdown_manager = ShutdownManager::<()>::new();
         let tunnel_tx = TunnelTransmitHub {
+            route_table: route_table.clone(),
             send_buffer_size,
             node_context: node_context.clone(),
             socket_manager: tunnel_factory.socket_manager(),
@@ -159,6 +166,7 @@ impl TunnelManager {
             }
         });
         Ok(Self {
+            route_table,
             send_buffer_size,
             recv_buffer_size,
             node_context,
@@ -174,6 +182,7 @@ impl TunnelManager {
         TunnelTransmitHub {
             send_buffer_size: self.send_buffer_size,
             node_context: self.node_context.clone(),
+            route_table: self.route_table.clone(),
             socket_manager: self.tunnel_factory.socket_manager(),
             shutdown_manager: self.shutdown_manager.clone(),
             recycle_buf: self.recycle_buf.clone(),
@@ -208,7 +217,7 @@ impl TunnelManager {
             node_context: self.node_context.clone(),
             tunnel,
             tunnel_transmit: self.tunnel_send_hub(),
-            route_table: self.tunnel_factory.route_table().clone(),
+            route_table: self.route_table.clone(),
             active_punch_sender: self.active_punch_sender.clone(),
             passive_punch_sender: self.passive_punch_sender.clone(),
             buffer_pool: self.buffer_pool.clone(),
@@ -224,7 +233,8 @@ impl TunnelManager {
 pub struct TunnelTransmitHub {
     send_buffer_size: usize,
     node_context: NodeContext,
-    socket_manager: rust_p2p_core::tunnel::UnifiedSocketManager<NodeID>,
+    route_table: RouteTable<NodeID>,
+    socket_manager: rust_p2p_core::tunnel::UnifiedSocketManager,
     shutdown_manager: ShutdownManager<()>,
     recycle_buf: Option<RecycleBuf>,
 }
@@ -260,10 +270,10 @@ impl TunnelTransmitHub {
         Ok(())
     }
     pub fn lookup_route(&self, node_id: &NodeID) -> Option<Vec<Route>> {
-        self.socket_manager.route_table().route(node_id)
+        self.route_table.route(node_id)
     }
     pub fn nodes(&self) -> Vec<NodeID> {
-        self.socket_manager.route_table().route_table_ids()
+        self.route_table.route_table_ids()
     }
     pub fn other_group_codes(&self) -> Vec<GroupCode> {
         self.node_context
@@ -290,7 +300,7 @@ impl TunnelTransmitHub {
     }
 
     pub fn route_to_node_id(&self, route: &RouteKey) -> Option<NodeID> {
-        self.socket_manager.route_table().route_to_id(route)
+        self.route_table.route_to_id(route)
     }
     pub fn other_route_to_node_id(
         &self,
@@ -326,10 +336,11 @@ impl TunnelTransmitHub {
     pub(crate) async fn send_to_id<B: AsRef<[u8]>>(
         &self,
         buf: &NetPacket<B>,
-        id: &NodeID,
+        peer_id: &NodeID,
     ) -> io::Result<()> {
+        let route = self.route_table.get_route_by_id(peer_id)?;
         self.socket_manager
-            .send_to_id(buf.buffer().into(), id)
+            .send_to(buf.buffer().into(), &route.route_key())
             .await?;
         Ok(())
     }
@@ -349,13 +360,14 @@ impl TunnelTransmitHub {
             return Ok(());
         }
 
-        if let Ok(route) = self.socket_manager.route_table().get_route_by_id(dest_id) {
+        if let Ok(route) = self.route_table.get_route_by_id(dest_id) {
             self.socket_manager.send_to(buf, &route.route_key()).await?
         } else if let Some((relay_group_code, relay_node_id)) =
             self.node_context().reachable_node(group_code, dest_id)
         {
             if &relay_group_code == group_code {
-                self.socket_manager.send_to_id(buf, &relay_node_id).await?
+                let route = self.route_table.get_route_by_id(&relay_node_id)?;
+                self.socket_manager.send_to(buf, &route.route_key()).await?;
             } else {
                 let route;
                 if let Some(v) = self.node_context().other_route_table.get(&relay_group_code) {
@@ -378,7 +390,7 @@ impl TunnelTransmitHub {
     }
 
     async fn send_broadcast_impl(&self, buf: &[u8], group_code: &GroupCode, src_id: &NodeID) {
-        let route_table = self.socket_manager.route_table();
+        let route_table = &self.route_table;
         let table = route_table.route_table_one();
         let mut map: HashMap<NodeID, (Vec<NodeID>, Route)> = HashMap::new();
         for (id, route) in &table {
@@ -793,7 +805,7 @@ impl Tunnel {
                 .node_context
                 .other_route_table
                 .entry(src_group_code)
-                .or_insert_with(|| RouteTable::new(LoadBalance::MinHopLowestLatency, 1));
+                .or_insert_with(|| RouteTable::new(LoadBalance::MinHopLowestLatency));
             ref_mut.add_route_if_absent(src_id, Route::from_default_rt(route_key, metric));
         }
         match packet.protocol()? {

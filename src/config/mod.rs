@@ -302,9 +302,7 @@ impl From<TunnelManagerConfig> for rust_p2p_core::tunnel::config::TunnelConfig {
             config
         });
         rust_p2p_core::tunnel::config::TunnelConfig {
-            load_balance: value.load_balance,
             major_socket_count: value.major_socket_count,
-            route_idle_time: value.route_idle_time,
             udp_tunnel_config,
             tcp_tunnel_config,
             enable_extend: value.enable_extend,

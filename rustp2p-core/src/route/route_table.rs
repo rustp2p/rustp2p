@@ -1,14 +1,71 @@
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::io;
+use std::net::SocketAddr;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::route::{Route, RouteKey};
+use crate::route::{Index, RouteKey, RouteSortKey, DEFAULT_RTT};
 use crate::tunnel::config::LoadBalance;
 use crossbeam_utils::atomic::AtomicCell;
 use dashmap::DashMap;
+
+#[derive(Copy, Clone, Debug)]
+pub struct Route {
+    index: Index,
+    addr: SocketAddr,
+    metric: u8,
+    rtt: u32,
+}
+impl Route {
+    pub fn from(route_key: RouteKey, metric: u8, rtt: u32) -> Self {
+        Self {
+            index: route_key.index,
+            addr: route_key.addr,
+            metric,
+            rtt,
+        }
+    }
+    pub fn from_default_rt(route_key: RouteKey, metric: u8) -> Self {
+        Self {
+            index: route_key.index,
+            addr: route_key.addr,
+            metric,
+            rtt: DEFAULT_RTT,
+        }
+    }
+    pub fn route_key(&self) -> RouteKey {
+        RouteKey {
+            index: self.index,
+            addr: self.addr,
+        }
+    }
+    pub fn sort_key(&self) -> RouteSortKey {
+        RouteSortKey {
+            metric: self.metric,
+            rtt: self.rtt,
+        }
+    }
+    pub fn is_direct(&self) -> bool {
+        self.metric == 0
+    }
+    pub fn is_relay(&self) -> bool {
+        self.metric > 0
+    }
+    pub fn rtt(&self) -> u32 {
+        self.rtt
+    }
+    pub fn metric(&self) -> u8 {
+        self.metric
+    }
+}
+
+impl From<(RouteKey, u8)> for Route {
+    fn from((key, metric): (RouteKey, u8)) -> Self {
+        Route::from_default_rt(key, metric)
+    }
+}
 
 pub(crate) type RouteTableInner<PeerID> =
     Arc<DashMap<PeerID, (AtomicUsize, Vec<(Route, AtomicCell<Instant>)>)>>;
@@ -16,7 +73,15 @@ pub struct RouteTable<PeerID> {
     pub(crate) route_table: RouteTableInner<PeerID>,
     route_key_table: Arc<DashMap<RouteKey, PeerID>>,
     load_balance: LoadBalance,
-    channel_num: usize,
+}
+impl<PeerID: Hash + Eq> Default for RouteTable<PeerID> {
+    fn default() -> Self {
+        Self {
+            route_table: Default::default(),
+            route_key_table: Default::default(),
+            load_balance: Default::default(),
+        }
+    }
 }
 impl<PeerID> Clone for RouteTable<PeerID> {
     fn clone(&self) -> Self {
@@ -24,17 +89,15 @@ impl<PeerID> Clone for RouteTable<PeerID> {
             route_table: self.route_table.clone(),
             route_key_table: self.route_key_table.clone(),
             load_balance: self.load_balance,
-            channel_num: self.channel_num,
         }
     }
 }
 impl<PeerID: Hash + Eq> RouteTable<PeerID> {
-    pub fn new(load_balance: LoadBalance, channel_num: usize) -> RouteTable<PeerID> {
+    pub fn new(load_balance: LoadBalance) -> RouteTable<PeerID> {
         Self {
             route_table: Arc::new(DashMap::with_capacity(64)),
             route_key_table: Arc::new(DashMap::with_capacity(64)),
             load_balance,
-            channel_num,
         }
     }
 }

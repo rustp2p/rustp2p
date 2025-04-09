@@ -41,13 +41,14 @@ async fn main() {
         .set_tcp_multi_count(1)
         .set_tcp_tunnel_config(tcp_config)
         .set_udp_tunnel_config(udp_config);
-    let (mut tunnel_factory, _puncher, _idle_route_manager) =
-        new_tunnel_component::<u32>(config).unwrap();
+    let (mut tunnel_factory, _puncher) = new_tunnel_component(config).unwrap();
     let writer = tunnel_factory.socket_manager();
+    let route_table = RouteTable::default();
+
     log::info!("listen 3000");
     loop {
         let tunnel = tunnel_factory.dispatch().await.unwrap();
-        let table = tunnel_factory.route_table().clone();
+        let table = route_table.clone();
         let writer = writer.clone();
         tokio::spawn(async move {
             handler(table, tunnel, writer).await;
@@ -57,7 +58,7 @@ async fn main() {
 async fn handler(
     route_table: RouteTable<u32>,
     mut tunnel: UnifiedTunnel,
-    writer: UnifiedSocketManager<u32>,
+    writer: UnifiedSocketManager,
 ) {
     let mut buf = [0; 65536];
     while let Some(rs) = tunnel.recv_from(&mut buf).await {
@@ -108,14 +109,25 @@ async fn handler(
                         .unwrap();
                 }
             }
-            PUNCH_START_1 | PUNCH_START_2 => {
-                if let Err(e) = writer.send_to_id((&buf[..len]).into(), &dest_id).await {
+            PUNCH_START_1 | PUNCH_START_2 => match route_table.get_route_by_id(&dest_id) {
+                Ok(route) => {
+                    if let Err(e) = writer
+                        .send_to((&buf[..len]).into(), &route.route_key())
+                        .await
+                    {
+                        log::warn!(
+                            "{:?},src_id={src_id},peer_id={dest_id},addr={route_key:?},{e:?}",
+                            &buf[..len]
+                        );
+                    }
+                }
+                Err(e) => {
                     log::warn!(
                         "{:?},src_id={src_id},peer_id={dest_id},addr={route_key:?},{e:?}",
                         &buf[..len]
                     );
                 }
-            }
+            },
             PUBLIC_ADDR_REQ => {
                 let mut response = BytesMut::new();
                 response.put_u32(PUBLIC_ADDR_RES);

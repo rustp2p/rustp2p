@@ -20,7 +20,7 @@ use bytes::{BufMut, BytesMut};
 use clap::Parser;
 use env_logger::Env;
 use parking_lot::Mutex;
-
+use rust_p2p_core::idle::IdleRouteManager;
 use rust_p2p_core::nat::NatInfo;
 use rust_p2p_core::punch::{PunchInfo, PunchModelBoxes, Puncher};
 use rust_p2p_core::route::route_table::RouteTable;
@@ -74,7 +74,9 @@ async fn main() {
         .set_udp_tunnel_config(udp_config)
         .set_tcp_tunnel_config(tcp_config)
         .set_tcp_multi_count(2);
-    let (mut tunnel_factory, puncher, idle_route_manager) = new_tunnel_component(config).unwrap();
+    let (mut tunnel_factory, puncher) = new_tunnel_component(config).unwrap();
+    let route_table = RouteTable::<u32>::default();
+    let idle_route_manager = IdleRouteManager::new(Duration::from_secs(12), route_table.clone());
     let socket_manager = tunnel_factory.socket_manager();
     let nat_info = my_nat_info(&socket_manager).await;
     {
@@ -102,6 +104,7 @@ async fn main() {
             idle_route_manager.remove_route(&peer_id, &route.route_key());
         }
     });
+    let route_table1 = route_table.clone();
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(Duration::from_secs(5)).await;
@@ -111,21 +114,23 @@ async fn main() {
                     if peer_id <= my_id {
                         continue;
                     }
-                    if puncher1.need_punch(&peer_id) {
-                        // Initiate NAT penetration
-                        let mut request = BytesMut::new();
-                        request.put_u32(PUNCH_START_1);
-                        request.put_u32(my_id);
-                        request.put_u32(peer_id);
-                        let mut nat_info = nat_info1.lock().clone();
-                        nat_info.seq = rand::random();
-                        let data = serde_json::to_string(&nat_info).unwrap();
-                        request.extend_from_slice(data.as_bytes());
-                        socket_manager1
-                            .send_to_addr(connect_protocol, request, server)
-                            .await
-                            .unwrap();
+                    if !route_table1.need_punch(&peer_id) || !puncher1.need_punch(&peer_id) {
+                        continue;
                     }
+
+                    // Initiate NAT penetration
+                    let mut request = BytesMut::new();
+                    request.put_u32(PUNCH_START_1);
+                    request.put_u32(my_id);
+                    request.put_u32(peer_id);
+                    let mut nat_info = nat_info1.lock().clone();
+                    nat_info.seq = rand::random();
+                    let data = serde_json::to_string(&nat_info).unwrap();
+                    request.extend_from_slice(data.as_bytes());
+                    socket_manager1
+                        .send_to_addr(connect_protocol, request, server)
+                        .await
+                        .unwrap();
                 }
             }
         }
@@ -150,7 +155,7 @@ async fn main() {
         peer_list,
         puncher,
         nat_info,
-        route_table: tunnel_factory.route_table().clone(),
+        route_table: route_table.clone(),
         server,
         socket_manager,
     };
@@ -167,12 +172,12 @@ async fn main() {
 struct ContextHandler {
     my_id: u32,
     peer_list: Arc<Mutex<Vec<u32>>>,
-    puncher: Puncher<u32>,
+    puncher: Puncher,
     nat_info: Arc<Mutex<NatInfo>>,
     route_table: RouteTable<u32>,
     #[allow(dead_code)]
     server: SocketAddr,
-    socket_manager: UnifiedSocketManager<u32>,
+    socket_manager: UnifiedSocketManager,
 }
 
 impl ContextHandler {
@@ -303,7 +308,7 @@ impl ContextHandler {
     }
 }
 
-async fn my_nat_info(socket_manager: &UnifiedSocketManager<u32>) -> Arc<Mutex<NatInfo>> {
+async fn my_nat_info(socket_manager: &UnifiedSocketManager) -> Arc<Mutex<NatInfo>> {
     let stun_server = vec![
         "stun.miwifi.com:3478".to_string(),
         "stun.chat.bilibili.com:3478".to_string(),
