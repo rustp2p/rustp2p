@@ -281,9 +281,7 @@ impl TunnelTransmitHub {
             .get(group_code)
             .map(|v| v.route(node_id))?
     }
-    pub fn current_group_code(&self) -> GroupCode {
-        self.node_context.load_group_code()
-    }
+
     pub fn route_to_node_id(&self, route: &RouteKey) -> Option<NodeID> {
         self.socket_manager.route_table().route_to_id(route)
     }
