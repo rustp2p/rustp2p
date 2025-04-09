@@ -233,7 +233,14 @@ impl TunnelTransmitHub {
     pub fn node_context(&self) -> &NodeContext {
         &self.node_context
     }
-    pub fn switch_model(&self, nat_type: NatType) -> io::Result<()> {
+    pub fn nat_type(&self) -> Option<NatType> {
+        if self.node_context.exists_nat_info() {
+            Some(self.node_context.punch_info().read().nat_type)
+        } else {
+            None
+        }
+    }
+    pub(crate) fn switch_model(&self, nat_type: NatType) -> io::Result<()> {
         if self.shutdown_manager.is_shutdown_triggered() {
             return Err(io::Error::new(io::ErrorKind::Other, "shutdown"));
         }
