@@ -6,9 +6,9 @@ use windows_sys::Win32::Networking::WinSock::{
     htonl, setsockopt, WSAIoctl, IPPROTO_IP, IP_UNICAST_IF, SIO_UDP_CONNRESET, SOCKET_ERROR,
 };
 
-use crate::socket::{LocalInterface, VntSocketTrait};
+use crate::socket::{LocalInterface, SocketTrait};
 
-impl VntSocketTrait for socket2::Socket {
+impl SocketTrait for socket2::Socket {
     fn set_ip_unicast_if(&self, interface: &LocalInterface) -> io::Result<()> {
         let index = interface.index;
         let raw_socket = self.as_raw_socket();

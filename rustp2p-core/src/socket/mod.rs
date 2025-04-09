@@ -9,7 +9,7 @@ mod unix;
 #[cfg(windows)]
 mod windows;
 
-pub(crate) trait VntSocketTrait {
+pub(crate) trait SocketTrait {
     fn set_ip_unicast_if(&self, _interface: &LocalInterface) -> io::Result<()> {
         Ok(())
     }
