@@ -5,6 +5,7 @@ pub mod config;
 pub mod extend;
 pub mod tunnel;
 
+use crate::config::DataInterceptor;
 use crate::tunnel::{RecvMetadata, RecvResult};
 use async_trait::async_trait;
 use cipher::Algorithm;
@@ -63,7 +64,7 @@ impl Drop for HandleOwner {
 }
 
 pub struct Builder {
-    udp_ports: Option<Vec<u16>>,
+    udp_port: Option<u16>,
     tcp_port: Option<u16>,
     peers: Option<Vec<PeerNodeAddress>>,
     group_code: Option<GroupCode>,
@@ -74,7 +75,7 @@ pub struct Builder {
 impl Builder {
     pub fn new() -> Self {
         Self {
-            udp_ports: None,
+            udp_port: None,
             tcp_port: None,
             peers: None,
             group_code: None,
@@ -83,8 +84,8 @@ impl Builder {
             interceptor: None,
         }
     }
-    pub fn udp_ports(mut self, ports: Vec<u16>) -> Self {
-        self.udp_ports = Some(ports);
+    pub fn udp_ports(mut self, port: u16) -> Self {
+        self.udp_port = Some(port);
         self
     }
     pub fn tcp_port(mut self, port: u16) -> Self {
@@ -107,7 +108,7 @@ impl Builder {
         self.node_id = Some(node_id);
         self
     }
-    pub fn interceptor<I: config::DataInterceptor + 'static>(mut self, interceptor: I) -> Self {
+    pub fn interceptor<I: DataInterceptor + 'static>(mut self, interceptor: I) -> Self {
         self.interceptor = Some(Interceptor {
             inner: Arc::new(interceptor),
         });
@@ -116,7 +117,7 @@ impl Builder {
     pub async fn build(self) -> io::Result<EndPoint> {
         let mut config = TunnelManagerConfig::empty()
             .set_udp_tunnel_config(
-                UdpTunnelConfig::default().set_udp_ports(self.udp_ports.unwrap_or_default()),
+                UdpTunnelConfig::default().set_simple_udp_port(self.udp_port.unwrap_or_default()),
             )
             .set_tcp_tunnel_config(
                 TcpTunnelConfig::default().set_tcp_port(self.tcp_port.unwrap_or(0)),
@@ -133,15 +134,34 @@ impl Builder {
             config = config.set_direct_addrs(peers);
         }
         #[cfg(any(feature = "aes-gcm", feature = "chacha20-poly1305"))]
-        let config = config.set_encryption(self.encryption.ok_or(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "encryption is required",
-        ))?);
+        if let Some(encryption) = self.encryption {
+            config = config.set_encryption(encryption);
+        }
 
+        let tunnel_manager = TunnelManager::new(config).await?;
+
+        EndPoint::from_interceptor0(tunnel_manager, self.interceptor).await
+    }
+}
+impl EndPoint {
+    pub async fn from(tunnel_manager: TunnelManager) -> io::Result<Self> {
+        EndPoint::from_interceptor0(tunnel_manager, None).await
+    }
+    pub async fn from_interceptor<T: DataInterceptor + 'static>(
+        tunnel_manager: TunnelManager,
+        interceptor: T,
+    ) -> io::Result<Self> {
+        let interceptor = Some(Interceptor {
+            inner: Arc::new(interceptor),
+        });
+        EndPoint::from_interceptor0(tunnel_manager, interceptor).await
+    }
+    async fn from_interceptor0(
+        mut tunnel_manager: TunnelManager,
+        interceptor: Option<Interceptor>,
+    ) -> io::Result<Self> {
         let (sender, receiver) = flume::unbounded();
-        let mut tunnel_manager = TunnelManager::new(config).await?;
         let writer = Arc::new(tunnel_manager.tunnel_send_hub());
-        let interceptor = self.interceptor;
         let handle = tokio::spawn(async move {
             while let Ok(tunnel_rx) = tunnel_manager.dispatch().await {
                 tokio::spawn(handle(tunnel_rx, sender.clone(), interceptor.clone()));
@@ -192,10 +212,10 @@ async fn handle(
 }
 #[derive(Clone)]
 pub(crate) struct Interceptor {
-    inner: Arc<dyn config::DataInterceptor>,
+    inner: Arc<dyn DataInterceptor>,
 }
 #[async_trait]
-impl config::DataInterceptor for Interceptor {
+impl DataInterceptor for Interceptor {
     async fn pre_handle(&self, data: &mut RecvResult) -> bool {
         self.inner.pre_handle(data).await
     }

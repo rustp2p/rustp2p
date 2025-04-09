@@ -45,7 +45,7 @@ pub struct TunnelManager {
 }
 
 impl TunnelManager {
-    pub(crate) async fn new(config: TunnelManagerConfig) -> io::Result<TunnelManager> {
+    pub async fn new(config: TunnelManagerConfig) -> io::Result<TunnelManager> {
         Box::pin(Self::new_impl(config)).await
     }
     pub(crate) async fn new_impl(mut config: TunnelManagerConfig) -> io::Result<TunnelManager> {
