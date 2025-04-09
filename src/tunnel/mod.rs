@@ -18,7 +18,7 @@ use rust_p2p_core::route::route_table::RouteTable;
 use rust_p2p_core::route::{ConnectProtocol, Route, RouteKey};
 use rust_p2p_core::tunnel::config::LoadBalance;
 use rust_p2p_core::tunnel::recycle::RecycleBuf;
-pub use send_packet::SendPacket;
+pub(crate) use send_packet::SendPacket;
 use std::collections::HashMap;
 use std::io;
 use std::net::SocketAddr;
@@ -32,7 +32,7 @@ mod node_context;
 
 mod send_packet;
 
-pub struct TunnelManager {
+pub(crate) struct TunnelManager {
     send_buffer_size: usize,
     recv_buffer_size: usize,
     node_context: NodeContext,
@@ -431,10 +431,11 @@ impl TunnelTransmitHub {
     pub(crate) async fn broadcast_packet(&self, packet: SendPacket) -> io::Result<()> {
         self.send_packet_to(packet, &NodeID::broadcast()).await
     }
-    pub(crate) async fn send_packet_to(
+    pub(crate) async fn send_packet_to_route(
         &self,
         mut packet: SendPacket,
         dest_id: &NodeID,
+        route_key: Option<&RouteKey>,
     ) -> io::Result<()> {
         let group_code = self.node_context.load_group_code();
         if let Some(src_id) = self.node_context.load_id() {
@@ -451,11 +452,24 @@ impl TunnelTransmitHub {
                     packet.set_encrypt_flag(true);
                 }
             }
+            if let Some(route_key) = route_key {
+                return self
+                    .socket_manager
+                    .send_to(packet.into_buf(), route_key)
+                    .await;
+            }
             self.send_to_impl(packet.into_buf(), &group_code, &src_id, dest_id)
                 .await
         } else {
             Err(io::Error::new(io::ErrorKind::Other, "no id specified"))
         }
+    }
+    pub(crate) async fn send_packet_to(
+        &self,
+        packet: SendPacket,
+        dest_id: &NodeID,
+    ) -> io::Result<()> {
+        self.send_packet_to_route(packet, dest_id, None).await
     }
 
     pub(crate) fn allocate_send_packet(&self) -> SendPacket {
@@ -505,7 +519,7 @@ impl TunnelTransmitHub {
     }
 }
 
-pub struct Tunnel {
+pub(crate) struct Tunnel {
     shutdown_manager: ShutdownManager<()>,
     node_context: NodeContext,
     tunnel: rust_p2p_core::tunnel::UnifiedTunnel,
@@ -1279,7 +1293,7 @@ pub struct RecvUserData {
     _data: Data,
 }
 
-pub enum Data {
+pub(crate) enum Data {
     Recyclable(Block<BytesMut>),
     Temporary(BytesMut),
 }
@@ -1338,7 +1352,7 @@ impl RecvUserData {
 }
 
 #[derive(thiserror::Error, Debug)]
-pub enum RecvError {
+pub(crate) enum RecvError {
     #[error("done")]
     Done,
     #[error(transparent)]

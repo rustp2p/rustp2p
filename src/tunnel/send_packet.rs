@@ -17,7 +17,7 @@ impl From<&[u8]> for SendPacket {
         packet
     }
 }
-
+#[allow(dead_code)]
 impl SendPacket {
     pub fn with_capacity(capacity: usize) -> Self {
         assert!(capacity < u16::MAX as _);

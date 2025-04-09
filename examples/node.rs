@@ -65,7 +65,7 @@ pub async fn main() -> io::Result<()> {
     let endpoint = Builder::new()
         .node_id(self_id.into())
         .tcp_port(port)
-        .udp_ports(vec![port])
+        .udp_port(port)
         .peers(addrs)
         .group_code(string_to_group_code(&group_code))
         .encryption(Algorithm::AesGcm("password".to_string()))

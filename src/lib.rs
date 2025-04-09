@@ -12,6 +12,7 @@ use cipher::Algorithm;
 use config::{TcpTunnelConfig, TunnelManagerConfig, UdpTunnelConfig};
 use flume::{Receiver, Sender};
 use protocol::node_id::{GroupCode, NodeID};
+use rust_p2p_core::route::RouteKey;
 use std::io;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -40,6 +41,18 @@ impl EndPoint {
         let mut send_packet = self.sender.allocate_send_packet();
         send_packet.set_payload(buf);
         self.sender.send_packet_to(send_packet, &dest.into()).await
+    }
+    pub async fn send_to_route<D: Into<NodeID>>(
+        &self,
+        buf: &[u8],
+        dest: D,
+        route_key: &RouteKey,
+    ) -> io::Result<()> {
+        let mut send_packet = self.sender.allocate_send_packet();
+        send_packet.set_payload(buf);
+        self.sender
+            .send_packet_to_route(send_packet, &dest.into(), Some(route_key))
+            .await
     }
 
     pub async fn broadcast(&self, buf: &[u8]) -> io::Result<()> {
@@ -84,7 +97,7 @@ impl Builder {
             interceptor: None,
         }
     }
-    pub fn udp_ports(mut self, port: u16) -> Self {
+    pub fn udp_port(mut self, port: u16) -> Self {
         self.udp_port = Some(port);
         self
     }
@@ -144,13 +157,15 @@ impl Builder {
     }
 }
 impl EndPoint {
-    pub async fn from(tunnel_manager: TunnelManager) -> io::Result<Self> {
+    pub async fn from(config: TunnelManagerConfig) -> io::Result<Self> {
+        let tunnel_manager = TunnelManager::new(config).await?;
         EndPoint::from_interceptor0(tunnel_manager, None).await
     }
     pub async fn from_interceptor<T: DataInterceptor + 'static>(
-        tunnel_manager: TunnelManager,
+        config: TunnelManagerConfig,
         interceptor: T,
     ) -> io::Result<Self> {
+        let tunnel_manager = TunnelManager::new(config).await?;
         let interceptor = Some(Interceptor {
             inner: Arc::new(interceptor),
         });
@@ -195,7 +210,11 @@ async fn handle(
         {
             Ok(rs) => rs,
             Err(e) => {
-                log::debug!("recv_from {e:?},{:?}", tunnel_rx.protocol());
+                log::debug!(
+                    "recv_from {e:?},{:?} {:?}",
+                    tunnel_rx.protocol(),
+                    tunnel_rx.remote_addr()
+                );
                 return;
             }
         };
