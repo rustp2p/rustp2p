@@ -1,12 +1,12 @@
-use std::io;
-use std::net::Ipv4Addr;
-
 use clap::Parser;
 use env_logger::Env;
 use rustp2p::cipher::Algorithm;
 use rustp2p::protocol::node_id::{GroupCode, NodeID};
 use rustp2p::tunnel::PeerNodeAddress;
 use rustp2p::Builder;
+use std::io;
+use std::net::Ipv4Addr;
+use std::time::Duration;
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -42,13 +42,6 @@ pub async fn main() -> io::Result<()> {
     env_logger::Builder::from_env(Env::default().default_filter_or("debug")).init();
     let addrs = peer.unwrap_or_default();
 
-    let (tx, mut quit) = tokio::sync::mpsc::channel::<()>(1);
-
-    ctrlc::set_handler(move || {
-        tx.try_send(()).expect("Could not send signal on channel.");
-    })
-    .expect("Error setting Ctrl-C handler");
-
     if let Some(port) = port {
         log::info!("listen local port: {port}");
     }
@@ -64,12 +57,18 @@ pub async fn main() -> io::Result<()> {
         .build()
         .await?;
     if let Some(request) = request {
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        log::info!("=========== send 'hello' to {}", request);
         endpoint.send_to(b"hello", NodeID::from(request)).await?;
+        tokio::time::sleep(Duration::from_secs(1)).await;
     } else {
         let (data, metadata) = endpoint.recv_from().await?;
-        println!("recv: {:?} {:?}", data.payload(), metadata.src_id())
+        log::info!(
+            "=========== recv: {:?} {:?}",
+            String::from_utf8(data.payload().into()),
+            metadata.src_id()
+        )
     }
-    quit.recv().await.expect("quit error");
     log::info!("exit!!!!");
     Ok(())
 }
