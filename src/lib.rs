@@ -3,9 +3,11 @@ pub mod protocol;
 pub mod cipher;
 pub mod config;
 pub mod extend;
+mod reliable;
 pub mod tunnel;
 
 use crate::config::DataInterceptor;
+use crate::protocol::protocol_type::ProtocolType;
 use crate::tunnel::{RecvMetadata, RecvResult};
 use async_trait::async_trait;
 use cipher::Algorithm;
@@ -19,13 +21,9 @@ use std::sync::Arc;
 use tokio::task::JoinHandle;
 use tunnel::{PeerNodeAddress, RecvUserData, Tunnel, TunnelManager, TunnelTransmitHub};
 
-#[derive(Clone)]
 pub struct EndPoint {
     receiver: Receiver<(RecvUserData, RecvMetadata)>,
-    sender: Arc<TunnelTransmitHub>,
-    _handle: Arc<HandleOwner>,
-}
-struct HandleOwner {
+    sender: TunnelTransmitHub,
     handle: JoinHandle<()>,
 }
 
@@ -70,7 +68,7 @@ impl Deref for EndPoint {
     }
 }
 
-impl Drop for HandleOwner {
+impl Drop for EndPoint {
     fn drop(&mut self) {
         self.handle.abort();
     }
@@ -176,7 +174,7 @@ impl EndPoint {
         interceptor: Option<Interceptor>,
     ) -> io::Result<Self> {
         let (sender, receiver) = flume::unbounded();
-        let writer = Arc::new(tunnel_manager.tunnel_send_hub());
+        let writer = tunnel_manager.tunnel_send_hub();
         let handle = tokio::spawn(async move {
             while let Ok(tunnel_rx) = tunnel_manager.dispatch().await {
                 tokio::spawn(handle(tunnel_rx, sender.clone(), interceptor.clone()));
@@ -185,7 +183,7 @@ impl EndPoint {
         Ok(EndPoint {
             sender: writer,
             receiver,
-            _handle: Arc::new(HandleOwner { handle }),
+            handle,
         })
     }
 }
@@ -199,6 +197,7 @@ impl Default for Builder {
 async fn handle(
     mut tunnel_rx: Tunnel,
     sender: Sender<(RecvUserData, RecvMetadata)>,
+    // kcp_sender: Sender<(RecvUserData, RecvMetadata)>,
     interceptor: Option<Interceptor>,
 ) {
     let mut list = Vec::with_capacity(16);
@@ -222,9 +221,13 @@ async fn handle(
             log::debug!("recv_data_handle {e:?}");
             continue;
         };
-        for x in list.drain(..) {
-            if sender.send_async(x).await.is_err() {
-                break;
+        for (data, meta_data) in list.drain(..) {
+            if meta_data.protocol() == ProtocolType::KcpData.into() {
+                todo!()
+            } else {
+                if sender.send_async((data, meta_data)).await.is_err() {
+                    break;
+                }
             }
         }
     }

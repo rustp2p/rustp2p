@@ -756,7 +756,6 @@ impl Tunnel {
                     Ok(Ok(Ok((
                         RecvUserData {
                             _offset: rs.start,
-
                             _data: block,
                         },
                         RecvMetadata {
@@ -765,6 +764,7 @@ impl Tunnel {
                             _route_key: rs.route_key,
                             _ttl: rs.ttl,
                             _max_ttl: rs.max_ttl,
+                            _protocol: rs.protocol,
                         },
                     ))))
                 } else {
@@ -960,7 +960,8 @@ impl Tunnel {
         }
         self.route_table
             .add_route_if_absent(src_id, Route::from_default_rt(route_key, metric));
-        match packet.protocol()? {
+        let protocol_type = packet.protocol()?;
+        match protocol_type {
             ProtocolType::PunchRequest => {
                 packet.set_protocol(ProtocolType::PunchReply);
                 packet.set_ttl(packet.max_ttl());
@@ -1009,19 +1010,6 @@ impl Tunnel {
                 self.id_route_reply_handle(packet, group_code, self_id, group_code, src_id)
                     .await?
             }
-            ProtocolType::UserData => {
-                return Ok(Some(HandleResultInner {
-                    start: HEAD_LEN,
-                    end: packet.buffer().len(),
-                    src_id,
-                    dest_id,
-                    route_key,
-                    ttl: packet.ttl(),
-                    max_ttl: packet.max_ttl(),
-                    #[cfg(any(feature = "aes-gcm", feature = "chacha20-poly1305"))]
-                    is_encrypt: packet.is_encrypt(),
-                }))
-            }
             ProtocolType::RangeBroadcast => {
                 let end = packet.buffer().len();
 
@@ -1047,6 +1035,7 @@ impl Tunnel {
                         route_key,
                         ttl: packet.ttl(),
                         max_ttl: packet.max_ttl(),
+                        protocol: ProtocolType::MessageData.into(),
                         #[cfg(any(feature = "aes-gcm", feature = "chacha20-poly1305"))]
                         is_encrypt: packet.is_encrypt(),
                     }));
@@ -1092,6 +1081,20 @@ impl Tunnel {
             }
             ProtocolType::IDQuery => {}
             ProtocolType::IDReply => {}
+            ProtocolType::MessageData | ProtocolType::KcpData => {
+                return Ok(Some(HandleResultInner {
+                    start: HEAD_LEN,
+                    end: packet.buffer().len(),
+                    src_id,
+                    dest_id,
+                    route_key,
+                    ttl: packet.ttl(),
+                    max_ttl: packet.max_ttl(),
+                    protocol: protocol_type.into(),
+                    #[cfg(any(feature = "aes-gcm", feature = "chacha20-poly1305"))]
+                    is_encrypt: packet.is_encrypt(),
+                }))
+            }
         }
 
         Ok(None)
@@ -1271,6 +1274,7 @@ struct HandleResultInner {
     pub(crate) route_key: RouteKey,
     pub(crate) ttl: u8,
     pub(crate) max_ttl: u8,
+    pub(crate) protocol: u8,
     #[cfg(any(feature = "aes-gcm", feature = "chacha20-poly1305"))]
     pub(crate) is_encrypt: bool,
 }
@@ -1278,6 +1282,7 @@ struct HandleResultInner {
 pub struct RecvMetadata {
     _ttl: u8,
     _max_ttl: u8,
+    _protocol: u8,
     _src_id: NodeID,
     _dest_id: NodeID,
     _route_key: RouteKey,
@@ -1288,6 +1293,9 @@ impl RecvMetadata {
     }
     pub fn max_ttl(&self) -> u8 {
         self._max_ttl
+    }
+    pub(crate) fn protocol(&self) -> u8 {
+        self._protocol
     }
     pub fn src_id(&self) -> NodeID {
         self._src_id

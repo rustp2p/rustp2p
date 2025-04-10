@@ -600,7 +600,7 @@ impl TcpStreamIndex for TcpStream {
     }
 }
 
-/// The default byte encoder/decoder; using this is no different from directly using a TCP stream.
+/// The default byte encoder/decoder; using this is no different from directly using a TCP reliable.
 pub struct BytesCodec;
 
 /// Fixed-length prefix encoder/decoder.

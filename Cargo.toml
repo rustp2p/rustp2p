@@ -8,7 +8,7 @@ description = "A decentralized p2p library powered by Rust, which is devoted to 
 repository = "https://github.com/rustp2p/rustp2p"
 
 [dependencies]
-rust-p2p-core = { path = "rustp2p-core", version = "0.3"}
+rust-p2p-core = { path = "rustp2p-core", version = "0.3" }
 async-trait = { workspace = true }
 tokio = { workspace = true }
 log = { workspace = true }
@@ -28,8 +28,10 @@ dns-parser = "0.8"
 
 ring = { version = "0.17", optional = true }
 sha2 = "0.10"
-flume = {version = "0.11.1", features = ["async"]}
-
+flume = { version = "0.11.1", features = ["async"] }
+kcp = { version = "0.5.3" }
+tokio-util = "0.7"
+futures = "0.3.31"
 [dev-dependencies]
 rustp2p = { path = "../rustp2p", features = ["aes-gcm"] }
 clap = { version = "=4.0.32", features = ["derive"] }

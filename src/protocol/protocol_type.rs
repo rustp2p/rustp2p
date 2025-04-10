@@ -3,7 +3,7 @@ use std::io;
 #[derive(Eq, PartialEq, Copy, Clone, Debug)]
 #[repr(u8)]
 pub enum ProtocolType {
-    UserData = 0,
+    MessageData = 0,
     PunchConsultRequest = 1,
     PunchConsultReply = 2,
     PunchRequest = 3,
@@ -21,6 +21,7 @@ pub enum ProtocolType {
     RangeBroadcast = 11,
     IDQuery = 12,
     IDReply = 13,
+    KcpData = 14,
 }
 
 impl TryFrom<u8> for ProtocolType {

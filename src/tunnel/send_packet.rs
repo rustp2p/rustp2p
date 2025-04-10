@@ -28,9 +28,13 @@ impl SendPacket {
         buf.resize(HEAD_LEN, 0);
         let mut send_packet = Self { buf };
         let mut packet = NetPacket::unchecked(send_packet.buf_mut());
-        packet.set_protocol(ProtocolType::UserData);
+        packet.set_protocol(ProtocolType::MessageData);
         packet.set_ttl(15);
         send_packet
+    }
+    pub(crate) fn set_protocol(&mut self, protocol_type: ProtocolType) {
+        let mut packet = NetPacket::unchecked(self.buf_mut());
+        packet.set_protocol(protocol_type);
     }
     pub fn reserve(&mut self, additional: usize) {
         self.buf.reserve(additional);
@@ -79,7 +83,7 @@ impl SendPacket {
             self.buf.fill(0);
 
             let mut packet = NetPacket::unchecked(self.buf_mut());
-            packet.set_protocol(ProtocolType::UserData);
+            packet.set_protocol(ProtocolType::MessageData);
             packet.set_ttl(15);
         }
     }
@@ -110,7 +114,7 @@ impl SendPacket {
     pub(crate) fn is_user_data(&self) -> bool {
         let packet = NetPacket::unchecked(self.buf());
         if let Ok(p) = packet.protocol() {
-            return p == ProtocolType::UserData;
+            return p == ProtocolType::MessageData;
         }
         false
     }
