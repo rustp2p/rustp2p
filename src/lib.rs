@@ -153,15 +153,15 @@ impl Builder {
 
         let tunnel_manager = TunnelManager::new(config).await?;
 
-        EndPoint::from_interceptor0(tunnel_manager, self.interceptor).await
+        EndPoint::with_interceptor_impl(tunnel_manager, self.interceptor).await
     }
 }
 impl EndPoint {
-    pub async fn from(config: TunnelManagerConfig) -> io::Result<Self> {
+    pub async fn new(config: TunnelManagerConfig) -> io::Result<Self> {
         let tunnel_manager = TunnelManager::new(config).await?;
-        EndPoint::from_interceptor0(tunnel_manager, None).await
+        EndPoint::with_interceptor_impl(tunnel_manager, None).await
     }
-    pub async fn from_interceptor<T: DataInterceptor + 'static>(
+    pub async fn with_interceptor<T: DataInterceptor + 'static>(
         config: TunnelManagerConfig,
         interceptor: T,
     ) -> io::Result<Self> {
@@ -169,9 +169,9 @@ impl EndPoint {
         let interceptor = Some(Interceptor {
             inner: Arc::new(interceptor),
         });
-        EndPoint::from_interceptor0(tunnel_manager, interceptor).await
+        EndPoint::with_interceptor_impl(tunnel_manager, interceptor).await
     }
-    async fn from_interceptor0(
+    async fn with_interceptor_impl(
         mut tunnel_manager: TunnelManager,
         interceptor: Option<Interceptor>,
     ) -> io::Result<Self> {
