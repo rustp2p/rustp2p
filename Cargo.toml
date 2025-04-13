@@ -37,7 +37,7 @@ rustp2p = { path = "../rustp2p", features = ["aes-gcm"] }
 clap = { version = "=4.0.32", features = ["derive"] }
 log = "0.4.22"
 env_logger = "0.11.5"
-tun-rs = { version = "2.0.1", features = ["async_tokio"] }
+tun-rs = { git = "https://github.com/tun-rs/tun-rs", features = ["async_tokio"] }
 pnet_packet = "0.35.0"
 tokio = { version = "1.42", features = ["full"] }
 ctrlc = "3.4.5"

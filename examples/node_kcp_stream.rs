@@ -4,23 +4,22 @@ use rustp2p::protocol::node_id::{GroupCode, NodeID};
 use rustp2p::tunnel::PeerNodeAddress;
 use rustp2p::Builder;
 use std::io;
-use std::net::Ipv4Addr;
 use std::time::Duration;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Args {
-    /// Request to specify address
+    /// Request to specify ID
     #[arg(short, long)]
-    request: Option<Ipv4Addr>,
+    request: Option<u32>,
     /// Peer node address.
     /// example: --peer tcp://192.168.10.13:23333 --peer udp://192.168.10.23:23333
     #[arg(short, long)]
     peer: Option<Vec<PeerNodeAddress>>,
-    /// Local node IP and mask.
-    /// example: --local 10.26.0.2
+    /// example: --id 1
     #[arg(short, long)]
-    local: Ipv4Addr,
+    id: u32,
     /// Nodes with the same group_comde can form a network
     #[arg(short, long)]
     group_code: String,
@@ -34,7 +33,7 @@ pub async fn main() -> io::Result<()> {
     let Args {
         request,
         peer,
-        local,
+        id,
         group_code,
         port,
     } = Args::parse();
@@ -47,25 +46,31 @@ pub async fn main() -> io::Result<()> {
     let port = port.unwrap_or(23333);
 
     let endpoint = Builder::new()
-        .node_id(local.into())
+        .node_id(id.into())
         .tcp_port(port)
         .udp_port(port)
         .peers(addrs)
         .group_code(string_to_group_code(&group_code))
         .build()
         .await?;
+    let manager = endpoint.kcp_stream();
+
     if let Some(request) = request {
         tokio::time::sleep(Duration::from_secs(3)).await;
-        log::info!("=========== send 'hello' to {}", request);
-        endpoint.send_to(b"hello", NodeID::from(request)).await?;
-        tokio::time::sleep(Duration::from_secs(3)).await;
+        log::info!("=========== send kcp_stream 'hello' to {}", request);
+        let mut client_kcp_stream = manager.new_stream(NodeID::from(request), 1)?;
+        client_kcp_stream.write_all(b"hello").await?;
+        tokio::time::sleep(Duration::from_secs(1)).await;
     } else {
-        let (data, metadata) = endpoint.recv_from().await?;
+        let (mut server_kcp_stream, node_id) = manager.accept().await?;
+        log::info!("=========== accept kcp_stream from {:?}", node_id);
+        let mut buf = [0; 1024];
+        let len = server_kcp_stream.read(&mut buf).await?;
         log::info!(
-            "=========== recv: {:?} {:?}",
-            String::from_utf8(data.payload().into()),
-            metadata.src_id()
-        )
+            "=========== read kcp_stream from {:?},buf = {:?}",
+            node_id,
+            &buf[..len]
+        );
     }
     log::info!("exit!!!!");
     Ok(())

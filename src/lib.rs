@@ -5,6 +5,7 @@ pub mod config;
 pub mod extend;
 mod reliable;
 pub mod tunnel;
+pub use reliable::*;
 
 use crate::config::DataInterceptor;
 use crate::protocol::protocol_type::ProtocolType;
@@ -22,24 +23,35 @@ use tokio::task::JoinHandle;
 use tunnel::{PeerNodeAddress, RecvUserData, Tunnel, TunnelManager, TunnelTransmitHub};
 
 pub struct EndPoint {
-    receiver: Receiver<(RecvUserData, RecvMetadata)>,
-    sender: TunnelTransmitHub,
-    handle: JoinHandle<()>,
+    kcp_stream_manager: KcpStreamManager,
+    input: Receiver<(RecvUserData, RecvMetadata)>,
+    output: TunnelTransmitHub,
+    handle: Arc<OwnedJoinHandle>,
+}
+impl Clone for EndPoint {
+    fn clone(&self) -> Self {
+        Self {
+            kcp_stream_manager: self.kcp_stream_manager.clone0(),
+            input: self.input.clone(),
+            output: self.output.clone(),
+            handle: self.handle.clone(),
+        }
+    }
 }
 
 impl EndPoint {
     pub async fn recv_from(&self) -> io::Result<(RecvUserData, RecvMetadata)> {
-        self.receiver
+        self.input
             .recv_async()
             .await
             .map_err(|_| io::Error::new(io::ErrorKind::UnexpectedEof, "shutdown"))
     }
 
     pub async fn send_to<D: Into<NodeID>>(&self, buf: &[u8], dest: D) -> io::Result<()> {
-        self.sender.send_to(buf, dest).await
+        self.output.send_to(buf, dest).await
     }
     pub fn try_send_to<D: Into<NodeID>>(&self, buf: &[u8], dest: D) -> io::Result<()> {
-        self.sender.try_send_to(buf, dest)
+        self.output.try_send_to(buf, dest)
     }
     pub async fn send_to_route<D: Into<NodeID>>(
         &self,
@@ -47,9 +59,9 @@ impl EndPoint {
         dest: D,
         route_key: &RouteKey,
     ) -> io::Result<()> {
-        let mut send_packet = self.sender.allocate_send_packet();
+        let mut send_packet = self.output.allocate_send_packet();
         send_packet.set_payload(buf);
-        self.sender
+        self.output
             .send_packet_to_route(send_packet, &dest.into(), Some(route_key))
             .await
     }
@@ -59,16 +71,16 @@ impl EndPoint {
         dest: D,
         route_key: &RouteKey,
     ) -> io::Result<()> {
-        let mut send_packet = self.sender.allocate_send_packet();
+        let mut send_packet = self.output.allocate_send_packet();
         send_packet.set_payload(buf);
-        self.sender
+        self.output
             .try_send_packet_to_route(send_packet, &dest.into(), Some(route_key))
     }
 
     pub async fn broadcast(&self, buf: &[u8]) -> io::Result<()> {
-        let mut send_packet = self.sender.allocate_send_packet();
+        let mut send_packet = self.output.allocate_send_packet();
         send_packet.set_payload(buf);
-        self.sender.broadcast_packet(send_packet).await
+        self.output.broadcast_packet(send_packet).await
     }
 }
 
@@ -76,11 +88,13 @@ impl Deref for EndPoint {
     type Target = TunnelTransmitHub;
 
     fn deref(&self) -> &Self::Target {
-        &self.sender
+        &self.output
     }
 }
-
-impl Drop for EndPoint {
+struct OwnedJoinHandle {
+    handle: JoinHandle<()>,
+}
+impl Drop for OwnedJoinHandle {
     fn drop(&mut self) {
         self.handle.abort();
     }
@@ -187,14 +201,23 @@ impl EndPoint {
     ) -> io::Result<Self> {
         let (sender, receiver) = flume::unbounded();
         let writer = tunnel_manager.tunnel_send_hub();
+        let (kcp_stream_manager, kcp_data_input) = create_kcp_stream_manager(writer.clone()).await;
+
         let handle = tokio::spawn(async move {
             while let Ok(tunnel_rx) = tunnel_manager.dispatch().await {
-                tokio::spawn(handle(tunnel_rx, sender.clone(), interceptor.clone()));
+                tokio::spawn(handle(
+                    tunnel_rx,
+                    sender.clone(),
+                    kcp_data_input.clone(),
+                    interceptor.clone(),
+                ));
             }
         });
+        let handle = Arc::new(OwnedJoinHandle { handle });
         Ok(EndPoint {
-            sender: writer,
-            receiver,
+            kcp_stream_manager,
+            output: writer,
+            input: receiver,
             handle,
         })
     }
@@ -209,7 +232,7 @@ impl Default for Builder {
 async fn handle(
     mut tunnel_rx: Tunnel,
     sender: Sender<(RecvUserData, RecvMetadata)>,
-    // kcp_sender: Sender<(RecvUserData, RecvMetadata)>,
+    kcp_data_input: KcpDataInput,
     interceptor: Option<Interceptor>,
 ) {
     let mut list = Vec::with_capacity(16);
@@ -235,11 +258,11 @@ async fn handle(
         };
         for (data, meta_data) in list.drain(..) {
             if meta_data.protocol() == ProtocolType::KcpData.into() {
-                todo!()
-            } else {
-                if sender.send_async((data, meta_data)).await.is_err() {
-                    break;
-                }
+                kcp_data_input
+                    .input(data.payload(), meta_data.src_id())
+                    .await;
+            } else if sender.send_async((data, meta_data)).await.is_err() {
+                break;
             }
         }
     }
