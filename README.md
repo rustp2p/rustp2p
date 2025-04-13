@@ -4,8 +4,10 @@ A decentralized p2p library powered by Rust, which is devoted to simple use.
 ![rustp2p](https://docs.rs/rustp2p/badge.svg)
 
 ### Features
-1.  UDP hole punching for both Cone and Symmetric Nat
-2.  TCP hole punching for NAT1 
+1. UDP hole punching for both Cone and Symmetric Nat
+2. TCP hole punching for NAT1 
+3. Enables reliable transport over KCP
+4. Enables secure encryption with AesGcm or ChaCha20Poly1305.
 
 
 ### Description
