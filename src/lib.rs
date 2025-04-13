@@ -36,9 +36,10 @@ impl EndPoint {
     }
 
     pub async fn send_to<D: Into<NodeID>>(&self, buf: &[u8], dest: D) -> io::Result<()> {
-        let mut send_packet = self.sender.allocate_send_packet();
-        send_packet.set_payload(buf);
-        self.sender.send_packet_to(send_packet, &dest.into()).await
+        self.sender.send_to(buf, dest).await
+    }
+    pub fn try_send_to<D: Into<NodeID>>(&self, buf: &[u8], dest: D) -> io::Result<()> {
+        self.sender.try_send_to(buf, dest)
     }
     pub async fn send_to_route<D: Into<NodeID>>(
         &self,
@@ -51,6 +52,17 @@ impl EndPoint {
         self.sender
             .send_packet_to_route(send_packet, &dest.into(), Some(route_key))
             .await
+    }
+    pub async fn try_send_to_route<D: Into<NodeID>>(
+        &self,
+        buf: &[u8],
+        dest: D,
+        route_key: &RouteKey,
+    ) -> io::Result<()> {
+        let mut send_packet = self.sender.allocate_send_packet();
+        send_packet.set_payload(buf);
+        self.sender
+            .try_send_packet_to_route(send_packet, &dest.into(), Some(route_key))
     }
 
     pub async fn broadcast(&self, buf: &[u8]) -> io::Result<()> {

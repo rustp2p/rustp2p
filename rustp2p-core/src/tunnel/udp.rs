@@ -363,20 +363,38 @@ impl SocketManager {
 
         Ok(())
     }
-
+    fn get_sender(&self, route_key: &RouteKey) -> io::Result<Sender<(BytesMut, SocketAddr)>> {
+        if let Some(sender) = self.sender_map.get(&route_key.index()) {
+            Ok(sender.value().clone())
+        } else {
+            Err(io::Error::new(io::ErrorKind::NotFound, "route not found"))
+        }
+    }
     pub async fn send_bytes_to<T, D: ToRouteKeyForUdp<T>>(
         &self,
         buf: BytesMut,
         dest: D,
     ) -> io::Result<()> {
         let route_key = ToRouteKeyForUdp::route_key(self, dest)?;
-        let sender = if let Some(sender) = self.sender_map.get(&route_key.index()) {
-            sender.value().clone()
-        } else {
-            return Err(io::Error::new(io::ErrorKind::NotFound, "route not found"));
-        };
+        let sender = self.get_sender(&route_key)?;
         if let Err(_e) = sender.send((buf, route_key.addr())).await {
             Err(io::Error::from(io::ErrorKind::WriteZero))
+        } else {
+            Ok(())
+        }
+    }
+    pub fn try_send_bytes_to<T, D: ToRouteKeyForUdp<T>>(
+        &self,
+        buf: BytesMut,
+        dest: D,
+    ) -> io::Result<()> {
+        let route_key = ToRouteKeyForUdp::route_key(self, dest)?;
+        let sender = self.get_sender(&route_key)?;
+        if let Err(e) = sender.try_send((buf, route_key.addr())) {
+            match e {
+                TrySendError::Full(_) => Err(io::Error::from(io::ErrorKind::WouldBlock)),
+                TrySendError::Closed(_) => Err(io::Error::from(io::ErrorKind::WriteZero)),
+            }
         } else {
             Ok(())
         }
@@ -454,7 +472,7 @@ impl UdpTunnelFactory {
         let sender = if let Some(v) = option {
             v
         } else {
-            let (s, mut r) = tachyonix::channel(32);
+            let (s, mut r) = tachyonix::channel(128);
             let index = udp_tunnel.index;
             let sender = s.clone();
             self.socket_manager.sender_map.insert(index, s);

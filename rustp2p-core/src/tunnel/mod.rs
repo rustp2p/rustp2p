@@ -145,6 +145,21 @@ impl UnifiedSocketManager {
         }
         Err(io::Error::from(io::ErrorKind::InvalidInput))
     }
+    pub fn try_send_to(&self, buf: BytesMut, route_key: &RouteKey) -> io::Result<()> {
+        match route_key.protocol() {
+            ConnectProtocol::UDP => {
+                if let Some(w) = self.udp_socket_manager.as_ref() {
+                    return w.try_send_bytes_to(buf, route_key);
+                }
+            }
+            ConnectProtocol::TCP => {
+                if let Some(w) = self.tcp_socket_manager.as_ref() {
+                    return w.try_send_to(buf, route_key);
+                }
+            }
+        }
+        Err(io::Error::from(io::ErrorKind::InvalidInput))
+    }
 
     /// Writing `buf` to the target denoted by SocketAddr with the specified protocol
     pub async fn send_to_addr<A: Into<SocketAddr>>(

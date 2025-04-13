@@ -369,15 +369,7 @@ impl TunnelTransmitHub {
                 let route = self.route_table.get_route_by_id(&relay_node_id)?;
                 self.socket_manager.send_to(buf, &route.route_key()).await?;
             } else {
-                let route;
-                if let Some(v) = self.node_context().other_route_table.get(&relay_group_code) {
-                    route = v.get_route_by_id(&relay_node_id)?;
-                } else {
-                    return Err(io::Error::new(
-                        io::ErrorKind::AddrNotAvailable,
-                        "group route not found",
-                    ));
-                }
+                let route = self.get_other_route(relay_group_code, relay_node_id)?;
                 self.socket_manager.send_to(buf, &route.route_key()).await?
             }
         } else {
@@ -388,7 +380,53 @@ impl TunnelTransmitHub {
         };
         Ok(())
     }
+    fn get_other_route(
+        &self,
+        relay_group_code: GroupCode,
+        relay_node_id: NodeID,
+    ) -> io::Result<Route> {
+        if let Some(v) = self.node_context().other_route_table.get(&relay_group_code) {
+            v.get_route_by_id(&relay_node_id)
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::AddrNotAvailable,
+                "group route not found",
+            ))
+        }
+    }
+    fn try_send_to_impl(
+        &self,
+        buf: BytesMut,
+        group_code: &GroupCode,
+        dest_id: &NodeID,
+    ) -> io::Result<()> {
+        if dest_id.is_broadcast() {
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                "broadcast requires asynchronous",
+            ));
+        }
 
+        if let Ok(route) = self.route_table.get_route_by_id(dest_id) {
+            self.socket_manager.try_send_to(buf, &route.route_key())?
+        } else if let Some((relay_group_code, relay_node_id)) =
+            self.node_context().reachable_node(group_code, dest_id)
+        {
+            if &relay_group_code == group_code {
+                let route = self.route_table.get_route_by_id(&relay_node_id)?;
+                self.socket_manager.try_send_to(buf, &route.route_key())?;
+            } else {
+                let route = self.get_other_route(relay_group_code, relay_node_id)?;
+                self.socket_manager.try_send_to(buf, &route.route_key())?
+            }
+        } else {
+            return Err(io::Error::new(
+                io::ErrorKind::AddrNotAvailable,
+                "node route not found",
+            ));
+        };
+        Ok(())
+    }
     async fn send_broadcast_impl(&self, buf: &[u8], group_code: &GroupCode, src_id: &NodeID) {
         let route_table = &self.route_table;
         let table = route_table.route_table_one();
@@ -461,13 +499,7 @@ impl TunnelTransmitHub {
             packet.set_dest_id(dest_id);
             #[cfg(any(feature = "aes-gcm", feature = "chacha20-poly1305"))]
             if packet.is_user_data() {
-                if let Some(cipher) = self.node_context.cipher.as_ref() {
-                    let data_len = packet.len();
-                    packet.resize(data_len + cipher.reserved_len(), 0);
-
-                    cipher.encrypt(tag(&src_id, dest_id), &mut packet)?;
-                    packet.set_encrypt_flag(true);
-                }
+                self.encrypt(&mut packet, &src_id, dest_id)?;
             }
             if let Some(route_key) = route_key {
                 return self
@@ -480,6 +512,64 @@ impl TunnelTransmitHub {
         } else {
             Err(io::Error::new(io::ErrorKind::Other, "no id specified"))
         }
+    }
+    #[cfg(any(feature = "aes-gcm", feature = "chacha20-poly1305"))]
+    fn encrypt(
+        &self,
+        packet: &mut SendPacket,
+        src_id: &NodeID,
+        dest_id: &NodeID,
+    ) -> io::Result<()> {
+        if let Some(cipher) = self.node_context.cipher.as_ref() {
+            let data_len = packet.len();
+            packet.resize(data_len + cipher.reserved_len(), 0);
+
+            cipher.encrypt(tag(&src_id, dest_id), packet)?;
+            packet.set_encrypt_flag(true);
+        }
+        Ok(())
+    }
+    pub(crate) fn try_send_packet_to_route(
+        &self,
+        mut packet: SendPacket,
+        dest_id: &NodeID,
+        route_key: Option<&RouteKey>,
+    ) -> io::Result<()> {
+        let group_code = self.node_context.load_group_code();
+        if let Some(src_id) = self.node_context.load_id() {
+            packet.set_group_code(&group_code);
+            packet.set_src_id(&src_id);
+            packet.set_dest_id(dest_id);
+            #[cfg(any(feature = "aes-gcm", feature = "chacha20-poly1305"))]
+            if packet.is_user_data() {
+                self.encrypt(&mut packet, &src_id, dest_id)?;
+            }
+            if let Some(route_key) = route_key {
+                return self
+                    .socket_manager
+                    .try_send_to(packet.into_buf(), route_key);
+            }
+            self.try_send_to_impl(packet.into_buf(), &group_code, dest_id)
+        } else {
+            Err(io::Error::new(io::ErrorKind::Other, "no id specified"))
+        }
+    }
+    pub(crate) fn try_send_packet_to(
+        &self,
+        packet: SendPacket,
+        dest_id: &NodeID,
+    ) -> io::Result<()> {
+        self.try_send_packet_to_route(packet, dest_id, None)
+    }
+    pub async fn send_to<D: Into<NodeID>>(&self, buf: &[u8], dest: D) -> io::Result<()> {
+        let mut send_packet = self.allocate_send_packet();
+        send_packet.set_payload(buf);
+        self.send_packet_to(send_packet, &dest.into()).await
+    }
+    pub fn try_send_to<D: Into<NodeID>>(&self, buf: &[u8], dest: D) -> io::Result<()> {
+        let mut send_packet = self.allocate_send_packet();
+        send_packet.set_payload(buf);
+        self.try_send_packet_to(send_packet, &dest.into())
     }
     pub(crate) async fn send_packet_to(
         &self,

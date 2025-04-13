@@ -41,7 +41,7 @@ impl TcpTunnelFactory {
         let tcp_listener = create_tcp_listener(address)?;
         let local_addr = tcp_listener.local_addr()?;
         let tcp_listener = TcpListener::from_std(tcp_listener)?;
-        let (connect_sender, connect_receiver) = tachyonix::channel(64);
+        let (connect_sender, connect_receiver) = tachyonix::channel(128);
         let write_half_collect =
             WriteHalfCollect::new(config.tcp_multiplexing_limit, config.recycle_buf);
         let init_codec = Arc::new(config.init_codec);
@@ -259,7 +259,7 @@ impl WriteHalfCollect {
                 v[index_offset] = index;
                 v
             });
-        let (s, mut r) = tachyonix::channel(32);
+        let (s, mut r) = tachyonix::channel(128);
         let sender = s.clone();
         self.write_half_map.insert(index, s);
         let collect = self.clone();
@@ -565,7 +565,8 @@ impl SocketManager {
         let route_key = self.connect(dest.into()).await?;
         self.write_half_collect.send_to(buf, &route_key).await
     }
-    pub fn try_send_to(&self, buf: BytesMut, route_key: &RouteKey) -> io::Result<()> {
+    pub fn try_send_to<D: ToRouteKeyForTcp<()>>(&self, buf: BytesMut, dest: D) -> io::Result<()> {
+        let route_key = ToRouteKeyForTcp::route_key(self, dest)?;
         self.write_half_collect.try_send_to(buf, &route_key)
     }
 }
