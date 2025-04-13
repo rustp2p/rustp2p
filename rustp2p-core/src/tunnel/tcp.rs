@@ -8,13 +8,12 @@ use bytes::BytesMut;
 use dashmap::DashMap;
 use dyn_clone::DynClone;
 use rand::Rng;
-use std::future::Future;
 use std::io;
 use std::io::IoSlice;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
-use tachyonix::{Receiver, Sender};
+use tachyonix::{Receiver, Sender, TrySendError};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::{TcpListener, TcpStream};
@@ -384,7 +383,18 @@ impl WriteHalfCollect {
     pub async fn send_to(&self, buf: BytesMut, route_key: &RouteKey) -> io::Result<()> {
         let write_half = self.get_write_half_by_key(route_key)?;
         if let Err(_e) = write_half.send(buf).await {
-            Err(io::Error::from(io::ErrorKind::WriteZero))?
+            Err(io::Error::from(io::ErrorKind::WriteZero))
+        } else {
+            Ok(())
+        }
+    }
+    pub fn try_send_to(&self, buf: BytesMut, route_key: &RouteKey) -> io::Result<()> {
+        let write_half = self.get_write_half_by_key(route_key)?;
+        if let Err(e) = write_half.try_send(buf) {
+            match e {
+                TrySendError::Full(_) => Err(io::Error::from(io::ErrorKind::WouldBlock)),
+                TrySendError::Closed(_) => Err(io::Error::from(io::ErrorKind::WriteZero)),
+            }
         } else {
             Ok(())
         }
@@ -544,36 +554,47 @@ impl SocketManager {
 
     /// Writing `buf` to the target denoted by `route_key`
     pub async fn send_to<D: ToRouteKeyForTcp<()>>(&self, buf: BytesMut, dest: D) -> io::Result<()> {
-        let route_key = ToRouteKeyForTcp::route_key(self, dest).await?;
+        let route_key = ToRouteKeyForTcp::route_key(self, dest)?;
         self.write_half_collect.send_to(buf, &route_key).await
+    }
+    pub async fn send_to_addr<D: Into<SocketAddr>>(
+        &self,
+        buf: BytesMut,
+        dest: D,
+    ) -> io::Result<()> {
+        let route_key = self.connect(dest.into()).await?;
+        self.write_half_collect.send_to(buf, &route_key).await
+    }
+    pub fn try_send_to(&self, buf: BytesMut, route_key: &RouteKey) -> io::Result<()> {
+        self.write_half_collect.try_send_to(buf, &route_key)
     }
 }
 pub trait ToRouteKeyForTcp<T> {
-    fn route_key(_: &SocketManager, _: Self) -> impl Future<Output = io::Result<RouteKey>>;
+    fn route_key(_: &SocketManager, _: Self) -> io::Result<RouteKey>;
 }
 
 impl ToRouteKeyForTcp<()> for RouteKey {
-    async fn route_key(_: &SocketManager, dest: RouteKey) -> io::Result<RouteKey> {
+    fn route_key(_: &SocketManager, dest: RouteKey) -> io::Result<RouteKey> {
         Ok(dest)
     }
 }
 
 impl ToRouteKeyForTcp<()> for &RouteKey {
-    async fn route_key(_: &SocketManager, dest: &RouteKey) -> io::Result<RouteKey> {
+    fn route_key(_: &SocketManager, dest: &RouteKey) -> io::Result<RouteKey> {
         Ok(*dest)
     }
 }
 
 impl ToRouteKeyForTcp<()> for &mut RouteKey {
-    async fn route_key(_: &SocketManager, dest: &mut RouteKey) -> io::Result<RouteKey> {
+    fn route_key(_: &SocketManager, dest: &mut RouteKey) -> io::Result<RouteKey> {
         Ok(*dest)
     }
 }
-impl<S: Into<SocketAddr>> ToRouteKeyForTcp<()> for S {
-    async fn route_key(socket_manager: &SocketManager, dest: Self) -> io::Result<RouteKey> {
-        socket_manager.connect(dest.into()).await
-    }
-}
+// impl<S: Into<SocketAddr>> ToRouteKeyForTcp<()> for S {
+//     async fn route_key(socket_manager: &SocketManager, dest: Self) -> io::Result<RouteKey> {
+//         socket_manager.connect(dest.into()).await
+//     }
+// }
 
 pub trait TcpStreamIndex {
     fn route_key(&self) -> io::Result<RouteKey>;

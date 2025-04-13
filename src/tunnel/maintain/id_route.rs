@@ -62,7 +62,7 @@ async fn poll_direct_peer_node(
             NodeAddress::Tcp(addr) => match tunnel_tx.socket_manager.tcp_socket_manager_as_ref() {
                 None => {}
                 Some(tcp) => {
-                    if let Err(e) = tcp.send_to(packet.buffer().into(), addr).await {
+                    if let Err(e) = tcp.send_to_addr(packet.buffer().into(), addr).await {
                         log::warn!("poll_direct_peer_node tcp, e={e:?},addr={addr:?}");
                     }
                 }

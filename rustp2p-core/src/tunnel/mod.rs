@@ -161,7 +161,7 @@ impl UnifiedSocketManager {
             }
             ConnectProtocol::TCP => {
                 if let Some(w) = self.tcp_socket_manager.as_ref() {
-                    return w.send_to(buf, addr).await;
+                    return w.send_to_addr(buf, addr).await;
                 }
             }
         }
