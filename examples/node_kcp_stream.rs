@@ -20,7 +20,7 @@ struct Args {
     /// example: --id 1
     #[arg(short, long)]
     id: u32,
-    /// Nodes with the same group_comde can form a network
+    /// Nodes with the same group_code can form a network
     #[arg(short, long)]
     group_code: String,
     /// Listen local port
@@ -57,24 +57,50 @@ pub async fn main() -> io::Result<()> {
 
     if let Some(request) = request {
         tokio::time::sleep(Duration::from_secs(3)).await;
-        log::info!("=========== send kcp_stream 'hello' to {}", request);
         let mut client_kcp_stream = manager.new_stream(NodeID::from(request), 1)?;
-        client_kcp_stream.write_all(b"hello").await?;
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        use tokio::io::{AsyncBufReadExt, BufReader};
+        let mut reader = BufReader::new(tokio::io::stdin()).lines();
+        while let Ok(Some(line)) = reader.next_line().await {
+            println!("input: {}", line);
+            if line.trim() == "exit" {
+                break;
+            }
+            client_kcp_stream.write_all(line.as_bytes()).await?;
+        }
     } else {
-        let (mut server_kcp_stream, node_id) = manager.accept().await?;
-        log::info!("=========== accept kcp_stream from {:?}", node_id);
-        let mut buf = [0; 1024];
-        let len = server_kcp_stream.read(&mut buf).await?;
-        log::info!(
-            "=========== read kcp_stream from {:?},buf = {:?}",
-            node_id,
-            &buf[..len]
-        );
+        tokio::spawn(async move {
+            while let Ok((mut stream, remote_id)) = manager.accept().await {
+                log::info!("=========== accept kcp_stream from {:?}", remote_id);
+                tokio::spawn(async move {
+                    let mut buf = [0; 1024];
+                    loop {
+                        let result =
+                            tokio::time::timeout(Duration::from_secs(100), stream.read(&mut buf))
+                                .await;
+                        match result {
+                            Ok(rs) => {
+                                let len = rs.unwrap();
+                                log::info!(
+                                    "read remote_id={remote_id:?},message={:?}",
+                                    String::from_utf8(buf[..len].into())
+                                );
+                            }
+                            Err(_) => {
+                                log::info!("read remote_id={remote_id:?} timeout");
+                                break;
+                            }
+                        }
+                    }
+                });
+            }
+            log::info!("=========== accept kcp_stream end====");
+        });
+        tokio::signal::ctrl_c().await?;
     }
     log::info!("exit!!!!");
     Ok(())
 }
+
 fn string_to_group_code(input: &str) -> GroupCode {
     let mut array = [0u8; 16];
     let bytes = input.as_bytes();

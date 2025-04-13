@@ -149,14 +149,13 @@ impl Builder {
             .set_tcp_tunnel_config(
                 TcpTunnelConfig::default().set_tcp_port(self.tcp_port.unwrap_or(0)),
             )
-            .set_group_code(self.group_code.ok_or(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "group_code is required",
-            ))?)
             .set_node_id(self.node_id.ok_or(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "node_id is required",
             ))?);
+        if let Some(group_code) = self.group_code {
+            config = config.set_group_code(group_code);
+        }
         if let Some(peers) = self.peers {
             config = config.set_direct_addrs(peers);
         }

@@ -17,6 +17,7 @@ use tokio::time::Interval;
 use tokio_util::sync::PollSender;
 
 pub struct KcpStream {
+    counter: Counter,
     map: Map,
     node_id: NodeID,
     conv: u32,
@@ -26,20 +27,20 @@ pub struct KcpStream {
 }
 type Map = Arc<RwLock<HashMap<(NodeID, u32), Sender<BytesMut>>>>;
 pub struct KcpStreamManager {
-    counter: Arc<AtomicUsize>,
+    counter: Counter,
     input_receiver: flume::Receiver<(NodeID, BytesMut)>,
     map: Map,
     output: Arc<TunnelTransmitHub>,
 }
 impl Clone for KcpStreamManager {
     fn clone(&self) -> Self {
-        self.counter.fetch_add(1, Ordering::Release);
+        self.counter.add();
         self.clone0()
     }
 }
 impl Drop for KcpStreamManager {
     fn drop(&mut self) {
-        self.counter.fetch_sub(1, Ordering::Release);
+        self.counter.sub();
     }
 }
 impl KcpStreamManager {
@@ -54,13 +55,28 @@ impl KcpStreamManager {
 }
 #[derive(Clone)]
 pub(crate) struct KcpDataInput {
-    counter: Arc<AtomicUsize>,
+    counter: Counter,
     map: Map,
     sender: flume::Sender<(NodeID, BytesMut)>,
 }
+#[derive(Clone, Default)]
+struct Counter {
+    counter: Arc<AtomicUsize>,
+}
+impl Counter {
+    fn add(&self) {
+        self.counter.fetch_add(1, Ordering::Release);
+    }
+    fn sub(&self) {
+        self.counter.fetch_sub(1, Ordering::Release);
+    }
+    fn get(&self) -> usize {
+        self.counter.load(Ordering::Acquire)
+    }
+}
 impl KcpDataInput {
     pub(crate) async fn input(&self, buf: &[u8], node_id: NodeID) {
-        if self.counter.load(Ordering::Acquire) <= 1 {
+        if self.counter.get() <= 1 {
             return;
         }
         if buf.is_empty() {
@@ -83,7 +99,8 @@ pub(crate) async fn create_kcp_stream_manager(
 ) -> (KcpStreamManager, KcpDataInput) {
     let (input_sender, input_receiver) = flume::bounded(128);
     let map = Map::default();
-    let counter = Arc::new(AtomicUsize::new(1));
+    let counter = Counter::default();
+    counter.add();
     let manager = KcpStreamManager {
         counter: counter.clone(),
         input_receiver,
@@ -142,7 +159,13 @@ impl KcpStreamManager {
         }
     }
     pub fn new_stream(&self, node_id: NodeID, conv: u32) -> io::Result<KcpStream> {
-        KcpStream::new(node_id, conv, self.map.clone(), self.output.clone())
+        KcpStream::new(
+            self.counter.clone(),
+            node_id,
+            conv,
+            self.map.clone(),
+            self.output.clone(),
+        )
     }
 }
 impl AsyncWrite for KcpStream {
@@ -153,11 +176,12 @@ impl AsyncWrite for KcpStream {
     ) -> Poll<Result<usize, Error>> {
         match self.sender.poll_reserve(cx) {
             Poll::Ready(Ok(_)) => {
-                match self.sender.send_item(buf.into()) {
+                let len = buf.len().min(10240);
+                match self.sender.send_item(buf[..len].into()) {
                     Ok(_) => {}
                     Err(_) => return Poll::Ready(Err(io::Error::from(io::ErrorKind::WriteZero))),
                 };
-                Poll::Ready(Ok(buf.len()))
+                Poll::Ready(Ok(len))
             }
             Poll::Ready(Err(_)) => Poll::Ready(Err(io::Error::from(io::ErrorKind::WriteZero))),
             Poll::Pending => Poll::Pending,
@@ -209,7 +233,8 @@ impl AsyncRead for KcpStream {
     }
 }
 impl KcpStream {
-    pub(crate) fn new(
+    fn new(
+        counter: Counter,
         node_id: NodeID,
         conv: u32,
         map: Map,
@@ -225,10 +250,13 @@ impl KcpStream {
         let (input_sender, input_receiver) = tokio::sync::mpsc::channel(128);
         guard.insert((node_id, conv), input_sender);
         drop(guard);
-        let stream = KcpStream::new_stream(node_id, conv, map, input_receiver, output_sender);
+        counter.add();
+        let stream =
+            KcpStream::new_stream(counter, node_id, conv, map, input_receiver, output_sender);
         Ok(stream)
     }
     fn new_stream(
+        counter: Counter,
         node_id: NodeID,
         conv: u32,
         map: Map,
@@ -251,6 +279,7 @@ impl KcpStream {
             let _ = kcp_run(input, kcp, data_out_receiver, data_in_sender).await;
         });
         KcpStream {
+            counter,
             map,
             node_id,
             conv,
@@ -264,6 +293,7 @@ impl Drop for KcpStream {
     fn drop(&mut self) {
         let mut guard = self.map.write();
         let _ = guard.remove(&(self.node_id, self.conv));
+        self.counter.sub();
     }
 }
 async fn kcp_run(
@@ -284,6 +314,15 @@ async fn kcp_run(
         } else {
             all_event(&mut input, &mut data_out_receiver, &mut interval).await?
         };
+        if let Some(mut buf) = input_data.take() {
+            let len = kcp
+                .input(&buf)
+                .map_err(|e| Error::new(io::ErrorKind::Other, e))?;
+            if len < buf.len() {
+                buf.advance(len);
+                input_data.replace(buf);
+            }
+        }
         match event {
             Event::Input(mut buf) => {
                 let len = kcp
@@ -299,7 +338,11 @@ async fn kcp_run(
                     .map_err(|e| Error::new(io::ErrorKind::Other, e))?;
             }
             Event::Timeout => {
-                kcp.update(tokio::time::Instant::now().elapsed().as_millis() as u32)
+                let now = std::time::SystemTime::now();
+                let millis = now
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default();
+                kcp.update(millis.as_millis() as _)
                     .map_err(|e| Error::new(io::ErrorKind::Other, e))?;
             }
         }
@@ -356,6 +399,7 @@ async fn output_event(
         }
     }
 }
+#[derive(Debug)]
 enum Event {
     Output(BytesMut),
     Input(BytesMut),
@@ -368,7 +412,6 @@ struct KcpOutput {
 }
 impl Write for KcpOutput {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        println!("---------------------- write");
         self.sender
             .try_kcp_send_to(buf, self.node_id)
             .map_err(|_| Error::from(io::ErrorKind::WriteZero))?;

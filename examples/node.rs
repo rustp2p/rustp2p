@@ -25,7 +25,7 @@ struct Args {
     /// example: --local 10.26.0.2/24
     #[arg(short, long)]
     local: String,
-    /// Nodes with the same group_comde can form a network
+    /// Nodes with the same group_code can form a network
     #[arg(short, long)]
     group_code: String,
     /// Listen local port
