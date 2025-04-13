@@ -4,7 +4,6 @@ use rustp2p::protocol::node_id::{GroupCode, NodeID};
 use rustp2p::tunnel::PeerNodeAddress;
 use rustp2p::Builder;
 use std::io;
-use std::net::Ipv4Addr;
 use std::time::Duration;
 
 #[derive(Parser, Debug)]
@@ -12,16 +11,15 @@ use std::time::Duration;
 struct Args {
     /// Request to specify address
     #[arg(short, long)]
-    request: Option<Ipv4Addr>,
+    request: Option<u32>,
     /// Peer node address.
     /// example: --peer tcp://192.168.10.13:23333 --peer udp://192.168.10.23:23333
     #[arg(short, long)]
     peer: Option<Vec<PeerNodeAddress>>,
-    /// Local node IP and mask.
-    /// example: --local 10.26.0.2
+    /// example: --id 1
     #[arg(short, long)]
-    local: Ipv4Addr,
-    /// Nodes with the same group_comde can form a network
+    id: u32,
+    /// Nodes with the same group_code can form a network
     #[arg(short, long)]
     group_code: String,
     /// Listen local port
@@ -34,7 +32,7 @@ pub async fn main() -> io::Result<()> {
     let Args {
         request,
         peer,
-        local,
+        id,
         group_code,
         port,
     } = Args::parse();
@@ -47,7 +45,7 @@ pub async fn main() -> io::Result<()> {
     let port = port.unwrap_or(23333);
 
     let endpoint = Builder::new()
-        .node_id(local.into())
+        .node_id(id.into())
         .tcp_port(port)
         .udp_port(port)
         .peers(addrs)
