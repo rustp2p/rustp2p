@@ -29,7 +29,7 @@ pub struct KcpStreamManager {
     counter: Arc<AtomicUsize>,
     input_receiver: flume::Receiver<(NodeID, BytesMut)>,
     map: Map,
-    output: TunnelTransmitHub,
+    output: Arc<TunnelTransmitHub>,
 }
 impl Clone for KcpStreamManager {
     fn clone(&self) -> Self {
@@ -79,7 +79,7 @@ impl KcpDataInput {
     }
 }
 pub(crate) async fn create_kcp_stream_manager(
-    sender: TunnelTransmitHub,
+    sender: Arc<TunnelTransmitHub>,
 ) -> (KcpStreamManager, KcpDataInput) {
     let (input_sender, input_receiver) = flume::bounded(128);
     let map = Map::default();
@@ -213,7 +213,7 @@ impl KcpStream {
         node_id: NodeID,
         conv: u32,
         map: Map,
-        output_sender: TunnelTransmitHub,
+        output_sender: Arc<TunnelTransmitHub>,
     ) -> io::Result<Self> {
         let mut guard = map.write();
         if guard.contains_key(&(node_id, conv)) {
@@ -233,7 +233,7 @@ impl KcpStream {
         conv: u32,
         map: Map,
         input: Receiver<BytesMut>,
-        output_sender: TunnelTransmitHub,
+        output_sender: Arc<TunnelTransmitHub>,
     ) -> Self {
         let mut kcp = Kcp::new_stream(
             conv,
@@ -364,7 +364,7 @@ enum Event {
 
 struct KcpOutput {
     node_id: NodeID,
-    sender: TunnelTransmitHub,
+    sender: Arc<TunnelTransmitHub>,
 }
 impl Write for KcpOutput {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {

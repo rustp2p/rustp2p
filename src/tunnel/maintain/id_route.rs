@@ -6,10 +6,11 @@ use crate::tunnel::{NodeAddress, TunnelTransmitHub};
 use rand::seq::SliceRandom;
 use std::collections::HashSet;
 use std::io;
+use std::sync::Arc;
 use std::time::Duration;
 
 pub async fn id_route_query_loop(
-    tunnel_tx: TunnelTransmitHub,
+    tunnel_tx: Arc<TunnelTransmitHub>,
     query_id_interval: Duration,
     query_id_max_num: usize,
 ) {

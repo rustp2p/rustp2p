@@ -133,18 +133,18 @@ impl TunnelManager {
             node_context.set_mapping_addrs(addrs);
         }
         let shutdown_manager = ShutdownManager::<()>::new();
-        let tunnel_tx = TunnelTransmitHub {
+        let tunnel_tx = Arc::new(TunnelTransmitHub {
             route_table: route_table.clone(),
             send_buffer_size,
             node_context: node_context.clone(),
             socket_manager: tunnel_factory.socket_manager(),
             shutdown_manager: shutdown_manager.clone(),
             recycle_buf: recycle_buf.clone(),
-        };
+        });
         let (active_punch_sender, active_punch_receiver) = tokio::sync::mpsc::channel(3);
         let (passive_punch_sender, passive_punch_receiver) = tokio::sync::mpsc::channel(3);
         let join_set = maintain::start_task(
-            &tunnel_tx,
+            tunnel_tx.clone(),
             idle_route_manager,
             puncher,
             query_id_interval,
@@ -216,7 +216,7 @@ impl TunnelManager {
             shutdown_manager: self.shutdown_manager.clone(),
             node_context: self.node_context.clone(),
             tunnel,
-            tunnel_transmit: self.tunnel_send_hub(),
+            tunnel_transmit: Arc::new(self.tunnel_send_hub()),
             route_table: self.route_table.clone(),
             active_punch_sender: self.active_punch_sender.clone(),
             passive_punch_sender: self.passive_punch_sender.clone(),
@@ -229,7 +229,6 @@ impl TunnelManager {
     }
 }
 
-#[derive(Clone)]
 pub struct TunnelTransmitHub {
     send_buffer_size: usize,
     node_context: NodeContext,
@@ -636,7 +635,7 @@ pub(crate) struct Tunnel {
     shutdown_manager: ShutdownManager<()>,
     node_context: NodeContext,
     tunnel: rust_p2p_core::tunnel::UnifiedTunnel,
-    tunnel_transmit: TunnelTransmitHub,
+    tunnel_transmit: Arc<TunnelTransmitHub>,
     route_table: RouteTable<NodeID>,
     active_punch_sender: Sender<(NodeID, PunchConsultInfo)>,
     passive_punch_sender: Sender<(NodeID, PunchConsultInfo)>,
@@ -1245,7 +1244,7 @@ impl Tunnel {
             let other_route_table = self.node_context.other_route_table.clone();
             tokio::spawn(async move {
                 if let Err(e) = id_route_reply(
-                    tunnel_tx,
+                    tunnel_tx.clone(),
                     other_route_table,
                     route_key,
                     self_group_code,
@@ -1294,7 +1293,7 @@ impl Tunnel {
 }
 
 async fn id_route_reply(
-    tunnel_tx: TunnelTransmitHub,
+    tunnel_tx: Arc<TunnelTransmitHub>,
     other_route_table: Arc<DashMap<GroupCode, RouteTable<NodeID>>>,
     route_key: RouteKey,
     self_group_code: GroupCode,

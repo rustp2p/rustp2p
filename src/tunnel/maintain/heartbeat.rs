@@ -5,9 +5,10 @@ use crate::tunnel::node_context::NodeAddress;
 use crate::tunnel::TunnelTransmitHub;
 use std::collections::HashSet;
 use std::io;
+use std::sync::Arc;
 use std::time::Duration;
 
-pub async fn heartbeat_loop(tunnel_tx: TunnelTransmitHub, heartbeat_interval: Duration) {
+pub async fn heartbeat_loop(tunnel_tx: Arc<TunnelTransmitHub>, heartbeat_interval: Duration) {
     let mut count = 0;
     loop {
         if count % 3 == 2 {

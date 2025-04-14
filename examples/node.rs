@@ -62,15 +62,17 @@ pub async fn main() -> io::Result<()> {
 
     let port = port.unwrap_or(23333);
 
-    let endpoint = Builder::new()
-        .node_id(self_id.into())
-        .tcp_port(port)
-        .udp_port(port)
-        .peers(addrs)
-        .group_code(string_to_group_code(&group_code))
-        .encryption(Algorithm::AesGcm("password".to_string()))
-        .build()
-        .await?;
+    let endpoint = Arc::new(
+        Builder::new()
+            .node_id(self_id.into())
+            .tcp_port(port)
+            .udp_port(port)
+            .peers(addrs)
+            .group_code(string_to_group_code(&group_code))
+            .encryption(Algorithm::AesGcm("password".to_string()))
+            .build()
+            .await?,
+    );
 
     log::info!("listen local port: {port}");
 
@@ -93,7 +95,7 @@ pub async fn main() -> io::Result<()> {
     });
 
     tokio::spawn(async move {
-        tun_recv(endpoint, device, self_id).await.unwrap();
+        tun_recv(endpoint.clone(), device, self_id).await.unwrap();
     });
 
     quit.recv().await.expect("quit error");
@@ -109,7 +111,7 @@ fn string_to_group_code(input: &str) -> GroupCode {
 }
 
 async fn tun_recv(
-    endpoint: EndPoint,
+    endpoint: Arc<EndPoint>,
     device: Arc<AsyncDevice>,
     _self_id: Ipv4Addr,
 ) -> io::Result<()> {

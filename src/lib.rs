@@ -25,18 +25,8 @@ use tunnel::{PeerNodeAddress, RecvUserData, Tunnel, TunnelManager, TunnelTransmi
 pub struct EndPoint {
     kcp_stream_manager: KcpStreamManager,
     input: Receiver<(RecvUserData, RecvMetadata)>,
-    output: TunnelTransmitHub,
-    handle: Arc<OwnedJoinHandle>,
-}
-impl Clone for EndPoint {
-    fn clone(&self) -> Self {
-        Self {
-            kcp_stream_manager: self.kcp_stream_manager.clone0(),
-            input: self.input.clone(),
-            output: self.output.clone(),
-            handle: self.handle.clone(),
-        }
-    }
+    output: Arc<TunnelTransmitHub>,
+    _handle: OwnedJoinHandle,
 }
 
 impl EndPoint {
@@ -200,7 +190,7 @@ impl EndPoint {
         interceptor: Option<Interceptor>,
     ) -> io::Result<Self> {
         let (sender, receiver) = flume::unbounded();
-        let writer = tunnel_manager.tunnel_send_hub();
+        let writer = Arc::new(tunnel_manager.tunnel_send_hub());
         let (kcp_stream_manager, kcp_data_input) = create_kcp_stream_manager(writer.clone()).await;
 
         let handle = tokio::spawn(async move {
@@ -213,12 +203,12 @@ impl EndPoint {
                 ));
             }
         });
-        let handle = Arc::new(OwnedJoinHandle { handle });
+        let _handle = OwnedJoinHandle { handle };
         Ok(EndPoint {
             kcp_stream_manager,
             output: writer,
             input: receiver,
-            handle,
+            _handle,
         })
     }
 }
