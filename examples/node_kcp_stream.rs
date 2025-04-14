@@ -56,8 +56,15 @@ pub async fn main() -> io::Result<()> {
     let manager = endpoint.kcp_stream();
 
     if let Some(request) = request {
-        tokio::time::sleep(Duration::from_secs(3)).await;
-        let mut client_kcp_stream = manager.new_stream(NodeID::from(request), 1)?;
+        let client_kcp_stream = manager.new_stream(NodeID::from(request), 1)?;
+        let (mut write, mut read) = client_kcp_stream.split();
+        tokio::spawn(async move {
+            let mut buf = [0; 1024];
+            loop {
+                let len = read.read(&mut buf).await.unwrap();
+                log::info!("Echo,message={:?}", String::from_utf8(buf[..len].into()));
+            }
+        });
         use tokio::io::{AsyncBufReadExt, BufReader};
         let mut reader = BufReader::new(tokio::io::stdin()).lines();
         while let Ok(Some(line)) = reader.next_line().await {
@@ -65,7 +72,7 @@ pub async fn main() -> io::Result<()> {
             if line.trim() == "exit" {
                 break;
             }
-            client_kcp_stream.write_all(line.as_bytes()).await?;
+            write.write_all(line.as_bytes()).await?;
         }
     } else {
         tokio::spawn(async move {
@@ -84,6 +91,7 @@ pub async fn main() -> io::Result<()> {
                                     "read remote_id={remote_id:?},message={:?}",
                                     String::from_utf8(buf[..len].into())
                                 );
+                                stream.write_all(&buf[..len]).await.unwrap();
                             }
                             Err(_) => {
                                 log::info!("read remote_id={remote_id:?} timeout");

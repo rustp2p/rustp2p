@@ -17,13 +17,14 @@ use tokio::time::Interval;
 use tokio_util::sync::PollSender;
 
 pub struct KcpStream {
+    read: KcpStreamRead,
+    write: KcpStreamWrite,
+}
+struct OwnedKcp {
     counter: Counter,
     map: Map,
     node_id: NodeID,
     conv: u32,
-    last_buf: Option<BytesMut>,
-    receiver: Receiver<BytesMut>,
-    sender: PollSender<BytesMut>,
 }
 type Map = Arc<RwLock<HashMap<(NodeID, u32), Sender<BytesMut>>>>;
 pub struct KcpStreamManager {
@@ -174,30 +175,38 @@ impl AsyncWrite for KcpStream {
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<Result<usize, Error>> {
-        match self.sender.poll_reserve(cx) {
-            Poll::Ready(Ok(_)) => {
-                let len = buf.len().min(10240);
-                match self.sender.send_item(buf[..len].into()) {
-                    Ok(_) => {}
-                    Err(_) => return Poll::Ready(Err(io::Error::from(io::ErrorKind::WriteZero))),
-                };
-                Poll::Ready(Ok(len))
-            }
-            Poll::Ready(Err(_)) => Poll::Ready(Err(io::Error::from(io::ErrorKind::WriteZero))),
-            Poll::Pending => Poll::Pending,
-        }
+        Pin::new(&mut self.write).poll_write(cx, buf)
     }
 
-    fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
-        Poll::Ready(Ok(()))
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
+        Pin::new(&mut self.write).poll_flush(cx)
     }
 
-    fn poll_shutdown(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
-        self.sender.close();
-        Poll::Ready(Ok(()))
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
+        Pin::new(&mut self.write).poll_shutdown(cx)
     }
 }
 impl AsyncRead for KcpStream {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.read).poll_read(cx, buf)
+    }
+}
+pub struct KcpStreamRead {
+    #[allow(dead_code)]
+    owned_kcp: Arc<OwnedKcp>,
+    last_buf: Option<BytesMut>,
+    receiver: Receiver<BytesMut>,
+}
+pub struct KcpStreamWrite {
+    #[allow(dead_code)]
+    owned_kcp: Arc<OwnedKcp>,
+    sender: PollSender<BytesMut>,
+}
+impl AsyncRead for KcpStreamRead {
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -230,6 +239,40 @@ impl AsyncRead for KcpStream {
             }
             Poll::Pending => Poll::Pending,
         }
+    }
+}
+impl AsyncWrite for KcpStreamWrite {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<Result<usize, Error>> {
+        match self.sender.poll_reserve(cx) {
+            Poll::Ready(Ok(_)) => {
+                let len = buf.len().min(10240);
+                match self.sender.send_item(buf[..len].into()) {
+                    Ok(_) => {}
+                    Err(_) => return Poll::Ready(Err(io::Error::from(io::ErrorKind::WriteZero))),
+                };
+                Poll::Ready(Ok(len))
+            }
+            Poll::Ready(Err(_)) => Poll::Ready(Err(io::Error::from(io::ErrorKind::WriteZero))),
+            Poll::Pending => Poll::Pending,
+        }
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
+        self.sender.close();
+        Poll::Ready(Ok(()))
+    }
+}
+impl KcpStream {
+    pub fn split(self) -> (KcpStreamWrite, KcpStreamRead) {
+        (self.write, self.read)
     }
 }
 impl KcpStream {
@@ -278,18 +321,26 @@ impl KcpStream {
         tokio::spawn(async move {
             let _ = kcp_run(input, kcp, data_out_receiver, data_in_sender).await;
         });
-        KcpStream {
+        let owned_kcp = OwnedKcp {
             counter,
             map,
             node_id,
             conv,
+        };
+        let owned_kcp = Arc::new(owned_kcp);
+        let read = KcpStreamRead {
+            owned_kcp: owned_kcp.clone(),
             last_buf: None,
             receiver: data_in_receiver,
+        };
+        let write = KcpStreamWrite {
+            owned_kcp,
             sender: PollSender::new(data_out_sender),
-        }
+        };
+        KcpStream { read, write }
     }
 }
-impl Drop for KcpStream {
+impl Drop for OwnedKcp {
     fn drop(&mut self) {
         let mut guard = self.map.write();
         let _ = guard.remove(&(self.node_id, self.conv));
