@@ -24,6 +24,7 @@ use tokio::task::JoinHandle;
 use tunnel::{PeerNodeAddress, RecvUserData, Tunnel, TunnelHubSender, TunnelManager};
 
 pub struct EndPoint {
+    #[cfg(feature = "use-kcp")]
     kcp_context: KcpContext,
     input: Receiver<(RecvUserData, RecvMetadata)>,
     output: TunnelHubSender,
@@ -204,6 +205,7 @@ impl EndPoint {
         let writer = tunnel_manager.tunnel_send_hub();
         #[cfg(feature = "use-kcp")]
         let kcp_context = KcpContext::default();
+        #[cfg(feature = "use-kcp")]
         let kcp_data_input = kcp_context.clone();
         let handle = tokio::spawn(async move {
             while let Ok(tunnel_rx) = tunnel_manager.dispatch().await {
@@ -218,6 +220,7 @@ impl EndPoint {
         });
         let _handle = OwnedJoinHandle { handle };
         Ok(EndPoint {
+            #[cfg(feature = "use-kcp")]
             kcp_context,
             output: writer,
             input: receiver,
