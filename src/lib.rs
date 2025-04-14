@@ -5,6 +5,7 @@ pub mod config;
 pub mod extend;
 mod reliable;
 pub mod tunnel;
+#[cfg(feature = "use-kcp")]
 pub use reliable::*;
 
 use crate::config::DataInterceptor;
@@ -20,9 +21,10 @@ use std::io;
 use std::ops::Deref;
 use std::sync::Arc;
 use tokio::task::JoinHandle;
-use tunnel::{PeerNodeAddress, RecvUserData, Tunnel, TunnelHubSender, TunnelManager};
+use tunnel::{PeerNodeAddress, RecvUserData, Tunnel, TunnelManager, TunnelHubSender};
 
 pub struct EndPoint {
+    #[cfg(feature = "use-kcp")]
     kcp_stream_manager: KcpStreamManager,
     input: Receiver<(RecvUserData, RecvMetadata)>,
     output: TunnelHubSender,
@@ -189,7 +191,8 @@ impl EndPoint {
         interceptor: Option<Interceptor>,
     ) -> io::Result<Self> {
         let (sender, receiver) = flume::unbounded();
-        let writer = tunnel_manager.tunnel_send_hub();
+        let writer = Arc::new(tunnel_manager.tunnel_send_hub());
+        #[cfg(feature = "use-kcp")]
         let (kcp_stream_manager, kcp_data_input) = create_kcp_stream_manager(writer.clone()).await;
 
         let handle = tokio::spawn(async move {
@@ -197,6 +200,7 @@ impl EndPoint {
                 tokio::spawn(handle(
                     tunnel_rx,
                     sender.clone(),
+                    #[cfg(feature = "use-kcp")]
                     kcp_data_input.clone(),
                     interceptor.clone(),
                 ));
@@ -204,6 +208,7 @@ impl EndPoint {
         });
         let _handle = OwnedJoinHandle { handle };
         Ok(EndPoint {
+            #[cfg(feature = "use-kcp")]
             kcp_stream_manager,
             output: writer,
             input: receiver,
@@ -221,7 +226,7 @@ impl Default for Builder {
 async fn handle(
     mut tunnel_rx: Tunnel,
     sender: Sender<(RecvUserData, RecvMetadata)>,
-    kcp_data_input: KcpDataInput,
+    #[cfg(feature = "use-kcp")] kcp_data_input: KcpDataInput,
     interceptor: Option<Interceptor>,
 ) {
     let mut list = Vec::with_capacity(16);
@@ -247,6 +252,7 @@ async fn handle(
         };
         for (data, meta_data) in list.drain(..) {
             if meta_data.protocol() == ProtocolType::KcpData.into() {
+                #[cfg(feature = "use-kcp")]
                 kcp_data_input
                     .input(data.payload(), meta_data.src_id())
                     .await;
