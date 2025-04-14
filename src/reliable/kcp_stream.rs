@@ -3,6 +3,7 @@ use crate::tunnel::TunnelHubSender;
 use bytes::{Buf, BytesMut};
 use kcp::Kcp;
 use parking_lot::RwLock;
+use rand::RngCore;
 use std::collections::HashMap;
 use std::io;
 use std::io::{Error, Write};
@@ -129,7 +130,7 @@ impl KcpStreamManager {
                 continue;
             }
             let conv = kcp::get_conv(&bytes);
-            match self.new_stream(node_id, conv) {
+            match self.new_stream0(node_id, conv) {
                 Ok(stream) => {
                     self.send_data_to_kcp(node_id, conv, bytes).await?;
                     return Ok((stream, node_id));
@@ -161,7 +162,10 @@ impl KcpStreamManager {
             Err(Error::new(io::ErrorKind::NotFound, "not found stream"))
         }
     }
-    pub fn new_stream(&self, node_id: NodeID, conv: u32) -> io::Result<KcpStream> {
+    pub fn new_stream(&self, node_id: NodeID) -> io::Result<KcpStream> {
+        self.new_stream0(node_id, rand::rng().next_u32())
+    }
+    fn new_stream0(&self, node_id: NodeID, conv: u32) -> io::Result<KcpStream> {
         KcpStream::new(
             self.counter.clone(),
             node_id,
@@ -321,7 +325,7 @@ impl KcpStream {
         let (data_in_sender, data_in_receiver) = tokio::sync::mpsc::channel(128);
         let (data_out_sender, data_out_receiver) = tokio::sync::mpsc::channel(128);
         tokio::spawn(async move {
-            if let Err(e) = kcp_run(input, kcp, data_out_receiver, data_in_sender).await{
+            if let Err(e) = kcp_run(input, kcp, data_out_receiver, data_in_sender).await {
                 log::warn!("kcp run: {e:?}");
             }
         });
