@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::io;
 use std::io::{Error, Write};
 use std::pin::Pin;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
@@ -29,6 +29,7 @@ struct OwnedKcp {
 }
 type Map = Arc<RwLock<HashMap<(NodeID, u32), Sender<BytesMut>>>>;
 pub struct KcpStreamManager {
+    conv_id: Counter,
     counter: Counter,
     input_receiver: flume::Receiver<(NodeID, BytesMut)>,
     map: Map,
@@ -48,6 +49,7 @@ impl Drop for KcpStreamManager {
 impl KcpStreamManager {
     pub(crate) fn clone0(&self) -> Self {
         Self {
+            conv_id: self.conv_id.clone(),
             counter: self.counter.clone(),
             input_receiver: self.input_receiver.clone(),
             map: self.map.clone(),
@@ -63,16 +65,21 @@ pub(crate) struct KcpDataInput {
 }
 #[derive(Clone, Default)]
 struct Counter {
-    counter: Arc<AtomicUsize>,
+    counter: Arc<AtomicU32>,
 }
 impl Counter {
-    fn add(&self) {
-        self.counter.fetch_add(1, Ordering::Release);
+    fn new(v: u32) -> Self {
+        Self {
+            counter: Arc::new(AtomicU32::new(v)),
+        }
+    }
+    fn add(&self) -> u32 {
+        self.counter.fetch_add(1, Ordering::Release)
     }
     fn sub(&self) {
         self.counter.fetch_sub(1, Ordering::Release);
     }
-    fn get(&self) -> usize {
+    fn get(&self) -> u32 {
         self.counter.load(Ordering::Acquire)
     }
 }
@@ -106,6 +113,7 @@ pub(crate) async fn create_kcp_stream_manager(
     let counter = Counter::default();
     counter.add();
     let manager = KcpStreamManager {
+        conv_id: Counter::new(rand::rng().next_u32()),
         counter: counter.clone(),
         input_receiver,
         map: map.clone(),
@@ -130,7 +138,7 @@ impl KcpStreamManager {
                 continue;
             }
             let conv = kcp::get_conv(&bytes);
-            match self.new_stream0(node_id, conv) {
+            match self.new_stream_impl(node_id, conv) {
                 Ok(stream) => {
                     self.send_data_to_kcp(node_id, conv, bytes).await?;
                     return Ok((stream, node_id));
@@ -163,9 +171,9 @@ impl KcpStreamManager {
         }
     }
     pub fn new_stream(&self, node_id: NodeID) -> io::Result<KcpStream> {
-        self.new_stream0(node_id, rand::rng().next_u32())
+        self.new_stream_impl(node_id, self.conv_id.add())
     }
-    fn new_stream0(&self, node_id: NodeID, conv: u32) -> io::Result<KcpStream> {
+    fn new_stream_impl(&self, node_id: NodeID, conv: u32) -> io::Result<KcpStream> {
         KcpStream::new(
             self.counter.clone(),
             node_id,
@@ -257,10 +265,9 @@ impl AsyncWrite for KcpStreamWrite {
             Poll::Ready(Ok(_)) => {
                 let len = buf.len().min(10240);
                 match self.sender.send_item(buf[..len].into()) {
-                    Ok(_) => {}
-                    Err(_) => return Poll::Ready(Err(io::Error::from(io::ErrorKind::WriteZero))),
-                };
-                Poll::Ready(Ok(len))
+                    Ok(_) => Poll::Ready(Ok(len)),
+                    Err(_) => Poll::Ready(Err(io::Error::from(io::ErrorKind::WriteZero))),
+                }
             }
             Poll::Ready(Err(_)) => Poll::Ready(Err(io::Error::from(io::ErrorKind::WriteZero))),
             Poll::Pending => Poll::Pending,
@@ -279,6 +286,9 @@ impl AsyncWrite for KcpStreamWrite {
 impl KcpStream {
     pub fn split(self) -> (KcpStreamWrite, KcpStreamRead) {
         (self.write, self.read)
+    }
+    pub fn conv(&self) -> u32 {
+        self.read.owned_kcp.conv
     }
 }
 impl KcpStream {
