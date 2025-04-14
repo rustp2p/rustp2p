@@ -24,8 +24,7 @@ use tokio::task::JoinHandle;
 use tunnel::{PeerNodeAddress, RecvUserData, Tunnel, TunnelHubSender, TunnelManager};
 
 pub struct EndPoint {
-    #[cfg(feature = "use-kcp")]
-    kcp_stream_manager: KcpStreamManager,
+    kcp_context: KcpContext,
     input: Receiver<(RecvUserData, RecvMetadata)>,
     output: TunnelHubSender,
     _handle: OwnedJoinHandle,
@@ -204,8 +203,8 @@ impl EndPoint {
         let (sender, receiver) = flume::unbounded();
         let writer = tunnel_manager.tunnel_send_hub();
         #[cfg(feature = "use-kcp")]
-        let (kcp_stream_manager, kcp_data_input) = create_kcp_stream_manager(writer.clone()).await;
-
+        let kcp_context = KcpContext::default();
+        let kcp_data_input = kcp_context.clone();
         let handle = tokio::spawn(async move {
             while let Ok(tunnel_rx) = tunnel_manager.dispatch().await {
                 tokio::spawn(handle(
@@ -219,8 +218,7 @@ impl EndPoint {
         });
         let _handle = OwnedJoinHandle { handle };
         Ok(EndPoint {
-            #[cfg(feature = "use-kcp")]
-            kcp_stream_manager,
+            kcp_context,
             output: writer,
             input: receiver,
             _handle,
@@ -237,7 +235,7 @@ impl Default for Builder {
 async fn handle(
     mut tunnel_rx: Tunnel,
     sender: Sender<(RecvUserData, RecvMetadata)>,
-    #[cfg(feature = "use-kcp")] kcp_data_input: KcpDataInput,
+    #[cfg(feature = "use-kcp")] kcp_data_input: KcpContext,
     interceptor: Option<Interceptor>,
 ) {
     let mut list = Vec::with_capacity(16);

@@ -2,14 +2,14 @@ use crate::protocol::node_id::NodeID;
 use crate::tunnel::TunnelHubSender;
 use bytes::{Buf, BytesMut};
 use kcp::Kcp;
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use rand::RngCore;
 use std::collections::HashMap;
 use std::io;
 use std::io::{Error, Write};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::task::{Context, Poll};
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
@@ -21,73 +21,55 @@ pub struct KcpStream {
     read: KcpStreamRead,
     write: KcpStreamWrite,
 }
+pub struct KcpStreamHub {
+    inner: Arc<KcpStreamHubInner>,
+}
+impl KcpStreamHub {
+    pub async fn accept(&self) -> io::Result<(KcpStream, NodeID)> {
+        self.inner.accept().await
+    }
+    pub fn new_stream(&self, node_id: NodeID) -> io::Result<KcpStream> {
+        self.inner.new_stream(node_id)
+    }
+    fn downgrade(&self) -> Weak<KcpStreamHubInner> {
+        Arc::downgrade(&self.inner)
+    }
+}
 struct OwnedKcp {
-    counter: Counter,
     map: Map,
     node_id: NodeID,
     conv: u32,
 }
+
 type Map = Arc<RwLock<HashMap<(NodeID, u32), Sender<BytesMut>>>>;
-pub struct KcpStreamManager {
+struct KcpStreamHubInner {
     conv_id: Counter,
-    counter: Counter,
     input_receiver: flume::Receiver<(NodeID, BytesMut)>,
     map: Map,
     output: TunnelHubSender,
 }
-impl Clone for KcpStreamManager {
-    fn clone(&self) -> Self {
-        self.counter.add();
-        self.clone0()
-    }
-}
-impl Drop for KcpStreamManager {
-    fn drop(&mut self) {
-        self.counter.sub();
-    }
-}
-impl KcpStreamManager {
-    pub(crate) fn clone0(&self) -> Self {
-        Self {
-            conv_id: self.conv_id.clone(),
-            counter: self.counter.clone(),
-            input_receiver: self.input_receiver.clone(),
-            map: self.map.clone(),
-            output: self.output.clone(),
-        }
-    }
-}
-#[derive(Clone)]
-pub(crate) struct KcpDataInput {
-    counter: Counter,
-    map: Map,
-    sender: flume::Sender<(NodeID, BytesMut)>,
-}
+
 #[derive(Clone, Default)]
+pub(crate) struct KcpContext {
+    map: Map,
+    #[allow(clippy::type_complexity)]
+    channel: Arc<Mutex<Option<(flume::Sender<(NodeID, BytesMut)>, Weak<KcpStreamHubInner>)>>>,
+}
 struct Counter {
-    counter: Arc<AtomicU32>,
+    counter: AtomicU32,
 }
 impl Counter {
     fn new(v: u32) -> Self {
         Self {
-            counter: Arc::new(AtomicU32::new(v)),
+            counter: AtomicU32::new(v),
         }
     }
     fn add(&self) -> u32 {
         self.counter.fetch_add(1, Ordering::Release)
     }
-    fn sub(&self) {
-        self.counter.fetch_sub(1, Ordering::Release);
-    }
-    fn get(&self) -> u32 {
-        self.counter.load(Ordering::Acquire)
-    }
 }
-impl KcpDataInput {
+impl KcpContext {
     pub(crate) async fn input(&self, buf: &[u8], node_id: NodeID) {
-        if self.counter.get() <= 1 {
-            return;
-        }
         if buf.is_empty() {
             return;
         }
@@ -97,36 +79,48 @@ impl KcpDataInput {
                 return;
             }
         }
-        if self.sender.send_async((node_id, buf.into())).await.is_err() {
+        let sender = {
+            let mut guard = self.channel.lock();
+            if let Some((sender, hub_weak)) = guard.as_ref() {
+                if hub_weak.strong_count() == 0 {
+                    guard.take();
+                    return;
+                }
+                sender.clone()
+            } else {
+                return;
+            }
+        };
+        if sender.send_async((node_id, buf.into())).await.is_err() {
             log::warn!("input error");
         }
     }
     fn get_stream_sender(&self, node_id: NodeID, conv: u32) -> Option<Sender<BytesMut>> {
         self.map.read().get(&(node_id, conv)).cloned()
     }
+    pub(crate) fn create_manager(&self, sender: TunnelHubSender) -> KcpStreamHub {
+        let mut guard = self.channel.lock();
+        if let Some((_, hub)) = guard.as_ref() {
+            if let Some(inner) = hub.upgrade() {
+                return KcpStreamHub { inner };
+            }
+        }
+        let (input_sender, input_receiver) = flume::bounded(128);
+        let inner = KcpStreamHubInner {
+            conv_id: Counter::new(rand::rng().next_u32()),
+            input_receiver,
+            map: self.map.clone(),
+            output: sender,
+        };
+        let hub = KcpStreamHub {
+            inner: Arc::new(inner),
+        };
+        guard.replace((input_sender, hub.downgrade()));
+        hub
+    }
 }
-pub(crate) async fn create_kcp_stream_manager(
-    sender: TunnelHubSender,
-) -> (KcpStreamManager, KcpDataInput) {
-    let (input_sender, input_receiver) = flume::bounded(128);
-    let map = Map::default();
-    let counter = Counter::default();
-    counter.add();
-    let manager = KcpStreamManager {
-        conv_id: Counter::new(rand::rng().next_u32()),
-        counter: counter.clone(),
-        input_receiver,
-        map: map.clone(),
-        output: sender,
-    };
-    let input = KcpDataInput {
-        counter,
-        map,
-        sender: input_sender,
-    };
-    (manager, input)
-}
-impl KcpStreamManager {
+
+impl KcpStreamHubInner {
     pub async fn accept(&self) -> io::Result<(KcpStream, NodeID)> {
         loop {
             let (node_id, bytes) = self
@@ -174,13 +168,7 @@ impl KcpStreamManager {
         self.new_stream_impl(node_id, self.conv_id.add())
     }
     fn new_stream_impl(&self, node_id: NodeID, conv: u32) -> io::Result<KcpStream> {
-        KcpStream::new(
-            self.counter.clone(),
-            node_id,
-            conv,
-            self.map.clone(),
-            self.output.clone(),
-        )
+        KcpStream::new(node_id, conv, self.map.clone(), self.output.clone())
     }
 }
 impl AsyncWrite for KcpStream {
@@ -293,7 +281,6 @@ impl KcpStream {
 }
 impl KcpStream {
     fn new(
-        counter: Counter,
         node_id: NodeID,
         conv: u32,
         map: Map,
@@ -309,13 +296,10 @@ impl KcpStream {
         let (input_sender, input_receiver) = tokio::sync::mpsc::channel(128);
         guard.insert((node_id, conv), input_sender);
         drop(guard);
-        counter.add();
-        let stream =
-            KcpStream::new_stream(counter, node_id, conv, map, input_receiver, output_sender);
+        let stream = KcpStream::new_stream(node_id, conv, map, input_receiver, output_sender);
         Ok(stream)
     }
     fn new_stream(
-        counter: Counter,
         node_id: NodeID,
         conv: u32,
         map: Map,
@@ -339,12 +323,7 @@ impl KcpStream {
                 log::warn!("kcp run: {e:?}");
             }
         });
-        let owned_kcp = OwnedKcp {
-            counter,
-            map,
-            node_id,
-            conv,
-        };
+        let owned_kcp = OwnedKcp { map, node_id, conv };
         let owned_kcp = Arc::new(owned_kcp);
         let read = KcpStreamRead {
             owned_kcp: owned_kcp.clone(),
@@ -362,7 +341,6 @@ impl Drop for OwnedKcp {
     fn drop(&mut self) {
         let mut guard = self.map.write();
         let _ = guard.remove(&(self.node_id, self.conv));
-        self.counter.sub();
     }
 }
 async fn kcp_run(
