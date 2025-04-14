@@ -1,12 +1,11 @@
 use crate::tunnel::node_context::NodeContext;
-use crate::tunnel::TunnelTransmitHub;
+use crate::tunnel::TunnelHubSender;
 use rand::seq::SliceRandom;
 use rust_p2p_core::socket::LocalInterface;
-use std::sync::Arc;
 use std::time::Duration;
 
 pub(crate) async fn nat_test_loop(
-    tunnel_tx: Arc<TunnelTransmitHub>,
+    tunnel_tx: TunnelHubSender,
     mut udp_stun_servers: Vec<String>,
     default_interface: Option<LocalInterface>,
 ) {
@@ -34,7 +33,7 @@ pub(crate) async fn nat_test_loop(
 }
 
 async fn nat_test(
-    tunnel_tx: &TunnelTransmitHub,
+    tunnel_tx: &TunnelHubSender,
     node_context: &NodeContext,
     udp_stun_servers: &[String],
     default_interface: Option<&LocalInterface>,

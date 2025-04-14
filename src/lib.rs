@@ -20,12 +20,12 @@ use std::io;
 use std::ops::Deref;
 use std::sync::Arc;
 use tokio::task::JoinHandle;
-use tunnel::{PeerNodeAddress, RecvUserData, Tunnel, TunnelManager, TunnelTransmitHub};
+use tunnel::{PeerNodeAddress, RecvUserData, Tunnel, TunnelHubSender, TunnelManager};
 
 pub struct EndPoint {
     kcp_stream_manager: KcpStreamManager,
     input: Receiver<(RecvUserData, RecvMetadata)>,
-    output: Arc<TunnelTransmitHub>,
+    output: TunnelHubSender,
     _handle: OwnedJoinHandle,
 }
 
@@ -75,7 +75,7 @@ impl EndPoint {
 }
 
 impl Deref for EndPoint {
-    type Target = TunnelTransmitHub;
+    type Target = TunnelHubSender;
 
     fn deref(&self) -> &Self::Target {
         &self.output
@@ -189,7 +189,7 @@ impl EndPoint {
         interceptor: Option<Interceptor>,
     ) -> io::Result<Self> {
         let (sender, receiver) = flume::unbounded();
-        let writer = Arc::new(tunnel_manager.tunnel_send_hub());
+        let writer = tunnel_manager.tunnel_send_hub();
         let (kcp_stream_manager, kcp_data_input) = create_kcp_stream_manager(writer.clone()).await;
 
         let handle = tokio::spawn(async move {

@@ -1,5 +1,5 @@
 use crate::protocol::node_id::NodeID;
-use crate::tunnel::TunnelTransmitHub;
+use crate::tunnel::TunnelHubSender;
 use bytes::{Buf, BytesMut};
 use kcp::Kcp;
 use parking_lot::RwLock;
@@ -30,7 +30,7 @@ pub struct KcpStreamManager {
     counter: Counter,
     input_receiver: flume::Receiver<(NodeID, BytesMut)>,
     map: Map,
-    output: Arc<TunnelTransmitHub>,
+    output: TunnelHubSender,
 }
 impl Clone for KcpStreamManager {
     fn clone(&self) -> Self {
@@ -95,7 +95,7 @@ impl KcpDataInput {
     }
 }
 pub(crate) async fn create_kcp_stream_manager(
-    sender: Arc<TunnelTransmitHub>,
+    sender: TunnelHubSender,
 ) -> (KcpStreamManager, KcpDataInput) {
     let (input_sender, input_receiver) = flume::bounded(128);
     let map = Map::default();
@@ -238,7 +238,7 @@ impl KcpStream {
         node_id: NodeID,
         conv: u32,
         map: Map,
-        output_sender: Arc<TunnelTransmitHub>,
+        output_sender: TunnelHubSender,
     ) -> io::Result<Self> {
         let mut guard = map.write();
         if guard.contains_key(&(node_id, conv)) {
@@ -261,7 +261,7 @@ impl KcpStream {
         conv: u32,
         map: Map,
         input: Receiver<BytesMut>,
-        output_sender: Arc<TunnelTransmitHub>,
+        output_sender: TunnelHubSender,
     ) -> Self {
         let mut kcp = Kcp::new_stream(
             conv,
@@ -408,7 +408,7 @@ enum Event {
 
 struct KcpOutput {
     node_id: NodeID,
-    sender: Arc<TunnelTransmitHub>,
+    sender: TunnelHubSender,
 }
 impl Write for KcpOutput {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {

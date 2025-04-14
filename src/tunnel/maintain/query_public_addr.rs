@@ -1,15 +1,14 @@
-use crate::tunnel::TunnelTransmitHub;
+use crate::tunnel::TunnelHubSender;
 use std::collections::HashMap;
 use std::io;
 use std::net::{SocketAddr, ToSocketAddrs};
-use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpStream;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 pub(crate) async fn query_tcp_public_addr_loop(
-    tunnel_tx: Arc<TunnelTransmitHub>,
+    tunnel_tx: TunnelHubSender,
     tcp_stun_servers: Vec<String>,
 ) {
     log::debug!("tcp_stun_servers = {tcp_stun_servers:?}");
@@ -108,7 +107,7 @@ pub(crate) async fn query_tcp_public_addr_loop(
 }
 
 pub(crate) async fn query_udp_public_addr_loop(
-    tunnel_tx: Arc<TunnelTransmitHub>,
+    tunnel_tx: TunnelHubSender,
     udp_stun_servers: Vec<String>,
 ) {
     log::debug!("udp_stun_servers = {udp_stun_servers:?}");

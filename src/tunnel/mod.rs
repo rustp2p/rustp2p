@@ -133,14 +133,14 @@ impl TunnelManager {
             node_context.set_mapping_addrs(addrs);
         }
         let shutdown_manager = ShutdownManager::<()>::new();
-        let tunnel_tx = Arc::new(TunnelTransmitHub {
+        let tunnel_tx = TunnelHubSender {
             route_table: route_table.clone(),
             send_buffer_size,
             node_context: node_context.clone(),
             socket_manager: tunnel_factory.socket_manager(),
             shutdown_manager: shutdown_manager.clone(),
             recycle_buf: recycle_buf.clone(),
-        });
+        };
         let (active_punch_sender, active_punch_receiver) = tokio::sync::mpsc::channel(3);
         let (passive_punch_sender, passive_punch_receiver) = tokio::sync::mpsc::channel(3);
         let join_set = maintain::start_task(
@@ -178,8 +178,8 @@ impl TunnelManager {
             recycle_buf,
         })
     }
-    pub(crate) fn tunnel_send_hub(&self) -> TunnelTransmitHub {
-        TunnelTransmitHub {
+    pub(crate) fn tunnel_send_hub(&self) -> TunnelHubSender {
+        TunnelHubSender {
             send_buffer_size: self.send_buffer_size,
             node_context: self.node_context.clone(),
             route_table: self.route_table.clone(),
@@ -216,7 +216,7 @@ impl TunnelManager {
             shutdown_manager: self.shutdown_manager.clone(),
             node_context: self.node_context.clone(),
             tunnel,
-            tunnel_transmit: Arc::new(self.tunnel_send_hub()),
+            tunnel_transmit: self.tunnel_send_hub(),
             route_table: self.route_table.clone(),
             active_punch_sender: self.active_punch_sender.clone(),
             passive_punch_sender: self.passive_punch_sender.clone(),
@@ -229,7 +229,7 @@ impl TunnelManager {
     }
 }
 
-pub struct TunnelTransmitHub {
+pub struct TunnelHubSender {
     send_buffer_size: usize,
     node_context: NodeContext,
     route_table: RouteTable<NodeID>,
@@ -238,7 +238,7 @@ pub struct TunnelTransmitHub {
     recycle_buf: Option<RecycleBuf>,
 }
 
-impl TunnelTransmitHub {
+impl TunnelHubSender {
     pub fn node_context(&self) -> &NodeContext {
         &self.node_context
     }
@@ -247,6 +247,16 @@ impl TunnelTransmitHub {
             Some(self.node_context.punch_info().read().nat_type)
         } else {
             None
+        }
+    }
+    pub(crate) fn clone(&self) -> Self {
+        Self {
+            send_buffer_size: self.send_buffer_size,
+            node_context: self.node_context.clone(),
+            route_table: self.route_table.clone(),
+            socket_manager: self.socket_manager.clone(),
+            shutdown_manager: self.shutdown_manager.clone(),
+            recycle_buf: self.recycle_buf.clone(),
         }
     }
     pub(crate) fn switch_model(&self, nat_type: NatType) -> io::Result<()> {
@@ -635,7 +645,7 @@ pub(crate) struct Tunnel {
     shutdown_manager: ShutdownManager<()>,
     node_context: NodeContext,
     tunnel: rust_p2p_core::tunnel::UnifiedTunnel,
-    tunnel_transmit: Arc<TunnelTransmitHub>,
+    tunnel_transmit: TunnelHubSender,
     route_table: RouteTable<NodeID>,
     active_punch_sender: Sender<(NodeID, PunchConsultInfo)>,
     passive_punch_sender: Sender<(NodeID, PunchConsultInfo)>,
@@ -1293,7 +1303,7 @@ impl Tunnel {
 }
 
 async fn id_route_reply(
-    tunnel_tx: Arc<TunnelTransmitHub>,
+    tunnel_tx: TunnelHubSender,
     other_route_table: Arc<DashMap<GroupCode, RouteTable<NodeID>>>,
     route_key: RouteKey,
     self_group_code: GroupCode,

@@ -1,8 +1,7 @@
 use crate::protocol::node_id::NodeID;
-use crate::tunnel::TunnelTransmitHub;
+use crate::tunnel::TunnelHubSender;
 use rust_p2p_core::punch::{PunchConsultInfo, Puncher};
 use rust_p2p_core::socket::LocalInterface;
-use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc::Receiver;
 use tokio::task::JoinSet;
@@ -16,7 +15,7 @@ mod query_public_addr;
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn start_task(
-    tunnel_tx: Arc<TunnelTransmitHub>,
+    tunnel_tx: TunnelHubSender,
     idle_route_manager: rust_p2p_core::idle::IdleRouteManager<NodeID>,
     puncher: Puncher,
     query_id_interval: Duration,
