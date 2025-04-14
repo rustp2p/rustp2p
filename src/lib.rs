@@ -14,7 +14,7 @@ use crate::tunnel::{RecvMetadata, RecvResult};
 use async_trait::async_trait;
 use cipher::Algorithm;
 use config::{TcpTunnelConfig, TunnelManagerConfig, UdpTunnelConfig};
-use flume::{Receiver, Sender};
+use flume::{Receiver, Sender, TryRecvError};
 use protocol::node_id::{GroupCode, NodeID};
 use rust_p2p_core::route::RouteKey;
 use std::io;
@@ -41,6 +41,17 @@ impl EndPoint {
 
     pub async fn send_to<D: Into<NodeID>>(&self, buf: &[u8], dest: D) -> io::Result<()> {
         self.output.send_to(buf, dest).await
+    }
+    pub fn try_recv_from(&self) -> io::Result<(RecvUserData, RecvMetadata)> {
+        match self.input.try_recv() {
+            Ok(rs) => Ok(rs),
+            Err(e) => match e {
+                TryRecvError::Empty => Err(io::Error::from(io::ErrorKind::WouldBlock)),
+                TryRecvError::Disconnected => {
+                    Err(io::Error::new(io::ErrorKind::UnexpectedEof, "shutdown"))
+                }
+            },
+        }
     }
     pub fn try_send_to<D: Into<NodeID>>(&self, buf: &[u8], dest: D) -> io::Result<()> {
         self.output.try_send_to(buf, dest)
