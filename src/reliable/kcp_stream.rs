@@ -89,7 +89,9 @@ impl KcpDataInput {
                 return;
             }
         }
-        _ = self.sender.send_async((node_id, buf.into())).await;
+        if self.sender.send_async((node_id, buf.into())).await.is_err() {
+            log::warn!("input error");
+        }
     }
     fn get_stream_sender(&self, node_id: NodeID, conv: u32) -> Option<Sender<BytesMut>> {
         self.map.read().get(&(node_id, conv)).cloned()
@@ -319,7 +321,9 @@ impl KcpStream {
         let (data_in_sender, data_in_receiver) = tokio::sync::mpsc::channel(128);
         let (data_out_sender, data_out_receiver) = tokio::sync::mpsc::channel(128);
         tokio::spawn(async move {
-            let _ = kcp_run(input, kcp, data_out_receiver, data_in_sender).await;
+            if let Err(e) = kcp_run(input, kcp, data_out_receiver, data_in_sender).await{
+                log::warn!("kcp run: {e:?}");
+            }
         });
         let owned_kcp = OwnedKcp {
             counter,
