@@ -21,7 +21,7 @@ use std::io;
 use std::ops::Deref;
 use std::sync::Arc;
 use tokio::task::JoinHandle;
-use tunnel::{PeerNodeAddress, RecvUserData, Tunnel, TunnelManager, TunnelHubSender};
+use tunnel::{PeerNodeAddress, RecvUserData, Tunnel, TunnelHubSender, TunnelManager};
 
 pub struct EndPoint {
     #[cfg(feature = "use-kcp")]
@@ -191,7 +191,7 @@ impl EndPoint {
         interceptor: Option<Interceptor>,
     ) -> io::Result<Self> {
         let (sender, receiver) = flume::unbounded();
-        let writer = Arc::new(tunnel_manager.tunnel_send_hub());
+        let writer = tunnel_manager.tunnel_send_hub();
         #[cfg(feature = "use-kcp")]
         let (kcp_stream_manager, kcp_data_input) = create_kcp_stream_manager(writer.clone()).await;
 
