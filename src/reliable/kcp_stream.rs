@@ -98,7 +98,7 @@ impl KcpContext {
     fn get_stream_sender(&self, node_id: NodeID, conv: u32) -> Option<Sender<BytesMut>> {
         self.map.read().get(&(node_id, conv)).cloned()
     }
-    pub(crate) fn create_manager(&self, sender: TunnelHubSender) -> KcpStreamHub {
+    pub(crate) fn create_kcpstream_hub(&self, sender: TunnelHubSender) -> KcpStreamHub {
         let mut guard = self.channel.lock();
         if let Some((_, hub)) = guard.as_ref() {
             if let Some(inner) = hub.upgrade() {

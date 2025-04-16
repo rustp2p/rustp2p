@@ -8,6 +8,6 @@ pub use kcp_stream::*;
 impl EndPoint {
     #[cfg(feature = "use-kcp")]
     pub fn kcp_stream(&self) -> KcpStreamHub {
-        self.kcp_context.create_manager(self.output.clone())
+        self.kcp_context.create_kcpstream_hub(self.output.clone())
     }
 }
