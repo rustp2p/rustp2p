@@ -36,7 +36,7 @@ pub struct NatInfo {
     pub public_port_range: u16,
     /// local IP address
     pub local_ipv4: Ipv4Addr,
-    /// The public IPv6 addess
+    /// The public IPv6 address
     pub ipv6: Option<Ipv6Addr>,
     /// The local ports where the `UDP` services bind
     pub local_udp_ports: Vec<u16>,
