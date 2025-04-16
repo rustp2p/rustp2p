@@ -27,14 +27,12 @@ pub struct TunnelConfig {
     pub major_socket_count: usize,
     pub udp_tunnel_config: Option<UdpTunnelConfig>,
     pub tcp_tunnel_config: Option<TcpTunnelConfig>,
-    pub enable_extend: bool,
 }
 
 impl Default for TunnelConfig {
     fn default() -> Self {
         Self {
             major_socket_count: MAX_MAJOR_SOCKET_COUNT,
-            enable_extend: false,
             udp_tunnel_config: Some(Default::default()),
             tcp_tunnel_config: Some(Default::default()),
         }
@@ -50,7 +48,6 @@ impl TunnelConfig {
         let tcp_tunnel_config = Some(TcpTunnelConfig::new(tcp_init_codec));
         Self {
             major_socket_count: MAX_MAJOR_SOCKET_COUNT,
-            enable_extend: false,
             udp_tunnel_config,
             tcp_tunnel_config,
         }
@@ -65,7 +62,6 @@ impl TunnelConfig {
     pub fn empty() -> Self {
         Self {
             major_socket_count: MAX_MAJOR_SOCKET_COUNT,
-            enable_extend: false,
             udp_tunnel_config: None,
             tcp_tunnel_config: None,
         }
@@ -75,10 +71,7 @@ impl TunnelConfig {
         self.major_socket_count = count;
         self
     }
-    pub fn set_enable_extend(mut self, enable_extend: bool) -> Self {
-        self.enable_extend = enable_extend;
-        self
-    }
+
     pub fn set_udp_tunnel_config(mut self, config: UdpTunnelConfig) -> Self {
         self.udp_tunnel_config.replace(config);
         self

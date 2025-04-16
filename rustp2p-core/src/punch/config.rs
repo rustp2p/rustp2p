@@ -123,35 +123,16 @@ impl PunchConsultInfo {
 
 #[derive(Clone, Debug)]
 pub struct PunchInfo {
-    pub(crate) initiate_by_me: bool,
     pub(crate) punch_model: PunchModelBoxes,
     pub(crate) peer_nat_info: NatInfo,
 }
 
 impl PunchInfo {
-    pub fn new(initiate_by_me: bool, punch_model: PunchModelBoxes, peer_nat_info: NatInfo) -> Self {
+    pub fn new(punch_model: PunchModelBoxes, peer_nat_info: NatInfo) -> Self {
         Self {
-            initiate_by_me,
             punch_model,
             peer_nat_info,
         }
-    }
-    pub fn from_slave(punch_model: PunchModelBoxes, peer_nat_info: NatInfo) -> Self {
-        Self {
-            initiate_by_me: true,
-            punch_model,
-            peer_nat_info,
-        }
-    }
-    pub fn from_master(punch_model: PunchModelBoxes, peer_nat_info: NatInfo) -> Self {
-        Self {
-            initiate_by_me: false,
-            punch_model,
-            peer_nat_info,
-        }
-    }
-    pub(crate) fn use_ttl(&self) -> bool {
-        self.initiate_by_me ^ (self.peer_nat_info.seq % 2 == 0)
     }
 }
 

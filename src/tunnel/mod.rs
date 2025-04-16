@@ -1152,9 +1152,7 @@ impl Tunnel {
                         io::Error::new(io::ErrorKind::Other, format!("RmpDecodeError: {e:?}"))
                     })?;
                 log::debug!("PunchConsultRequest {:?}", punch_info);
-                let consult_info = self
-                    .node_context
-                    .gen_punch_info(punch_info.peer_nat_info.seq);
+                let consult_info = self.node_context.gen_punch_info();
                 let data = rmp_serde::to_vec(&consult_info).map_err(|e| {
                     io::Error::new(io::ErrorKind::Other, format!("RmpEncodeError: {e:?}"))
                 })?;

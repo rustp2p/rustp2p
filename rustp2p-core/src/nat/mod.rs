@@ -27,7 +27,7 @@ pub struct NatInfo {
     /// the set of public Ipv4
     pub public_ips: Vec<Ipv4Addr>,
     /// the set of public ports mapped from the nat
-    pub public_ports: Vec<u16>,
+    pub public_udp_ports: Vec<u16>,
     /// the set of mapped addresses where `TCP` serves on
     pub mapping_tcp_addr: Vec<SocketAddr>,
     /// the set of mapped addresses where `UDP` serves on
@@ -44,11 +44,28 @@ pub struct NatInfo {
     pub local_tcp_port: u16,
     /// The public port of `TCP` service, which works when there is either `nat1` or no `nat` exists
     pub public_tcp_port: u16,
-    /// Both parties' seq in the same round of hole punching need to be the same
-    pub seq: u32,
 }
 impl NatInfo {
-    pub fn ipv6_addr(&self) -> Vec<SocketAddr> {
+    pub(crate) fn flag(&self) -> Option<SocketAddr> {
+        let vec = self.public_ipv4_addr();
+        if let Some(v) = vec.first() {
+            return Some(*v);
+        }
+        let vec = self.public_ipv4_tcp();
+        if let Some(v) = vec.first() {
+            return Some(*v);
+        }
+        let vec = self.local_ipv4_addrs();
+        if let Some(v) = vec.first() {
+            return Some(*v);
+        }
+        let option = self.local_ipv4_tcp();
+        if option.is_some() {
+            return option;
+        }
+        None
+    }
+    pub fn ipv6_udp_addr(&self) -> Vec<SocketAddr> {
         if let Some(ipv6) = self.ipv6 {
             if is_ipv6_global(&ipv6) {
                 return self
@@ -65,18 +82,18 @@ impl NatInfo {
             .map(|ipv6| SocketAddrV6::new(ipv6, self.local_tcp_port, 0, 0).into())
     }
     pub fn public_ipv4_addr(&self) -> Vec<SocketAddr> {
-        if self.public_ips.is_empty() || self.public_ports.is_empty() {
+        if self.public_ips.is_empty() || self.public_udp_ports.is_empty() {
             return vec![];
         }
         if self.public_ips.len() == 1 {
             let ip = self.public_ips[0];
             return self
-                .public_ports
+                .public_udp_ports
                 .iter()
                 .map(|&port| SocketAddrV4::new(ip, port).into())
                 .collect();
         }
-        let port = self.public_ports[0];
+        let port = self.public_udp_ports[0];
         self.public_ips
             .iter()
             .map(|&ip| SocketAddrV4::new(ip, port).into())

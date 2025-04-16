@@ -32,7 +32,6 @@ pub struct TunnelManagerConfig {
     pub route_idle_time: Duration,
     pub udp_tunnel_config: Option<UdpTunnelConfig>,
     pub tcp_tunnel_config: Option<TcpTunnelConfig>,
-    pub enable_extend: bool,
     pub group_code: Option<GroupCode>,
     pub self_id: Option<NodeID>,
     pub direct_addrs: Option<Vec<PeerNodeAddress>>,
@@ -57,7 +56,6 @@ impl Default for TunnelManagerConfig {
         Self {
             load_balance: LoadBalance::MinHopLowestLatency,
             major_socket_count: MAX_MAJOR_SOCKET_COUNT,
-            enable_extend: false,
             udp_tunnel_config: Some(Default::default()),
             tcp_tunnel_config: Some(Default::default()),
             route_idle_time: ROUTE_IDLE_TIME,
@@ -117,10 +115,7 @@ impl TunnelManagerConfig {
         self.major_socket_count = count;
         self
     }
-    pub fn set_enable_extend(mut self, enable_extend: bool) -> Self {
-        self.enable_extend = enable_extend;
-        self
-    }
+
     pub fn set_udp_tunnel_config(mut self, config: UdpTunnelConfig) -> Self {
         self.udp_tunnel_config.replace(config);
         self
@@ -305,7 +300,6 @@ impl From<TunnelManagerConfig> for rust_p2p_core::tunnel::config::TunnelConfig {
             major_socket_count: value.major_socket_count,
             udp_tunnel_config,
             tcp_tunnel_config,
-            enable_extend: value.enable_extend,
         }
     }
 }

@@ -21,8 +21,9 @@ pub struct Puncher {
     // 端口顺序
     port_vec: Vec<u16>,
     // 指定IP的打洞记录
-    sym_record: Arc<Mutex<HashMap<u32, usize>>>,
-    count_record: Arc<Mutex<HashMap<u32, (usize, usize)>>>,
+    sym_record: Arc<Mutex<HashMap<SocketAddr, usize>>>,
+    #[allow(clippy::type_complexity)]
+    count_record: Arc<Mutex<HashMap<SocketAddr, (usize, usize, u64)>>>,
     udp_socket_manager: Option<Arc<udp::SocketManager>>,
     tcp_socket_manager: Option<Arc<tcp::SocketManager>>,
 }
@@ -52,25 +53,37 @@ impl Puncher {
         }
     }
 }
-
+fn now() -> u64 {
+    let now = std::time::SystemTime::now();
+    let time = now
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    time.as_secs()
+}
 impl Puncher {
-    pub fn reset_all(&self) {
-        self.sym_record.lock().clear();
-        self.count_record.lock().clear();
-    }
-    pub fn reset_record(&self, peer_id: &u32) {
-        self.sym_record.lock().remove(peer_id);
-        self.count_record.lock().remove(peer_id);
+    fn clean(&self) {
+        let mut count_record = self.count_record.lock();
+        let ten_minutes_ago = now() - 1200;
+        count_record.retain(|_addr, &mut (_u1, _u2, timestamp)| timestamp >= ten_minutes_ago);
+        let valid_keys: std::collections::HashSet<_> = count_record.keys().cloned().collect();
+        let mut sym_map = self.sym_record.lock();
+        sym_map.retain(|addr, _| valid_keys.contains(addr));
     }
     /// Call `need_punch` at a certain frequency, and call [`punch_now`](Self::punch_now) after getting true.
     /// Determine whether punching is needed.
-    pub fn need_punch(&self, id: &u32) -> bool {
-        let (count, _) = *self
+    pub fn need_punch(&self, punch_info: &PunchInfo) -> bool {
+        let Some(id) = punch_info.peer_nat_info.flag() else {
+            return false;
+        };
+        let (count, _, _) = *self
             .count_record
             .lock()
-            .entry(*id)
-            .and_modify(|(v, _)| *v += 1)
-            .or_insert((0, 0));
+            .entry(id)
+            .and_modify(|(v, _, time)| {
+                *v += 1;
+                *time = now();
+            })
+            .or_insert((0, 0, now()));
         if count > 8 {
             //降低频率
             let interval = count / 8;
@@ -80,29 +93,33 @@ impl Puncher {
     }
 
     /// Call `punch` at a certain frequency
-    pub async fn punch(&self, peer_id: u32, buf: &[u8], punch_info: PunchInfo) -> io::Result<()> {
-        if !self.need_punch(&peer_id) {
+    pub async fn punch(&self, buf: &[u8], punch_info: PunchInfo) -> io::Result<()> {
+        if !self.need_punch(&punch_info) {
             return Ok(());
         }
-        self.punch_now(peer_id, buf, punch_info).await
+        self.punch_now(Some(buf), buf, punch_info).await
     }
     pub async fn punch_now(
         &self,
-        peer_id: u32,
-        buf: &[u8],
+        tcp_buf: Option<&[u8]>,
+        udp_buf: &[u8],
         punch_info: PunchInfo,
     ) -> io::Result<()> {
-        let (_, count) = *self
+        self.clean();
+        let peer = punch_info
+            .peer_nat_info
+            .flag()
+            .unwrap_or(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0)));
+        let (_, count, _) = *self
             .count_record
             .lock()
-            .entry(peer_id)
-            .and_modify(|(_, v)| *v += 1)
-            .or_insert((0, 0));
-        let ttl = if punch_info.use_ttl() && count < 255 {
-            Some(count.max(2) as u32)
-        } else {
-            None
-        };
+            .entry(peer)
+            .and_modify(|(_, v, time)| {
+                *v += 1;
+                *time = now();
+            })
+            .or_insert((0, 0, now()));
+        let ttl = if count < 255 { Some(count as u8) } else { None };
         let peer_nat_info = punch_info.peer_nat_info;
         let punch_model = punch_info.punch_model;
 
@@ -111,47 +128,55 @@ impl Puncher {
             if let Some(tcp_socket_manager) = self.tcp_socket_manager.as_ref() {
                 for addr in &peer_nat_info.mapping_tcp_addr {
                     s.spawn(async move {
-                        Self::connect_tcp(tcp_socket_manager, buf, *addr, ttl).await;
+                        Self::connect_tcp(tcp_socket_manager, tcp_buf, *addr, ttl).await;
                     })
                 }
                 if punch_model.is_match(PunchModel::IPv4Tcp) {
                     if let Some(addr) = peer_nat_info.local_ipv4_tcp() {
                         s.spawn(async move {
-                            Self::connect_tcp(tcp_socket_manager, buf, addr, ttl).await;
+                            Self::connect_tcp(tcp_socket_manager, tcp_buf, addr, ttl).await;
                         })
                     }
                     for addr in peer_nat_info.public_ipv4_tcp() {
                         s.spawn(async move {
-                            Self::connect_tcp(tcp_socket_manager, buf, addr, ttl).await;
+                            Self::connect_tcp(tcp_socket_manager, tcp_buf, addr, ttl).await;
                         })
                     }
                 }
                 if punch_model.is_match(PunchModel::IPv6Tcp) {
                     if let Some(addr) = peer_nat_info.ipv6_tcp_addr() {
                         s.spawn(async move {
-                            Self::connect_tcp(tcp_socket_manager, buf, addr, ttl).await;
+                            Self::connect_tcp(tcp_socket_manager, tcp_buf, addr, ttl).await;
                         })
                     }
                 }
             }
         });
-        self.punch_udp(peer_id, count, buf, &peer_nat_info, &punch_model)
+        self.punch_udp(peer, count, udp_buf, &peer_nat_info, &punch_model)
             .await?;
 
         Ok(())
     }
     async fn connect_tcp(
         tcp_socket_manager: &tcp::SocketManager,
-        buf: &[u8],
+        buf: Option<&[u8]>,
         addr: SocketAddr,
-        ttl: Option<u32>,
+        ttl: Option<u8>,
     ) {
-        match tokio::time::timeout(
-            Duration::from_secs(3),
-            tcp_socket_manager.multi_send_to_impl(buf.into(), addr, ttl),
-        )
-        .await
-        {
+        let rs = if let Some(buf) = buf {
+            tokio::time::timeout(
+                Duration::from_secs(3),
+                tcp_socket_manager.multi_send_to_impl(buf.into(), addr, ttl),
+            )
+            .await
+        } else {
+            tokio::time::timeout(Duration::from_secs(3), async {
+                tcp_socket_manager.connect_ttl(addr, ttl).await?;
+                Ok(())
+            })
+            .await
+        };
+        match rs {
             Ok(rs) => {
                 if let Err(e) = rs {
                     log::warn!("tcp connect {addr},{e:?}");
@@ -164,7 +189,7 @@ impl Puncher {
     }
     async fn punch_udp(
         &self,
-        peer_id: u32,
+        peer_id: SocketAddr,
         count: usize,
         buf: &[u8],
         peer_nat_info: &NatInfo,
@@ -199,7 +224,7 @@ impl Puncher {
         }
 
         if punch_model.is_match(PunchModel::IPv6Udp) {
-            let v6_addr = peer_nat_info.ipv6_addr();
+            let v6_addr = peer_nat_info.ipv6_udp_addr();
             udp_socket_manager.try_main_batch_send_to(buf, &v6_addr);
         }
         if !punch_model.is_match(PunchModel::IPv4Udp) {
@@ -224,7 +249,7 @@ impl Puncher {
                     //递减探测规模
                     max_k2 = max_k2.mul(8).div(count).max(max_k1 as usize);
                 }
-                let port = peer_nat_info.public_ports.first().copied().unwrap_or(0);
+                let port = peer_nat_info.public_udp_ports.first().copied().unwrap_or(0);
                 if peer_nat_info.public_port_range < max_k1 * 3 {
                     //端口变化不大时，在预测的范围内随机发送
                     let min_port = if port > peer_nat_info.public_port_range {

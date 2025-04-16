@@ -1,7 +1,6 @@
 use std::io;
 use std::io::IoSlice;
 use std::net::SocketAddr;
-use std::ops::Deref;
 use std::sync::Arc;
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -543,15 +542,12 @@ impl UdpTunnelFactory {
             sender
         };
         if udp_tunnel.sender.is_none() {
-            udp_tunnel.sender.replace(UdpTunnelSenderBox { sender });
+            udp_tunnel.sender.replace(OwnedUdpTunnelSender { sender });
         }
         if udp_tunnel.reusable {
-            Ok(UdpTunnel::main_new(
-                udp_tunnel,
-                self.manager().tunnel_dispatcher.clone(),
-            ))
+            UdpTunnel::main_new(udp_tunnel, self.manager().tunnel_dispatcher.clone())
         } else {
-            Ok(UdpTunnel::sub_new(udp_tunnel))
+            UdpTunnel::sub_new(udp_tunnel)
         }
     }
     pub fn manager(&self) -> &Arc<SocketManager> {
@@ -642,12 +638,17 @@ fn socket_addr_to_sockaddr(addr: &SocketAddr) -> sockaddr_storage {
 
 pub struct UdpTunnel {
     index: Index,
+    local_addr: SocketAddr,
     udp: Option<Arc<UdpSocket>>,
     close_notify: Option<async_broadcast::Receiver<()>>,
     re_dispatcher: Option<Sender<InactiveUdpTunnel>>,
-    sender: Option<UdpTunnelSenderBox>,
+    sender: Option<OwnedUdpTunnelSender>,
 }
-struct UdpTunnelSenderBox {
+struct OwnedUdpTunnelSender {
+    sender: Sender<(BytesMut, SocketAddr)>,
+}
+#[derive(Clone)]
+pub struct WeakUdpTunnelSender {
     sender: Sender<(BytesMut, SocketAddr)>,
 }
 struct InactiveUdpTunnel {
@@ -655,7 +656,7 @@ struct InactiveUdpTunnel {
     index: Index,
     udp: Arc<UdpSocket>,
     close_notify: Option<async_broadcast::Receiver<()>>,
-    sender: Option<UdpTunnelSenderBox>,
+    sender: Option<OwnedUdpTunnelSender>,
 }
 impl InactiveUdpTunnel {
     fn new(
@@ -672,7 +673,7 @@ impl InactiveUdpTunnel {
             sender: None,
         }
     }
-    fn redistribute(index: Index, udp: Arc<UdpSocket>, sender: UdpTunnelSenderBox) -> Self {
+    fn redistribute(index: Index, udp: Arc<UdpSocket>, sender: OwnedUdpTunnelSender) -> Self {
         Self {
             reusable: true,
             index,
@@ -682,14 +683,43 @@ impl InactiveUdpTunnel {
         }
     }
 }
-impl Deref for UdpTunnelSenderBox {
-    type Target = Sender<(BytesMut, SocketAddr)>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.sender
+impl OwnedUdpTunnelSender {
+    async fn send_to<A: Into<SocketAddr>>(&self, buf: BytesMut, dest: A) -> io::Result<()> {
+        if buf.is_empty() {
+            return Ok(());
+        }
+        self.sender
+            .send((buf, dest.into()))
+            .await
+            .map_err(|_| io::Error::from(io::ErrorKind::WriteZero))
+    }
+    fn is_closed(&self) -> bool {
+        self.sender.is_closed()
     }
 }
-impl Drop for UdpTunnelSenderBox {
+impl WeakUdpTunnelSender {
+    pub async fn send_to<A: Into<SocketAddr>>(&self, buf: BytesMut, dest: A) -> io::Result<()> {
+        if buf.is_empty() {
+            return Ok(());
+        }
+        self.sender
+            .send((buf, dest.into()))
+            .await
+            .map_err(|_| io::Error::from(io::ErrorKind::WriteZero))
+    }
+    pub fn try_send_to<A: Into<SocketAddr>>(&self, buf: BytesMut, dest: A) -> io::Result<()> {
+        if buf.is_empty() {
+            return Ok(());
+        }
+        self.sender
+            .try_send((buf, dest.into()))
+            .map_err(|e| match e {
+                TrySendError::Full(_) => io::Error::from(io::ErrorKind::WouldBlock),
+                TrySendError::Closed(_) => io::Error::from(io::ErrorKind::WriteZero),
+            })
+    }
+}
+impl Drop for OwnedUdpTunnelSender {
     fn drop(&mut self) {
         self.sender.close();
     }
@@ -716,26 +746,30 @@ impl Drop for UdpTunnel {
 }
 
 impl UdpTunnel {
-    fn sub_new(inactive_udp_tunnel: InactiveUdpTunnel) -> Self {
-        Self {
+    fn sub_new(inactive_udp_tunnel: InactiveUdpTunnel) -> io::Result<Self> {
+        let local_addr = inactive_udp_tunnel.udp.local_addr()?;
+        Ok(Self {
             index: inactive_udp_tunnel.index,
+            local_addr,
             udp: Some(inactive_udp_tunnel.udp),
             close_notify: inactive_udp_tunnel.close_notify,
             re_dispatcher: None,
             sender: inactive_udp_tunnel.sender,
-        }
+        })
     }
     fn main_new(
         inactive_udp_tunnel: InactiveUdpTunnel,
         re_sender: Sender<InactiveUdpTunnel>,
-    ) -> Self {
-        Self {
+    ) -> io::Result<Self> {
+        let local_addr = inactive_udp_tunnel.udp.local_addr()?;
+        Ok(Self {
+            local_addr,
             index: inactive_udp_tunnel.index,
             udp: Some(inactive_udp_tunnel.udp),
             close_notify: None,
             re_dispatcher: Some(re_sender),
             sender: inactive_udp_tunnel.sender,
-        }
+        })
     }
     pub fn done(&mut self) {
         _ = self.udp.take();
@@ -743,6 +777,18 @@ impl UdpTunnel {
         _ = self.re_dispatcher.take();
         _ = self.re_dispatcher.take();
         _ = self.sender.take();
+    }
+    pub fn local_addr(&self) -> SocketAddr {
+        self.local_addr
+    }
+    pub fn sender(&self) -> io::Result<WeakUdpTunnelSender> {
+        if let Some(v) = &self.sender {
+            Ok(WeakUdpTunnelSender {
+                sender: v.sender.clone(),
+            })
+        } else {
+            Err(io::Error::new(io::ErrorKind::Other, "closed"))
+        }
     }
 }
 
@@ -771,10 +817,7 @@ impl UdpTunnel {
         addr: A,
     ) -> io::Result<()> {
         if let Some(sender) = &self.sender {
-            sender
-                .send((buf, addr.into()))
-                .await
-                .map_err(|_| io::Error::from(io::ErrorKind::WriteZero))
+            sender.send_to(buf, addr).await
         } else {
             Err(io::Error::new(io::ErrorKind::Other, "closed"))
         }

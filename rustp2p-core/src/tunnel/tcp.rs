@@ -71,7 +71,8 @@ impl TcpTunnelFactory {
             rs=self.connect_receiver.recv()=>{
                 let (route_key,read_half,sender) = rs.
                     map_err(|_| io::Error::new(io::ErrorKind::Other,"connect_receiver done"))?;
-                Ok(TcpTunnel::new(self.route_idle_time,route_key,read_half,sender))
+                let local_addr = read_half.read_half.local_addr()?;
+                Ok(TcpTunnel::new(local_addr,self.route_idle_time,route_key,read_half,sender))
             },
             rs=self.tcp_listener.accept()=>{
                 let (tcp_stream,addr) = rs?;
@@ -81,7 +82,8 @@ impl TcpTunnelFactory {
                 let (decoder,encoder) = self.init_codec.codec(addr)?;
                 let read_half = ReadHalfBox::new(read_half,decoder);
                 let sender = self.write_half_collect.add_write_half(route_key,0, write_half,encoder);
-                Ok(TcpTunnel::new(self.route_idle_time,route_key,read_half,sender))
+                let local_addr = read_half.read_half.local_addr()?;
+                Ok(TcpTunnel::new(local_addr,self.route_idle_time,route_key,read_half,sender))
             }
         }
     }
@@ -91,6 +93,7 @@ impl TcpTunnelFactory {
 }
 
 pub struct TcpTunnel {
+    local_addr: SocketAddr,
     route_key: RouteKey,
     route_idle_time: Duration,
     tcp_read: OwnedReadHalf,
@@ -100,6 +103,7 @@ pub struct TcpTunnel {
 
 impl TcpTunnel {
     pub(crate) fn new(
+        local_addr: SocketAddr,
         route_idle_time: Duration,
         route_key: RouteKey,
         read: ReadHalfBox,
@@ -108,6 +112,7 @@ impl TcpTunnel {
         let decoder = read.decoder;
         let tcp_read = read.read_half;
         Self {
+            local_addr,
             route_key,
             route_idle_time,
             tcp_read,
@@ -119,8 +124,32 @@ impl TcpTunnel {
     pub fn route_key(&self) -> RouteKey {
         self.route_key
     }
+    pub fn local_addr(&self) -> SocketAddr {
+        self.local_addr
+    }
     pub fn done(&mut self) {
         self.sender.close();
+    }
+    pub fn sender(&self) -> io::Result<WeakTcpTunnelSender> {
+        Ok(WeakTcpTunnelSender::new(self.sender.clone()))
+    }
+}
+#[derive(Clone)]
+pub struct WeakTcpTunnelSender {
+    sender: Sender<BytesMut>,
+}
+impl WeakTcpTunnelSender {
+    fn new(sender: Sender<BytesMut>) -> Self {
+        Self { sender }
+    }
+    pub async fn send(&self, buf: BytesMut) -> io::Result<()> {
+        if buf.is_empty() {
+            return Ok(());
+        }
+        self.sender
+            .send(buf)
+            .await
+            .map_err(|_| io::Error::from(io::ErrorKind::WriteZero))
     }
 }
 
@@ -133,6 +162,9 @@ impl Drop for TcpTunnel {
 impl TcpTunnel {
     /// Writing `buf` to the target denoted by `route_key` via this tunnel
     pub async fn send(&self, buf: BytesMut) -> io::Result<()> {
+        if buf.is_empty() {
+            return Ok(());
+        }
         self.sender
             .send(buf)
             .await
@@ -382,6 +414,9 @@ impl WriteHalfCollect {
     }
     pub async fn send_to(&self, buf: BytesMut, route_key: &RouteKey) -> io::Result<()> {
         let write_half = self.get_write_half_by_key(route_key)?;
+        if buf.is_empty() {
+            return Ok(());
+        }
         if let Err(_e) = write_half.send(buf).await {
             Err(io::Error::from(io::ErrorKind::WriteZero))
         } else {
@@ -390,6 +425,9 @@ impl WriteHalfCollect {
     }
     pub fn try_send_to(&self, buf: BytesMut, route_key: &RouteKey) -> io::Result<()> {
         let write_half = self.get_write_half_by_key(route_key)?;
+        if buf.is_empty() {
+            return Ok(());
+        }
         if let Err(e) = write_half.try_send(buf) {
             match e {
                 TrySendError::Full(_) => Err(io::Error::from(io::ErrorKind::WouldBlock)),
@@ -448,7 +486,7 @@ impl SocketManager {
         &self,
         addr: SocketAddr,
         index_offset: usize,
-        ttl: Option<u32>,
+        ttl: Option<u8>,
     ) -> io::Result<RouteKey> {
         let len = self.tcp_multiplexing_limit;
         if index_offset >= len {
@@ -474,6 +512,13 @@ impl SocketManager {
         }
         self.connect_impl(0, addr, 0, None).await
     }
+    pub async fn connect_ttl(&self, addr: SocketAddr, ttl: Option<u8>) -> io::Result<RouteKey> {
+        let _guard = self.lock.lock().await;
+        if let Some(route_key) = self.write_half_collect.get_one_route_key(&addr) {
+            return Ok(route_key);
+        }
+        self.connect_impl(0, addr, 0, ttl).await
+    }
     /// Reuse the bound port to initiate a connection, which can be used to penetrate NAT1 network type.
     pub async fn connect_reuse_port(&self, addr: SocketAddr) -> io::Result<RouteKey> {
         let _guard = self.lock.lock().await;
@@ -498,7 +543,7 @@ impl SocketManager {
         bind_port: u16,
         addr: SocketAddr,
         index_offset: usize,
-        ttl: Option<u32>,
+        ttl: Option<u8>,
     ) -> io::Result<RouteKey> {
         let stream = connect_tcp(addr, bind_port, self.default_interface.as_ref(), ttl).await?;
         let route_key = stream.route_key()?;
@@ -534,7 +579,7 @@ impl SocketManager {
         &self,
         buf: BytesMut,
         addr: A,
-        ttl: Option<u32>,
+        ttl: Option<u8>,
     ) -> io::Result<()> {
         let index_offset = rand::rng().random_range(0..self.tcp_multiplexing_limit);
         let route_key = self

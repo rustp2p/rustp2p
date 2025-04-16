@@ -19,18 +19,16 @@ dashmap = { workspace = true }
 rand = { workspace = true }
 crossbeam-utils = { workspace = true }
 crossbeam-queue = { workspace = true }
-
-
-
-async-shutdown = "0.2"
+flume = { workspace = true }
+kcp = { workspace = true, optional = true }
+tokio-util = { workspace = true }
+async-shutdown = { workspace = true }
 rmp-serde = "1.3"
 dns-parser = "0.8"
 
 ring = { version = "0.17", optional = true }
 sha2 = "0.10"
-flume = { version = "0.11.1", features = ["async"] }
-kcp = { version = "0.5.3", optional = true }
-tokio-util = "0.7"
+
 futures = "0.3.31"
 
 [dev-dependencies]
@@ -55,7 +53,7 @@ required-features = ["use-kcp"]
 [workspace]
 resolver = "2"
 members = [
-    "rustp2p-core"
+    "rustp2p-core", "rustp2p-reliable"
 ]
 
 [workspace.dependencies]
@@ -70,6 +68,10 @@ dashmap = "6.1"
 rand = "0.9"
 crossbeam-utils = "0.8"
 crossbeam-queue = "0.3"
+kcp = "0.5.3"
+tokio-util = "0.7"
+flume = { version = "0.11.1", features = ["async"] }
+async-shutdown = "0.2"
 
 [features]
 default = []

@@ -205,8 +205,8 @@ impl NodeContext {
     pub(crate) fn punch_info(&self) -> &Arc<RwLock<NodePunchInfo>> {
         &self.punch_info
     }
-    pub(crate) fn gen_punch_info(&self, seq: u32) -> PunchConsultInfo {
-        self.punch_info.read().punch_consult_info(seq)
+    pub(crate) fn gen_punch_info(&self) -> PunchConsultInfo {
+        self.punch_info.read().punch_consult_info()
     }
     pub(crate) fn punch_model_box(&self) -> PunchModelBox {
         self.punch_info.read().punch_model_box.clone()

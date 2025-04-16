@@ -56,18 +56,13 @@ pub(crate) fn start_task(
         tunnel_tx.clone(),
         udp_stun_servers,
     ));
-    join_set.spawn(punch_consult::punch_consult_loop(
-        tunnel_tx.clone(),
-        puncher.clone(),
-    ));
+    join_set.spawn(punch_consult::punch_consult_loop(tunnel_tx.clone()));
     join_set.spawn(punch_consult::punch_loop(
-        true,
         active_receiver,
         tunnel_tx.clone(),
         puncher.clone(),
     ));
     join_set.spawn(punch_consult::punch_loop(
-        false,
         passive_receiver,
         tunnel_tx.clone(),
         puncher,

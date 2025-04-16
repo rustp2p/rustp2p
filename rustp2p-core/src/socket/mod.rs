@@ -38,7 +38,7 @@ pub(crate) async fn connect_tcp(
     addr: SocketAddr,
     bind_port: u16,
     default_interface: Option<&LocalInterface>,
-    ttl: Option<u32>,
+    ttl: Option<u8>,
 ) -> io::Result<tokio::net::TcpStream> {
     let socket = create_tcp0(addr, bind_port, default_interface, ttl)?;
     socket.writable().await?;
@@ -49,7 +49,7 @@ pub(crate) fn create_tcp0(
     addr: SocketAddr,
     bind_port: u16,
     default_interface: Option<&LocalInterface>,
-    ttl: Option<u32>,
+    ttl: Option<u8>,
 ) -> io::Result<tokio::net::TcpStream> {
     let v4 = addr.is_ipv4();
     let socket = if v4 {
@@ -82,7 +82,7 @@ pub(crate) fn create_tcp0(
         }
     }
     if let Some(ttl) = ttl {
-        socket.set_ttl(ttl)?;
+        socket.set_ttl(ttl as _)?;
     }
     socket.set_nonblocking(true)?;
     socket.set_nodelay(true)?;

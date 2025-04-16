@@ -6,19 +6,17 @@ use rust_p2p_core::punch::{PunchConsultInfo, PunchInfo, Puncher};
 use std::time::Duration;
 use tokio::sync::mpsc::Receiver;
 
-pub async fn punch_consult_loop(tunnel_tx: TunnelHubSender, puncher: Puncher) {
-    let mut seq = 0;
+pub async fn punch_consult_loop(tunnel_tx: TunnelHubSender) {
     tokio::time::sleep(Duration::from_secs(1)).await;
     let route_table = &tunnel_tx.route_table;
     loop {
         tokio::time::sleep(Duration::from_secs(5)).await;
-        seq += 1;
         let self_id = if let Some(self_id) = tunnel_tx.node_context.load_id() {
             self_id
         } else {
             continue;
         };
-        let consult_info = tunnel_tx.node_context().gen_punch_info(seq);
+        let consult_info = tunnel_tx.node_context().gen_punch_info();
         let data = match rmp_serde::to_vec(&consult_info) {
             Ok(data) => data,
             Err(e) => {
@@ -44,7 +42,7 @@ pub async fn punch_consult_loop(tunnel_tx: TunnelHubSender, puncher: Puncher) {
             if node_id <= self_id {
                 continue;
             }
-            if !puncher.need_punch(&node_id.into()) || !route_table.need_punch(&node_id) {
+            if !route_table.need_punch(&node_id) {
                 continue;
             }
             if tunnel_tx
@@ -63,24 +61,20 @@ pub async fn punch_consult_loop(tunnel_tx: TunnelHubSender, puncher: Puncher) {
 }
 #[allow(unused_mut)]
 pub async fn punch_loop(
-    active: bool,
     mut receiver: Receiver<(NodeID, PunchConsultInfo)>,
     tunnel_tx: TunnelHubSender,
     puncher: Puncher,
 ) {
     while let Some((node_id, info)) = receiver.recv().await {
         let punch_info = PunchInfo::new(
-            active,
             info.peer_punch_model & tunnel_tx.node_context().punch_model_box(),
             info.peer_nat_info,
         );
         if let Ok(packet) = tunnel_tx.allocate_send_packet_proto(ProtocolType::PunchRequest, 0) {
-            let peer_punch_id = node_id.into();
             if !tunnel_tx.route_table.need_punch(&node_id) {
-                puncher.reset_record(&peer_punch_id);
                 continue;
             }
-            if let Err(e) = puncher.punch(peer_punch_id, packet.buf(), punch_info).await {
+            if let Err(e) = puncher.punch(packet.buf(), punch_info).await {
                 log::warn!("punch {e:?} {node_id:?}");
             }
         }
