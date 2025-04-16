@@ -237,7 +237,7 @@ impl ContextHandler {
                                 .punch(
                                     src_id,
                                     &request,
-                                    PunchInfo::new_by_other(PunchModelBoxes::all(), peer_nat_info),
+                                    PunchInfo::from_master(PunchModelBoxes::all(), peer_nat_info),
                                 )
                                 .await;
                             log::info!("punch peer_id={src_id},{rs:?}")
@@ -258,7 +258,7 @@ impl ContextHandler {
                             .punch(
                                 src_id,
                                 &request,
-                                PunchInfo::new_by_oneself(PunchModelBoxes::all(), peer_nat_info),
+                                PunchInfo::from_slave(PunchModelBoxes::all(), peer_nat_info),
                             )
                             .await;
                         log::info!("punch peer_id={src_id},{rs:?}")
