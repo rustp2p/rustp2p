@@ -32,7 +32,7 @@ pub struct NatInfo {
     pub mapping_tcp_addr: Vec<SocketAddr>,
     /// the set of mapped addresses where `UDP` serves on
     pub mapping_udp_addr: Vec<SocketAddr>,
-    /// The predicted range of public ports, it is used when the nat_type is symmertric
+    /// The predicted range of public ports, it is used when the nat_type is symmetric
     pub public_port_range: u16,
     /// local IP address
     pub local_ipv4: Ipv4Addr,
