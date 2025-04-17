@@ -193,7 +193,7 @@ impl Puncher {
         count: usize,
         buf: &[u8],
         peer_nat_info: &NatInfo,
-        punch_model: &PunchModelBoxes,
+        punch_model: &PunchModelIntersect,
     ) -> io::Result<()> {
         let udp_socket_manager = if let Some(udp_socket_manager) = self.udp_socket_manager.as_ref()
         {

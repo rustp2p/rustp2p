@@ -14,7 +14,7 @@ use crate::protocol::node_id::{GroupCode, NodeID};
 use crate::protocol::{NetPacket, HEAD_LEN};
 use crate::tunnel::{NodeAddress, PeerNodeAddress, RecvResult};
 pub use rust_p2p_core::nat::*;
-pub use rust_p2p_core::punch::config::{PunchModel, PunchModelBox};
+pub use rust_p2p_core::punch::config::{PunchModel, PunchModelSet};
 pub use rust_p2p_core::route::*;
 pub use rust_p2p_core::socket::LocalInterface;
 pub use rust_p2p_core::tunnel::config::LoadBalance;

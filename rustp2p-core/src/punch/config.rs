@@ -13,10 +13,10 @@ pub enum PunchModel {
 }
 
 impl ops::BitOr<PunchModel> for PunchModel {
-    type Output = PunchModelBox;
+    type Output = PunchModelSet;
 
     fn bitor(self, rhs: PunchModel) -> Self::Output {
-        let mut model = PunchModelBox::empty();
+        let mut model = PunchModelSet::empty();
         model.or(self);
         model.or(rhs);
         model
@@ -24,18 +24,18 @@ impl ops::BitOr<PunchModel> for PunchModel {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct PunchModelBox {
+pub struct PunchModelSet {
     models: HashSet<PunchModel>,
 }
 
-impl Default for PunchModelBox {
+impl Default for PunchModelSet {
     fn default() -> Self {
-        PunchModelBox::all()
+        PunchModelSet::all()
     }
 }
 
-impl ops::BitOr<PunchModel> for PunchModelBox {
-    type Output = PunchModelBox;
+impl ops::BitOr<PunchModel> for PunchModelSet {
+    type Output = PunchModelSet;
 
     fn bitor(mut self, rhs: PunchModel) -> Self::Output {
         self.or(rhs);
@@ -43,7 +43,7 @@ impl ops::BitOr<PunchModel> for PunchModelBox {
     }
 }
 
-impl PunchModelBox {
+impl PunchModelSet {
     pub fn all() -> Self {
         PunchModel::IPv4Tcp | PunchModel::IPv4Udp | PunchModel::IPv6Tcp | PunchModel::IPv6Udp
     }
@@ -67,30 +67,30 @@ impl PunchModelBox {
 }
 
 #[derive(Clone, Debug)]
-pub struct PunchModelBoxes {
-    boxes: Vec<PunchModelBox>,
+pub struct PunchModelIntersect {
+    boxes: Vec<PunchModelSet>,
 }
 
-impl ops::BitAnd<PunchModelBox> for PunchModelBox {
-    type Output = PunchModelBoxes;
+impl ops::BitAnd<PunchModelSet> for PunchModelSet {
+    type Output = PunchModelIntersect;
 
-    fn bitand(self, rhs: PunchModelBox) -> Self::Output {
-        let mut boxes = PunchModelBoxes::empty();
+    fn bitand(self, rhs: PunchModelSet) -> Self::Output {
+        let mut boxes = PunchModelIntersect::empty();
         boxes.and(rhs);
         boxes
     }
 }
 
-impl PunchModelBoxes {
+impl PunchModelIntersect {
     pub fn all() -> Self {
         Self {
-            boxes: vec![PunchModelBox::all()],
+            boxes: vec![PunchModelSet::all()],
         }
     }
     pub fn empty() -> Self {
         Self { boxes: Vec::new() }
     }
-    pub fn and(&mut self, punch_model_box: PunchModelBox) {
+    pub fn and(&mut self, punch_model_box: PunchModelSet) {
         self.boxes.push(punch_model_box)
     }
     pub fn is_match(&self, punch_model: PunchModel) -> bool {
@@ -108,12 +108,12 @@ impl PunchModelBoxes {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PunchConsultInfo {
-    pub peer_punch_model: PunchModelBox,
+    pub peer_punch_model: PunchModelSet,
     pub peer_nat_info: NatInfo,
 }
 
 impl PunchConsultInfo {
-    pub fn new(peer_punch_model: PunchModelBox, peer_nat_info: NatInfo) -> Self {
+    pub fn new(peer_punch_model: PunchModelSet, peer_nat_info: NatInfo) -> Self {
         Self {
             peer_punch_model,
             peer_nat_info,
@@ -123,12 +123,12 @@ impl PunchConsultInfo {
 
 #[derive(Clone, Debug)]
 pub struct PunchInfo {
-    pub(crate) punch_model: PunchModelBoxes,
+    pub(crate) punch_model: PunchModelIntersect,
     pub(crate) peer_nat_info: NatInfo,
 }
 
 impl PunchInfo {
-    pub fn new(punch_model: PunchModelBoxes, peer_nat_info: NatInfo) -> Self {
+    pub fn new(punch_model: PunchModelIntersect, peer_nat_info: NatInfo) -> Self {
         Self {
             punch_model,
             peer_nat_info,

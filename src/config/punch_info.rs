@@ -1,12 +1,12 @@
 use rust_p2p_core::nat::{NatInfo, NatType};
-use rust_p2p_core::punch::{PunchConsultInfo, PunchModelBox};
+use rust_p2p_core::punch::{PunchConsultInfo, PunchModelSet};
 use rust_p2p_core::route::Index;
 use rust_p2p_core::tunnel::udp::UDPIndex;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 
 #[derive(Debug, Clone)]
 pub struct NodePunchInfo {
-    pub punch_model_box: PunchModelBox,
+    pub punch_model_box: PunchModelSet,
     pub local_udp_ports: Vec<u16>,
     pub local_tcp_port: u16,
     pub public_udp_ports: Vec<u16>,
