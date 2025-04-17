@@ -77,6 +77,7 @@ pub async fn main() -> io::Result<()> {
     } else {
         tokio::spawn(async move {
             while let Ok((mut stream, remote_id)) = manager.accept().await {
+                let remote_id: u32 = remote_id.into();
                 log::info!("=========== accept kcp_stream from {:?}", remote_id);
                 tokio::spawn(async move {
                     let mut buf = [0; 1024];
@@ -85,13 +86,19 @@ pub async fn main() -> io::Result<()> {
                             tokio::time::timeout(Duration::from_secs(100), stream.read(&mut buf))
                                 .await;
                         match result {
-                            Ok(rs) => {
-                                let len = rs.unwrap();
+                            Ok(Ok(len)) => {
+                                if len == 0 {
+                                    break;
+                                }
                                 log::info!(
                                     "read remote_id={remote_id:?},message={:?}",
                                     String::from_utf8(buf[..len].into())
                                 );
                                 stream.write_all(&buf[..len]).await.unwrap();
+                            }
+                            Ok(Err(e)) => {
+                                log::info!("read remote_id={remote_id:?},error={e:?}",);
+                                break;
                             }
                             Err(_) => {
                                 log::info!("read remote_id={remote_id:?} timeout");
