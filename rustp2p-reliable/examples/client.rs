@@ -85,17 +85,19 @@ async fn main() {
                 );
             });
             tokio::spawn(async move {
+                let mut count = 1;
                 while reliable_tunnel
-                    .send(format!("hello:{}", rand::random::<u32>()).as_bytes().into())
+                    .send(format!("hello-{count}").as_bytes().into())
                     .await
                     .is_ok()
                 {
                     log::info!(
-                        "========= send 'hello', local:{}, remote:{} {:?}",
+                        "========= send 'hello-{count}', local:{}, remote:{} {:?}",
                         reliable_tunnel.local_addr(),
                         reliable_tunnel.remote_addr(),
                         reliable_tunnel.tunnel_type()
                     );
+                    count += 1;
                     tokio::time::sleep(Duration::from_secs(3)).await;
                 }
                 log::info!(
