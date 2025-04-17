@@ -53,10 +53,10 @@ pub async fn main() -> io::Result<()> {
         .group_code(string_to_group_code(&group_code))
         .build()
         .await?;
-    let manager = endpoint.kcp_stream();
+    let kcp_listener = endpoint.kcp_listener();
 
     if let Some(request) = request {
-        let client_kcp_stream = manager.open_stream(NodeID::from(request))?;
+        let client_kcp_stream = endpoint.open_kcp_stream(NodeID::from(request))?;
         let (mut write, mut read) = client_kcp_stream.split();
         tokio::spawn(async move {
             let mut buf = [0; 1024];
@@ -76,7 +76,7 @@ pub async fn main() -> io::Result<()> {
         }
     } else {
         tokio::spawn(async move {
-            while let Ok((mut stream, remote_id)) = manager.accept().await {
+            while let Ok((mut stream, remote_id)) = kcp_listener.accept().await {
                 let remote_id: u32 = remote_id.into();
                 log::info!("=========== accept kcp_stream from {:?}", remote_id);
                 tokio::spawn(async move {
