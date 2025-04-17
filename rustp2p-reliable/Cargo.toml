@@ -2,6 +2,10 @@
 name = "rustp2p-reliable"
 version = "0.1.0"
 edition = "2024"
+license = "Apache-2.0"
+readme = "README.md"
+description = "Simple, fast and easy Nat traversal for peer-to-peer"
+repository = "https://github.com/rustp2p/rustp2p"
 
 [dependencies]
 rust-p2p-core = { path = "../rustp2p-core", version = "0.3" }
