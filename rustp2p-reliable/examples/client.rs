@@ -109,19 +109,21 @@ async fn main() {
             });
         }
     });
+    // Next, communicate with the server.
     let udp = Arc::new(UdpSocket::bind("0.0.0.0:0").await.unwrap());
     udp.connect(server).await.unwrap();
-    {
-        let mut request = BytesMut::new();
-        request.put_u32(UP);
-        udp.send(&request).await.unwrap();
-    }
+
     let peer_list = Arc::new(Mutex::new(Vec::<SocketAddr>::new()));
     let peer_list1 = peer_list.clone();
     let puncher1 = puncher.clone();
     let udp1 = udp.clone();
     tokio::spawn(async move {
         loop {
+            {
+                let mut request = BytesMut::new();
+                request.put_u32(UP);
+                udp1.send(&request).await.unwrap();
+            }
             tokio::time::sleep(Duration::from_secs(5)).await;
             {
                 let peer_list = peer_list1.lock().clone();
