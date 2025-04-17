@@ -291,13 +291,13 @@ impl ReliableTunnelListener {
                     let unified_tunnel = rs?;
                     match unified_tunnel {
                         Tunnel::Udp(udp) => {
-                            handle_udp(udp,self.kcp_sender.clone(), self.punch_context.clone())?;
+                            handle_udp(self.shutdown_manager.clone(), udp, self.kcp_sender.clone(), self.punch_context.clone())?;
                         }
                         Tunnel::Tcp(tcp) => {
                             let local_addr = tcp.local_addr();
                             let remote_addr = tcp.route_key().addr();
                             let sender = tcp.sender()?;
-                            let receiver = handle_tcp(tcp).await?;
+                            let receiver = handle_tcp(self.shutdown_manager.clone(),tcp).await?;
                             let hub = TcpMessageHub::new(local_addr,remote_addr,sender,receiver);
                             return Ok(ReliableTunnel::Tcp(hub))
                         }
@@ -410,11 +410,17 @@ impl KcpMessageHub {
             .map_err(|_| io::Error::from(io::ErrorKind::UnexpectedEof))
     }
 }
-async fn handle_tcp(mut tcp_tunnel: TcpTunnel) -> io::Result<Receiver<BytesMut>> {
+async fn handle_tcp(
+    shutdown_manager: ShutdownManager<()>,
+    mut tcp_tunnel: TcpTunnel,
+) -> io::Result<Receiver<BytesMut>> {
     let (sender, receiver) = flume::bounded(128);
     tokio::spawn(async move {
         let mut buf = [0; 65536];
-        while let Ok(len) = tcp_tunnel.recv(&mut buf).await {
+        while let Ok(Ok(len)) = shutdown_manager
+            .wrap_cancel(tcp_tunnel.recv(&mut buf))
+            .await
+        {
             if sender.send_async(buf[..len].into()).await.is_err() {
                 break;
             }
@@ -424,6 +430,7 @@ async fn handle_tcp(mut tcp_tunnel: TcpTunnel) -> io::Result<Receiver<BytesMut>>
 }
 
 fn handle_udp(
+    shutdown_manager: ShutdownManager<()>,
     mut udp_tunnel: UdpTunnel,
     sender: flume::Sender<KcpMessageHub>,
     punch_context: Arc<PunchContext>,
@@ -432,7 +439,10 @@ fn handle_udp(
     tokio::spawn(async move {
         let mut buf = [0; 65536];
 
-        while let Some(rs) = udp_tunnel.recv_from(&mut buf).await {
+        while let Ok(Some(rs)) = shutdown_manager
+            .wrap_cancel(udp_tunnel.recv_from(&mut buf))
+            .await
+        {
             let (len, route_key) = match rs {
                 Ok(rs) => rs,
                 Err(e) => {
