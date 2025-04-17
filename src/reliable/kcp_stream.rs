@@ -1,5 +1,5 @@
 use crate::protocol::node_id::NodeID;
-use crate::tunnel::TunnelHubSender;
+use crate::tunnel::TunnelRouter;
 use bytes::{Buf, BytesMut};
 use kcp::Kcp;
 use parking_lot::{Mutex, RwLock};
@@ -46,7 +46,7 @@ struct KcpStreamHubInner {
     conv_id: Counter,
     input_receiver: flume::Receiver<(NodeID, BytesMut)>,
     map: Map,
-    output: TunnelHubSender,
+    output: TunnelRouter,
 }
 
 #[derive(Clone, Default)]
@@ -98,7 +98,7 @@ impl KcpContext {
     fn get_stream_sender(&self, node_id: NodeID, conv: u32) -> Option<Sender<BytesMut>> {
         self.map.read().get(&(node_id, conv)).cloned()
     }
-    pub(crate) fn create_kcp_hub(&self, sender: TunnelHubSender) -> KcpStreamHub {
+    pub(crate) fn create_kcp_hub(&self, sender: TunnelRouter) -> KcpStreamHub {
         let mut guard = self.channel.lock();
         if let Some((_, hub)) = guard.as_ref() {
             if let Some(inner) = hub.upgrade() {
@@ -280,12 +280,7 @@ impl KcpStream {
     }
 }
 impl KcpStream {
-    fn new(
-        node_id: NodeID,
-        conv: u32,
-        map: Map,
-        output_sender: TunnelHubSender,
-    ) -> io::Result<Self> {
+    fn new(node_id: NodeID, conv: u32, map: Map, output_sender: TunnelRouter) -> io::Result<Self> {
         let mut guard = map.write();
         if guard.contains_key(&(node_id, conv)) {
             return Err(Error::new(
@@ -304,7 +299,7 @@ impl KcpStream {
         conv: u32,
         map: Map,
         input: Receiver<BytesMut>,
-        output_sender: TunnelHubSender,
+        output_sender: TunnelRouter,
     ) -> Self {
         let mut kcp = Kcp::new_stream(
             conv,
@@ -455,7 +450,7 @@ enum Event {
 
 struct KcpOutput {
     node_id: NodeID,
-    sender: TunnelHubSender,
+    sender: TunnelRouter,
 }
 impl Write for KcpOutput {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {

@@ -27,7 +27,7 @@ use rust_p2p_core::route::route_table::RouteTable;
 use rust_p2p_core::route::ConnectProtocol;
 use rust_p2p_core::tunnel::config::{TcpTunnelConfig, TunnelConfig, UdpTunnelConfig};
 use rust_p2p_core::tunnel::tcp::LengthPrefixedInitCodec;
-use rust_p2p_core::tunnel::{new_tunnel_component, UnifiedSocketManager, UnifiedTunnel};
+use rust_p2p_core::tunnel::{new_tunnel_component, SocketManager, Tunnel};
 
 pub const HEAD_LEN: usize = 12;
 //
@@ -175,11 +175,11 @@ struct ContextHandler {
     route_table: RouteTable<u32>,
     #[allow(dead_code)]
     server: SocketAddr,
-    socket_manager: UnifiedSocketManager,
+    socket_manager: SocketManager,
 }
 
 impl ContextHandler {
-    async fn handle(&self, mut tunnel: UnifiedTunnel) -> std::io::Result<()> {
+    async fn handle(&self, mut tunnel: Tunnel) -> std::io::Result<()> {
         let mut buf = [0; 65536];
         while let Some(rs) = tunnel.recv_from(&mut buf).await {
             let (len, route_key) = match rs {
@@ -303,7 +303,7 @@ impl ContextHandler {
     }
 }
 
-async fn my_nat_info(socket_manager: &UnifiedSocketManager) -> Arc<Mutex<NatInfo>> {
+async fn my_nat_info(socket_manager: &SocketManager) -> Arc<Mutex<NatInfo>> {
     let stun_server = vec![
         "stun.miwifi.com:3478".to_string(),
         "stun.chat.bilibili.com:3478".to_string(),

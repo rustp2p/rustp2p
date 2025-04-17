@@ -19,7 +19,7 @@ pub use rust_p2p_core::tunnel::tcp::{
 };
 use rust_p2p_core::tunnel::tcp::{TcpTunnel, WeakTcpTunnelSender};
 use rust_p2p_core::tunnel::udp::{UDPIndex, UdpTunnel};
-use rust_p2p_core::tunnel::{UnifiedSocketManager, UnifiedTunnel, UnifiedTunnelFactory};
+use rust_p2p_core::tunnel::{SocketManager, Tunnel, TunnelDispatcher};
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
@@ -62,7 +62,7 @@ pub async fn from_config(config: Config) -> io::Result<(ReliableTunnelListener, 
 pub struct ReliableTunnelListener {
     shutdown_manager: ShutdownManager<()>,
     punch_context: Arc<PunchContext>,
-    unified_tunnel_factory: UnifiedTunnelFactory,
+    unified_tunnel_factory: TunnelDispatcher,
     kcp_receiver: Receiver<KcpMessageHub>,
     kcp_sender: flume::Sender<KcpMessageHub>,
 }
@@ -70,7 +70,7 @@ pub struct ReliableTunnelListener {
 pub struct Puncher {
     punch_context: Arc<PunchContext>,
     puncher: CorePuncher,
-    socket_manager: UnifiedSocketManager,
+    socket_manager: SocketManager,
 }
 impl Drop for ReliableTunnelListener {
     fn drop(&mut self) {
@@ -124,14 +124,14 @@ impl PunchContext {
         guard.nat_type = nat_type;
         guard.public_port_range = public_port_range;
     }
-    fn mapped_ip_port(addr: SocketAddr) -> Option<(Ipv4Addr, u16)> {
+    fn mapping_addr(addr: SocketAddr) -> Option<(Ipv4Addr, u16)> {
         match addr {
             SocketAddr::V4(addr) => Some((*addr.ip(), addr.port())),
             SocketAddr::V6(addr) => addr.ip().to_ipv4_mapped().map(|ip| (ip, addr.port())),
         }
     }
     pub fn update_tcp_public_addr(&self, addr: SocketAddr) {
-        let (ip, port) = if let Some(r) = Self::mapped_ip_port(addr) {
+        let (ip, port) = if let Some(r) = Self::mapping_addr(addr) {
             r
         } else {
             return;
@@ -143,7 +143,7 @@ impl PunchContext {
         nat_info.public_tcp_port = port;
     }
     pub fn update_public_addr(&self, index: Index, addr: SocketAddr) {
-        let (ip, port) = if let Some(r) = Self::mapped_ip_port(addr) {
+        let (ip, port) = if let Some(r) = Self::mapping_addr(addr) {
             r
         } else {
             return;
@@ -183,7 +183,7 @@ impl PunchContext {
         }
         nat_info.ipv6 = local_ipv6.ok();
     }
-    pub async fn update_info(&self) -> io::Result<NatInfo> {
+    pub async fn update_nat_info(&self) -> io::Result<NatInfo> {
         self.update_local_addr().await;
         let mut udp_stun_servers = self.udp_stun_servers.clone();
         udp_stun_servers.shuffle(&mut rand::rng());
@@ -210,7 +210,7 @@ impl Puncher {
         tcp_stun_servers: Vec<String>,
         udp_stun_servers: Vec<String>,
         puncher: CorePuncher,
-        socket_manager: UnifiedSocketManager,
+        socket_manager: SocketManager,
     ) -> io::Result<Self> {
         let local_tcp_port = if let Some(v) = socket_manager.tcp_socket_manager_as_ref() {
             v.local_addr().port()
@@ -272,7 +272,7 @@ pub enum ReliableTunnelType {
 impl ReliableTunnelListener {
     fn new(
         shutdown_manager: ShutdownManager<()>,
-        unified_tunnel_factory: UnifiedTunnelFactory,
+        unified_tunnel_factory: TunnelDispatcher,
         punch_context: Arc<PunchContext>,
     ) -> Self {
         let (kcp_sender, kcp_receiver) = flume::bounded(64);
@@ -290,10 +290,10 @@ impl ReliableTunnelListener {
                 rs=self.unified_tunnel_factory.dispatch()=>{
                     let unified_tunnel = rs?;
                     match unified_tunnel {
-                        UnifiedTunnel::Udp(udp) => {
+                        Tunnel::Udp(udp) => {
                             handle_udp(udp,self.kcp_sender.clone(), self.punch_context.clone())?;
                         }
-                        UnifiedTunnel::Tcp(tcp) => {
+                        Tunnel::Tcp(tcp) => {
                             let local_addr = tcp.local_addr();
                             let remote_addr = tcp.route_key().addr();
                             let sender = tcp.sender()?;

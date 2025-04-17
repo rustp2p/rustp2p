@@ -2,12 +2,12 @@ use crate::protocol::node_id::{GroupCode, NodeID};
 use crate::protocol::protocol_type::ProtocolType;
 use crate::protocol::NetPacket;
 use crate::tunnel::node_context::NodeAddress;
-use crate::tunnel::TunnelHubSender;
+use crate::tunnel::TunnelRouter;
 use std::collections::HashSet;
 use std::io;
 use std::time::Duration;
 
-pub async fn heartbeat_loop(tunnel_tx: TunnelHubSender, heartbeat_interval: Duration) {
+pub async fn heartbeat_loop(tunnel_tx: TunnelRouter, heartbeat_interval: Duration) {
     let mut count = 0;
     loop {
         if count % 3 == 2 {
@@ -23,7 +23,7 @@ pub async fn heartbeat_loop(tunnel_tx: TunnelHubSender, heartbeat_interval: Dura
     }
 }
 
-async fn heartbeat_request(tunnel_tx: &TunnelHubSender) -> io::Result<()> {
+async fn heartbeat_request(tunnel_tx: &TunnelRouter) -> io::Result<()> {
     let mut packet =
         if let Ok(packet) = tunnel_tx.allocate_send_packet_proto(ProtocolType::EchoRequest, 0) {
             packet
@@ -40,7 +40,7 @@ async fn heartbeat_request(tunnel_tx: &TunnelHubSender) -> io::Result<()> {
     Ok(())
 }
 
-async fn timestamp_request(tunnel_tx: &TunnelHubSender) -> io::Result<()> {
+async fn timestamp_request(tunnel_tx: &TunnelRouter) -> io::Result<()> {
     let mut packet = if let Ok(packet) =
         tunnel_tx.allocate_send_packet_proto(ProtocolType::TimestampRequest, 4)
     {
@@ -64,7 +64,7 @@ async fn timestamp_request(tunnel_tx: &TunnelHubSender) -> io::Result<()> {
 async fn direct_heartbeat_request(
     direct_nodes: Vec<(NodeAddress, Option<(GroupCode, NodeID)>)>,
     sent_ids: &HashSet<NodeID>,
-    tunnel_tx: &TunnelHubSender,
+    tunnel_tx: &TunnelRouter,
     buf: &[u8],
 ) {
     let self_group_code = tunnel_tx.node_context().load_group_code();
@@ -97,7 +97,7 @@ async fn direct_heartbeat_request(
 }
 
 async fn route_table_heartbeat_request(
-    tunnel_tx: &TunnelHubSender,
+    tunnel_tx: &TunnelRouter,
     packet: &mut NetPacket<&mut [u8]>,
 ) -> (HashSet<NodeID>, HashSet<NodeID>) {
     let table = tunnel_tx.route_table.route_table();
@@ -126,7 +126,7 @@ async fn route_table_heartbeat_request(
 }
 async fn relay_heartbeat_request(
     sent_ids: HashSet<NodeID>,
-    tunnel_tx: &TunnelHubSender,
+    tunnel_tx: &TunnelRouter,
     packet: &mut NetPacket<&mut [u8]>,
 ) {
     let group_code = tunnel_tx.node_context().load_group_code();

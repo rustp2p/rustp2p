@@ -18,19 +18,19 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::{TcpListener, TcpStream};
 
-pub struct TcpTunnelFactory {
+pub struct TcpTunnelDispatcher {
     route_idle_time: Duration,
     tcp_listener: TcpListener,
     connect_receiver: Receiver<(RouteKey, ReadHalfBox, Sender<BytesMut>)>,
     #[allow(dead_code)]
-    pub(crate) socket_manager: Arc<SocketManager>,
+    pub(crate) socket_manager: Arc<TcpSocketManager>,
     write_half_collect: WriteHalfCollect,
     init_codec: Arc<Box<dyn InitCodec>>,
 }
 
-impl TcpTunnelFactory {
+impl TcpTunnelDispatcher {
     /// Construct a `TCP` tunnel with the specified configuration
-    pub fn new(config: TcpTunnelConfig) -> io::Result<TcpTunnelFactory> {
+    pub fn new(config: TcpTunnelConfig) -> io::Result<TcpTunnelDispatcher> {
         config.check()?;
         let address: SocketAddr = if config.use_v6 {
             format!("[::]:{}", config.tcp_port).parse().unwrap()
@@ -45,7 +45,7 @@ impl TcpTunnelFactory {
         let write_half_collect =
             WriteHalfCollect::new(config.tcp_multiplexing_limit, config.recycle_buf);
         let init_codec = Arc::new(config.init_codec);
-        let socket_manager = Arc::new(SocketManager::new(
+        let socket_manager = Arc::new(TcpSocketManager::new(
             local_addr,
             config.tcp_multiplexing_limit,
             write_half_collect.clone(),
@@ -53,7 +53,7 @@ impl TcpTunnelFactory {
             config.default_interface,
             init_codec.clone(),
         ));
-        Ok(TcpTunnelFactory {
+        Ok(TcpTunnelDispatcher {
             route_idle_time: config.route_idle_time,
             tcp_listener,
             connect_receiver,
@@ -64,9 +64,9 @@ impl TcpTunnelFactory {
     }
 }
 
-impl TcpTunnelFactory {
-    /// Accept `TCP` tunnel from this kind factory
-    pub async fn accept(&mut self) -> io::Result<TcpTunnel> {
+impl TcpTunnelDispatcher {
+    /// Dispatch `TCP` tunnel from this kind Dispatcher
+    pub async fn dispatch(&mut self) -> io::Result<TcpTunnel> {
         tokio::select! {
             rs=self.connect_receiver.recv()=>{
                 let (route_key,read_half,sender) = rs.
@@ -87,7 +87,7 @@ impl TcpTunnelFactory {
             }
         }
     }
-    pub fn manager(&self) -> &Arc<SocketManager> {
+    pub fn manager(&self) -> &Arc<TcpSocketManager> {
         &self.socket_manager
     }
 }
@@ -439,7 +439,7 @@ impl WriteHalfCollect {
     }
 }
 
-pub struct SocketManager {
+pub struct TcpSocketManager {
     lock: Mutex<()>,
     local_addr: SocketAddr,
     tcp_multiplexing_limit: usize,
@@ -449,7 +449,7 @@ pub struct SocketManager {
     init_codec: Arc<Box<dyn InitCodec>>,
 }
 
-impl SocketManager {
+impl TcpSocketManager {
     pub(crate) fn new(
         local_addr: SocketAddr,
         tcp_multiplexing_limit: usize,
@@ -473,7 +473,7 @@ impl SocketManager {
     }
 }
 
-impl SocketManager {
+impl TcpSocketManager {
     /// Multiple connections can be initiated to the target address.
     pub async fn multi_connect(
         &self,
@@ -567,7 +567,7 @@ impl SocketManager {
     }
 }
 
-impl SocketManager {
+impl TcpSocketManager {
     pub async fn multi_send_to<A: Into<SocketAddr>>(
         &self,
         buf: BytesMut,
@@ -616,23 +616,23 @@ impl SocketManager {
     }
 }
 pub trait ToRouteKeyForTcp<T> {
-    fn route_key(_: &SocketManager, _: Self) -> io::Result<RouteKey>;
+    fn route_key(_: &TcpSocketManager, _: Self) -> io::Result<RouteKey>;
 }
 
 impl ToRouteKeyForTcp<()> for RouteKey {
-    fn route_key(_: &SocketManager, dest: RouteKey) -> io::Result<RouteKey> {
+    fn route_key(_: &TcpSocketManager, dest: RouteKey) -> io::Result<RouteKey> {
         Ok(dest)
     }
 }
 
 impl ToRouteKeyForTcp<()> for &RouteKey {
-    fn route_key(_: &SocketManager, dest: &RouteKey) -> io::Result<RouteKey> {
+    fn route_key(_: &TcpSocketManager, dest: &RouteKey) -> io::Result<RouteKey> {
         Ok(*dest)
     }
 }
 
 impl ToRouteKeyForTcp<()> for &mut RouteKey {
-    fn route_key(_: &SocketManager, dest: &mut RouteKey) -> io::Result<RouteKey> {
+    fn route_key(_: &TcpSocketManager, dest: &mut RouteKey) -> io::Result<RouteKey> {
         Ok(*dest)
     }
 }
@@ -765,19 +765,19 @@ mod tests {
     use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 
     use crate::tunnel::config::TcpTunnelConfig;
-    use crate::tunnel::tcp::{Decoder, Encoder, InitCodec, TcpTunnelFactory};
+    use crate::tunnel::tcp::{Decoder, Encoder, InitCodec, TcpTunnelDispatcher};
 
     #[tokio::test]
     pub async fn create_tcp_tunnel() {
         let config: TcpTunnelConfig = TcpTunnelConfig::default();
-        let tcp_tunnel_factory = TcpTunnelFactory::new(config).unwrap();
+        let tcp_tunnel_factory = TcpTunnelDispatcher::new(config).unwrap();
         drop(tcp_tunnel_factory)
     }
 
     #[tokio::test]
     pub async fn create_codec_tcp_tunnel() {
         let config = TcpTunnelConfig::new(Box::new(MyInitCodeC));
-        let tcp_tunnel_factory = TcpTunnelFactory::new(config).unwrap();
+        let tcp_tunnel_factory = TcpTunnelDispatcher::new(config).unwrap();
         drop(tcp_tunnel_factory)
     }
 

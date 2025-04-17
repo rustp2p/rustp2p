@@ -4,7 +4,7 @@ use env_logger::Env;
 use rust_p2p_core::route::route_table::RouteTable;
 use rust_p2p_core::tunnel::config::{TcpTunnelConfig, TunnelConfig, UdpTunnelConfig};
 use rust_p2p_core::tunnel::tcp::LengthPrefixedInitCodec;
-use rust_p2p_core::tunnel::{new_tunnel_component, UnifiedSocketManager, UnifiedTunnel};
+use rust_p2p_core::tunnel::{new_tunnel_component, SocketManager, Tunnel};
 
 /*Demo Protocol
    0                                            15                                              31
@@ -55,11 +55,7 @@ async fn main() {
         });
     }
 }
-async fn handler(
-    route_table: RouteTable<u32>,
-    mut tunnel: UnifiedTunnel,
-    writer: UnifiedSocketManager,
-) {
+async fn handler(route_table: RouteTable<u32>, mut tunnel: Tunnel, writer: SocketManager) {
     let mut buf = [0; 65536];
     while let Some(rs) = tunnel.recv_from(&mut buf).await {
         let (len, route_key) = match rs {

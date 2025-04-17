@@ -11,7 +11,7 @@ use rand::Rng;
 
 use crate::nat::{NatInfo, NatType};
 
-use crate::tunnel::UnifiedTunnelFactory;
+use crate::tunnel::TunnelDispatcher;
 use crate::tunnel::{tcp, udp};
 pub use config::*;
 pub mod config;
@@ -24,12 +24,12 @@ pub struct Puncher {
     sym_record: Arc<Mutex<HashMap<SocketAddr, usize>>>,
     #[allow(clippy::type_complexity)]
     count_record: Arc<Mutex<HashMap<SocketAddr, (usize, usize, u64)>>>,
-    udp_socket_manager: Option<Arc<udp::SocketManager>>,
-    tcp_socket_manager: Option<Arc<tcp::SocketManager>>,
+    udp_socket_manager: Option<Arc<udp::UdpSocketManager>>,
+    tcp_socket_manager: Option<Arc<tcp::TcpSocketManager>>,
 }
 
-impl From<&UnifiedTunnelFactory> for Puncher {
-    fn from(value: &UnifiedTunnelFactory) -> Self {
+impl From<&TunnelDispatcher> for Puncher {
+    fn from(value: &TunnelDispatcher) -> Self {
         let tcp_socket_manager = value.shared_tcp_socket_manager();
         let udp_socket_manager = value.shared_udp_socket_manager();
         Self::new(udp_socket_manager, tcp_socket_manager)
@@ -38,8 +38,8 @@ impl From<&UnifiedTunnelFactory> for Puncher {
 
 impl Puncher {
     pub fn new(
-        udp_socket_manager: Option<Arc<udp::SocketManager>>,
-        tcp_socket_manager: Option<Arc<tcp::SocketManager>>,
+        udp_socket_manager: Option<Arc<udp::UdpSocketManager>>,
+        tcp_socket_manager: Option<Arc<tcp::TcpSocketManager>>,
     ) -> Puncher {
         let mut port_vec: Vec<u16> = (1..=65535).collect();
         let mut rng = rand::rng();
@@ -158,7 +158,7 @@ impl Puncher {
         Ok(())
     }
     async fn connect_tcp(
-        tcp_socket_manager: &tcp::SocketManager,
+        tcp_socket_manager: &tcp::TcpSocketManager,
         buf: Option<&[u8]>,
         addr: SocketAddr,
         ttl: Option<u8>,
@@ -316,7 +316,7 @@ impl Puncher {
 
     async fn punch_symmetric(
         &self,
-        udp_socket_manager: &udp::SocketManager,
+        udp_socket_manager: &udp::UdpSocketManager,
         ports: &[u16],
         buf: &[u8],
         ips: &Vec<Ipv4Addr>,

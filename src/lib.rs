@@ -13,7 +13,7 @@ use crate::protocol::protocol_type::ProtocolType;
 use crate::tunnel::{RecvMetadata, RecvResult};
 use async_trait::async_trait;
 use cipher::Algorithm;
-use config::{TcpTunnelConfig, TunnelManagerConfig, UdpTunnelConfig};
+use config::{Config, TcpTunnelConfig, UdpTunnelConfig};
 use flume::{Receiver, Sender, TryRecvError};
 use protocol::node_id::{GroupCode, NodeID};
 use rust_p2p_core::route::RouteKey;
@@ -21,13 +21,13 @@ use std::io;
 use std::ops::Deref;
 use std::sync::Arc;
 use tokio::task::JoinHandle;
-use tunnel::{PeerNodeAddress, RecvUserData, Tunnel, TunnelHubSender, TunnelManager};
+use tunnel::{PeerNodeAddress, RecvUserData, Tunnel, TunnelDispatcher, TunnelRouter};
 
 pub struct EndPoint {
     #[cfg(feature = "use-kcp")]
     kcp_context: KcpContext,
     input: Receiver<(RecvUserData, RecvMetadata)>,
-    output: TunnelHubSender,
+    output: TunnelRouter,
     _handle: OwnedJoinHandle,
 }
 
@@ -88,7 +88,7 @@ impl EndPoint {
 }
 
 impl Deref for EndPoint {
-    type Target = TunnelHubSender;
+    type Target = TunnelRouter;
 
     fn deref(&self) -> &Self::Target {
         &self.output
@@ -155,7 +155,7 @@ impl Builder {
         self
     }
     pub async fn build(self) -> io::Result<EndPoint> {
-        let mut config = TunnelManagerConfig::empty()
+        let mut config = Config::empty()
             .set_udp_tunnel_config(
                 UdpTunnelConfig::default().set_simple_udp_port(self.udp_port.unwrap_or_default()),
             )
@@ -177,38 +177,38 @@ impl Builder {
             config = config.set_encryption(encryption);
         }
 
-        let tunnel_manager = TunnelManager::new(config).await?;
+        let tunnel_manager = TunnelDispatcher::new(config).await?;
 
         EndPoint::with_interceptor_impl(tunnel_manager, self.interceptor).await
     }
 }
 impl EndPoint {
-    pub async fn new(config: TunnelManagerConfig) -> io::Result<Self> {
-        let tunnel_manager = TunnelManager::new(config).await?;
-        EndPoint::with_interceptor_impl(tunnel_manager, None).await
+    pub async fn new(config: Config) -> io::Result<Self> {
+        let tunnel_hub = TunnelDispatcher::new(config).await?;
+        EndPoint::with_interceptor_impl(tunnel_hub, None).await
     }
     pub async fn with_interceptor<T: DataInterceptor + 'static>(
-        config: TunnelManagerConfig,
+        config: Config,
         interceptor: T,
     ) -> io::Result<Self> {
-        let tunnel_manager = TunnelManager::new(config).await?;
+        let tunnel_hub = TunnelDispatcher::new(config).await?;
         let interceptor = Some(Interceptor {
             inner: Arc::new(interceptor),
         });
-        EndPoint::with_interceptor_impl(tunnel_manager, interceptor).await
+        EndPoint::with_interceptor_impl(tunnel_hub, interceptor).await
     }
     async fn with_interceptor_impl(
-        mut tunnel_manager: TunnelManager,
+        mut tunnel_hub: TunnelDispatcher,
         interceptor: Option<Interceptor>,
     ) -> io::Result<Self> {
         let (sender, receiver) = flume::unbounded();
-        let writer = tunnel_manager.tunnel_send_hub();
+        let writer = tunnel_hub.tunnel_router();
         #[cfg(feature = "use-kcp")]
         let kcp_context = KcpContext::default();
         #[cfg(feature = "use-kcp")]
         let kcp_data_input = kcp_context.clone();
         let handle = tokio::spawn(async move {
-            while let Ok(tunnel_rx) = tunnel_manager.dispatch().await {
+            while let Ok(tunnel_rx) = tunnel_hub.dispatch().await {
                 tokio::spawn(handle(
                     tunnel_rx,
                     sender.clone(),

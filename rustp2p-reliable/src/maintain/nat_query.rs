@@ -11,7 +11,7 @@ pub(crate) async fn nat_test_loop(puncher: Puncher) {
 }
 
 async fn nat_test(puncher: &Puncher) {
-    match puncher.punch_context.update_info().await {
+    match puncher.punch_context.update_nat_info().await {
         Ok(nat_info) => match nat_info.nat_type {
             NatType::Cone => {
                 if let Some(socket_manager) = puncher.socket_manager.udp_socket_manager_as_ref() {

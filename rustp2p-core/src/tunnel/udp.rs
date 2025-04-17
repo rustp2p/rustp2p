@@ -68,43 +68,43 @@ impl UDPIndex {
 }
 
 pub trait ToRouteKeyForUdp<T> {
-    fn route_key(socket_manager: &SocketManager, dest: Self) -> io::Result<RouteKey>;
+    fn route_key(socket_manager: &UdpSocketManager, dest: Self) -> io::Result<RouteKey>;
 }
 
 impl ToRouteKeyForUdp<()> for RouteKey {
-    fn route_key(_: &SocketManager, dest: Self) -> io::Result<RouteKey> {
+    fn route_key(_: &UdpSocketManager, dest: Self) -> io::Result<RouteKey> {
         Ok(dest)
     }
 }
 
 impl ToRouteKeyForUdp<()> for &RouteKey {
-    fn route_key(_: &SocketManager, dest: Self) -> io::Result<RouteKey> {
+    fn route_key(_: &UdpSocketManager, dest: Self) -> io::Result<RouteKey> {
         Ok(*dest)
     }
 }
 
 impl ToRouteKeyForUdp<()> for &mut RouteKey {
-    fn route_key(_: &SocketManager, dest: Self) -> io::Result<RouteKey> {
+    fn route_key(_: &UdpSocketManager, dest: Self) -> io::Result<RouteKey> {
         Ok(*dest)
     }
 }
 
 impl<S: Into<SocketAddr>> ToRouteKeyForUdp<()> for S {
-    fn route_key(socket_manager: &SocketManager, dest: Self) -> io::Result<RouteKey> {
+    fn route_key(socket_manager: &UdpSocketManager, dest: Self) -> io::Result<RouteKey> {
         let addr = dest.into();
         socket_manager.generate_route_key_from_addr(0, addr)
     }
 }
 
 impl<S: Into<SocketAddr>> ToRouteKeyForUdp<usize> for (usize, S) {
-    fn route_key(socket_manager: &SocketManager, dest: Self) -> io::Result<RouteKey> {
+    fn route_key(socket_manager: &UdpSocketManager, dest: Self) -> io::Result<RouteKey> {
         let (index, addr) = dest;
         socket_manager.generate_route_key_from_addr(index, addr.into())
     }
 }
 
 /// initialize udp tunnel by config
-pub(crate) fn create_tunnel_factory(config: UdpTunnelConfig) -> io::Result<UdpTunnelFactory> {
+pub(crate) fn create_tunnel_dispatcher(config: UdpTunnelConfig) -> io::Result<UdpTunnelDispatcher> {
     config.check()?;
     let mut udp_ports = config.udp_ports;
     udp_ports.resize(config.main_udp_count, 0);
@@ -139,7 +139,7 @@ pub(crate) fn create_tunnel_factory(config: UdpTunnelConfig) -> io::Result<UdpTu
     }
     let (tunnel_sender, tunnel_receiver) =
         tachyonix::channel(config.main_udp_count * 2 + config.sub_udp_count * 2);
-    let socket_manager = Arc::new(SocketManager {
+    let socket_manager = Arc::new(UdpSocketManager {
         main_udp_v4,
         main_udp_v6,
         sub_udp: RwLock::new(Vec::with_capacity(config.sub_udp_count)),
@@ -149,7 +149,7 @@ pub(crate) fn create_tunnel_factory(config: UdpTunnelConfig) -> io::Result<UdpTu
         default_interface: config.default_interface,
         sender_map: Default::default(),
     });
-    let tunnel_factory = UdpTunnelFactory {
+    let tunnel_factory = UdpTunnelDispatcher {
         tunnel_receiver,
         socket_manager,
         recycle_buf: config.recycle_buf,
@@ -159,7 +159,7 @@ pub(crate) fn create_tunnel_factory(config: UdpTunnelConfig) -> io::Result<UdpTu
     Ok(tunnel_factory)
 }
 
-pub struct SocketManager {
+pub struct UdpSocketManager {
     main_udp_v4: Vec<Arc<UdpSocket>>,
     main_udp_v6: Vec<Arc<UdpSocket>>,
     sub_udp: RwLock<Vec<Arc<UdpSocket>>>,
@@ -170,7 +170,7 @@ pub struct SocketManager {
     sender_map: DashMap<Index, Sender<(BytesMut, SocketAddr)>>,
 }
 
-impl SocketManager {
+impl UdpSocketManager {
     pub(crate) fn try_sub_batch_send_to(&self, buf: &[u8], addr: SocketAddr) {
         for (i, udp) in self.sub_udp.read().iter().enumerate() {
             if let Err(e) = udp.try_send_to(buf, addr) {
@@ -179,7 +179,7 @@ impl SocketManager {
         }
     }
     pub(crate) fn try_main_batch_send_to(&self, buf: &[u8], addr: &[SocketAddr]) {
-        let len = self.main_v4_udp_count();
+        let len = self.main_udp_v4_count();
         for (i, addr) in addr.iter().enumerate() {
             if let Err(e) = self.try_send_to(buf, (i % len, *addr)) {
                 log::info!("try_main_send_to_addr: {e:?},{},{addr}", i % len);
@@ -286,7 +286,7 @@ impl SocketManager {
     }
 }
 
-impl SocketManager {
+impl UdpSocketManager {
     pub fn model(&self) -> Model {
         if self.sub_udp.read().is_empty() {
             Model::Low
@@ -296,11 +296,11 @@ impl SocketManager {
     }
 
     #[inline]
-    pub fn main_v4_udp_count(&self) -> usize {
+    pub fn main_udp_v4_count(&self) -> usize {
         self.main_udp_v4.len()
     }
     #[inline]
-    pub fn main_v6_udp_count(&self) -> usize {
+    pub fn main_udp_v6_count(&self) -> usize {
         self.main_udp_v6.len()
     }
 
@@ -315,7 +315,7 @@ impl SocketManager {
     }
     /// Acquire the local ports `UDP` sockets bind on
     pub fn local_ports(&self) -> io::Result<Vec<u16>> {
-        let mut ports = Vec::with_capacity(self.main_v4_udp_count());
+        let mut ports = Vec::with_capacity(self.main_udp_v4_count());
         for udp in &self.main_udp_v4 {
             ports.push(udp.local_addr()?.port());
         }
@@ -406,20 +406,20 @@ impl SocketManager {
         addr: A,
     ) -> io::Result<()> {
         let addr: SocketAddr = addr.into();
-        for index in 0..self.main_v4_udp_count() {
+        for index in 0..self.main_udp_v4_count() {
             self.send_to(buf, (index, addr)).await?
         }
         Ok(())
     }
 }
 
-pub struct UdpTunnelFactory {
+pub struct UdpTunnelDispatcher {
     tunnel_receiver: Receiver<InactiveUdpTunnel>,
-    pub(crate) socket_manager: Arc<SocketManager>,
+    pub(crate) socket_manager: Arc<UdpSocketManager>,
     recycle_buf: Option<RecycleBuf>,
 }
 
-impl UdpTunnelFactory {
+impl UdpTunnelDispatcher {
     pub(crate) fn init(&self) -> io::Result<()> {
         for (index, udp) in self.socket_manager.main_udp_v4.iter().enumerate() {
             let udp = udp.clone();
@@ -451,12 +451,12 @@ impl UdpTunnelFactory {
     }
 }
 
-impl UdpTunnelFactory {
+impl UdpTunnelDispatcher {
     /// Construct a `UDP` tunnel with the specified configuration
-    pub fn new(config: UdpTunnelConfig) -> io::Result<UdpTunnelFactory> {
-        create_tunnel_factory(config)
+    pub fn new(config: UdpTunnelConfig) -> io::Result<UdpTunnelDispatcher> {
+        create_tunnel_dispatcher(config)
     }
-    /// Accept `UDP` tunnel from this kind factory
+    /// Dispatch `UDP` tunnel from this kind dispatcher
     pub async fn dispatch(&mut self) -> io::Result<UdpTunnel> {
         let mut udp_tunnel = self
             .tunnel_receiver
@@ -545,12 +545,12 @@ impl UdpTunnelFactory {
             udp_tunnel.sender.replace(OwnedUdpTunnelSender { sender });
         }
         if udp_tunnel.reusable {
-            UdpTunnel::main_new(udp_tunnel, self.manager().tunnel_dispatcher.clone())
+            UdpTunnel::with_main(udp_tunnel, self.manager().tunnel_dispatcher.clone())
         } else {
-            UdpTunnel::sub_new(udp_tunnel)
+            UdpTunnel::with_sub(udp_tunnel)
         }
     }
-    pub fn manager(&self) -> &Arc<SocketManager> {
+    pub fn manager(&self) -> &Arc<UdpSocketManager> {
         &self.socket_manager
     }
 }
@@ -746,7 +746,7 @@ impl Drop for UdpTunnel {
 }
 
 impl UdpTunnel {
-    fn sub_new(inactive_udp_tunnel: InactiveUdpTunnel) -> io::Result<Self> {
+    fn with_sub(inactive_udp_tunnel: InactiveUdpTunnel) -> io::Result<Self> {
         let local_addr = inactive_udp_tunnel.udp.local_addr()?;
         Ok(Self {
             index: inactive_udp_tunnel.index,
@@ -757,7 +757,7 @@ impl UdpTunnel {
             sender: inactive_udp_tunnel.sender,
         })
     }
-    fn main_new(
+    fn with_main(
         inactive_udp_tunnel: InactiveUdpTunnel,
         re_sender: Sender<InactiveUdpTunnel>,
     ) -> io::Result<Self> {
@@ -1027,7 +1027,7 @@ mod tests {
             .set_sub_udp_count(10)
             .set_model(Model::Low)
             .set_use_v6(false);
-        let mut udp_tunnel_factory = crate::tunnel::udp::create_tunnel_factory(config).unwrap();
+        let mut udp_tunnel_factory = crate::tunnel::udp::create_tunnel_dispatcher(config).unwrap();
         let mut count = 0;
         let mut join = Vec::new();
         while let Ok(rs) =
@@ -1046,7 +1046,7 @@ mod tests {
             .set_sub_udp_count(10)
             .set_use_v6(false)
             .set_model(Model::High);
-        let mut tunnel_factory = crate::tunnel::udp::create_tunnel_factory(config).unwrap();
+        let mut tunnel_factory = crate::tunnel::udp::create_tunnel_dispatcher(config).unwrap();
         let mut count = 0;
         let mut join = Vec::new();
         while let Ok(rs) =
