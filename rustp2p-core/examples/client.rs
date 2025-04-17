@@ -215,7 +215,7 @@ impl ContextHandler {
                     let peer_nat_info: NatInfo =
                         serde_json::from_str(core::str::from_utf8(&buf[12..len]).unwrap()).unwrap();
                     log::info!("peer_id={src_id},peer_nat_info={peer_nat_info:?}");
-                    let mut nat_info = self.nat_info.lock().clone();
+                    let nat_info = self.nat_info.lock().clone();
                     let data = serde_json::to_string(&nat_info).unwrap();
                     request.extend_from_slice(data.as_bytes());
                     self.socket_manager
