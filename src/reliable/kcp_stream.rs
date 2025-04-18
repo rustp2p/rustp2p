@@ -65,7 +65,7 @@ impl Counter {
         }
     }
     fn add(&self) -> u32 {
-        self.counter.fetch_add(1, Ordering::Release)
+        self.counter.fetch_add(1, Ordering::Relaxed)
     }
 }
 impl KcpContext {
