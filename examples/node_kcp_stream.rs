@@ -1,8 +1,8 @@
 use clap::Parser;
 use env_logger::Env;
 use rustp2p::node_id::NodeID;
-use rustp2p::tunnel::PeerNodeAddress;
 use rustp2p::Builder;
+use rustp2p::PeerNodeAddress;
 use std::io;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};

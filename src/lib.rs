@@ -6,7 +6,7 @@ mod extend;
 mod reliable;
 mod tunnel;
 pub use protocol::node_id;
-pub use tunnel::RecvUserData;
+pub use tunnel::{PeerNodeAddress, RecvUserData};
 
 #[cfg(feature = "use-kcp")]
 pub use reliable::*;
@@ -27,7 +27,7 @@ use std::io;
 use std::ops::Deref;
 use std::sync::Arc;
 use tokio::task::JoinHandle;
-use tunnel::{PeerNodeAddress, Tunnel, TunnelDispatcher, TunnelRouter};
+use tunnel::{Tunnel, TunnelDispatcher, TunnelRouter};
 
 pub struct EndPoint {
     #[cfg(feature = "use-kcp")]
