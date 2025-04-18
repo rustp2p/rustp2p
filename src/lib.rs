@@ -5,15 +5,15 @@ mod config;
 mod extend;
 mod reliable;
 mod tunnel;
-pub use protocol::node_id;
-pub use tunnel::{PeerNodeAddress, RecvUserData};
+pub use protocol::{node_id, NetPacket, HEAD_LEN};
+pub use tunnel::{NodeAddress, PeerNodeAddress, RecvUserData};
 
 #[cfg(feature = "use-kcp")]
 pub use reliable::*;
 
 pub use crate::config::DataInterceptor;
 use crate::protocol::protocol_type::ProtocolType;
-use crate::tunnel::{RecvMetadata, RecvResult};
+pub use crate::tunnel::{RecvMetadata, RecvResult};
 use async_trait::async_trait;
 use cipher::Algorithm;
 pub use config::{
@@ -22,7 +22,7 @@ pub use config::{
 };
 use flume::{Receiver, Sender, TryRecvError};
 use protocol::node_id::{GroupCode, NodeID};
-use rust_p2p_core::route::RouteKey;
+pub use rust_p2p_core::route::RouteKey;
 use std::io;
 use std::ops::Deref;
 use std::sync::Arc;
