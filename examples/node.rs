@@ -68,7 +68,7 @@ pub async fn main() -> io::Result<()> {
             .tcp_port(port)
             .udp_port(port)
             .peers(addrs)
-            .group_code(string_to_group_code(&group_code))
+            .group_code(group_code.try_into().unwrap())
             .encryption(Algorithm::AesGcm("password".to_string()))
             .build()
             .await?,
@@ -101,13 +101,6 @@ pub async fn main() -> io::Result<()> {
     quit.recv().await.expect("quit error");
     log::info!("exit!!!!");
     Ok(())
-}
-fn string_to_group_code(input: &str) -> GroupCode {
-    let mut array = [0u8; 16];
-    let bytes = input.as_bytes();
-    let len = bytes.len().min(16);
-    array[..len].copy_from_slice(&bytes[..len]);
-    array.into()
 }
 
 async fn tun_recv(

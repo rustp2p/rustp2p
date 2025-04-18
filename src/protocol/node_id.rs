@@ -117,6 +117,36 @@ impl TryFrom<&[u8]> for GroupCode {
         }
     }
 }
+
+impl TryFrom<&str> for GroupCode {
+    type Error = std::io::Error;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        if value.len() > GROUP_CODE_LEN {
+            return Err(std::io::Error::other(format!("The number of bytes in the string exceeds the limit of group code len {GROUP_CODE_LEN}")));
+        }
+        let mut array = [0u8; 16];
+        let bytes = value.as_bytes();
+        let len = bytes.len().min(16);
+        array[..len].copy_from_slice(&bytes[..len]);
+        Ok(array.into())
+    }
+}
+
+impl TryFrom<String> for GroupCode {
+    type Error = std::io::Error;
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::try_from(value.as_str())
+    }
+}
+
+impl TryFrom<&String> for GroupCode {
+    type Error = std::io::Error;
+    fn try_from(value: &String) -> Result<Self, Self::Error> {
+        Self::try_from(value.as_str())
+    }
+}
+
 impl From<u128> for GroupCode {
     fn from(value: u128) -> Self {
         GroupCode(value.to_be_bytes())
