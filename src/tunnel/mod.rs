@@ -623,7 +623,7 @@ impl TunnelRouter {
         unsafe {
             send_packet.set_payload_len(payload_size);
         }
-        let mut packet = NetPacket::unchecked(send_packet.buf_mut());
+        let mut packet = NetPacket::new_unchecked(send_packet.buf_mut());
         packet.set_high_flag();
         packet.set_protocol(protocol_type);
         packet.set_ttl(15);
@@ -1351,18 +1351,22 @@ pub struct RecvResult<'a> {
 }
 
 impl<'a> RecvResult<'a> {
-    pub fn new(buf: &'a mut [u8], route_key: RouteKey) -> Self {
+    pub(crate) fn new(buf: &'a mut [u8], route_key: RouteKey) -> Self {
         Self { buf, route_key }
     }
+
     pub fn buf(&mut self) -> &mut [u8] {
         self.buf
     }
+
     pub fn remote_addr(&self) -> SocketAddr {
         self.route_key.addr()
     }
+
     pub fn net_packet(&self) -> io::Result<NetPacket<&[u8]>> {
         NetPacket::new(self.buf)
     }
+
     pub fn net_packet_mut(&mut self) -> io::Result<NetPacket<&mut [u8]>> {
         NetPacket::new(self.buf)
     }

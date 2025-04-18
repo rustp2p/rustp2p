@@ -27,13 +27,13 @@ impl SendPacket {
     pub fn with_bytes_mut(mut buf: BytesMut) -> Self {
         buf.resize(HEAD_LEN, 0);
         let mut send_packet = Self { buf };
-        let mut packet = NetPacket::unchecked(send_packet.buf_mut());
+        let mut packet = NetPacket::new_unchecked(send_packet.buf_mut());
         packet.set_protocol(ProtocolType::MessageData);
         packet.set_ttl(15);
         send_packet
     }
     pub(crate) fn set_protocol(&mut self, protocol_type: ProtocolType) {
-        let mut packet = NetPacket::unchecked(self.buf_mut());
+        let mut packet = NetPacket::new_unchecked(self.buf_mut());
         packet.set_protocol(protocol_type);
     }
     pub fn reserve(&mut self, additional: usize) {
@@ -50,7 +50,7 @@ impl SendPacket {
         assert!(src.len() < u16::MAX as _);
         self.buf.truncate(HEAD_LEN);
         self.buf.extend_from_slice(src);
-        let mut packet = NetPacket::unchecked(self.buf_mut());
+        let mut packet = NetPacket::new_unchecked(self.buf_mut());
         packet.reset_data_len();
     }
     /// # Safety
@@ -60,7 +60,7 @@ impl SendPacket {
     pub unsafe fn set_payload_len(&mut self, payload_len: usize) {
         assert!(payload_len < u16::MAX as _);
         self.buf.set_len(HEAD_LEN + payload_len);
-        let mut packet = NetPacket::unchecked(self.buf_mut());
+        let mut packet = NetPacket::new_unchecked(self.buf_mut());
         packet.reset_data_len();
     }
 
@@ -74,7 +74,7 @@ impl SendPacket {
     pub fn resize(&mut self, payload_len: usize, value: u8) {
         assert!(payload_len < u16::MAX as _);
         self.buf.resize(HEAD_LEN + payload_len, value);
-        let mut packet = NetPacket::unchecked(self.buf_mut());
+        let mut packet = NetPacket::new_unchecked(self.buf_mut());
         packet.reset_data_len();
     }
     pub fn clear(&mut self) {
@@ -82,7 +82,7 @@ impl SendPacket {
             self.set_payload_len(0);
             self.buf.fill(0);
 
-            let mut packet = NetPacket::unchecked(self.buf_mut());
+            let mut packet = NetPacket::new_unchecked(self.buf_mut());
             packet.set_protocol(ProtocolType::MessageData);
             packet.set_ttl(15);
         }
@@ -92,27 +92,27 @@ impl SendPacket {
         self.buf[3] = (ttl << 4) | ttl
     }
     pub fn set_group_code(&mut self, code: &GroupCode) {
-        let mut packet = NetPacket::unchecked(self.buf_mut());
+        let mut packet = NetPacket::new_unchecked(self.buf_mut());
         packet.set_group_code(code);
     }
     pub fn set_src_id(&mut self, id: &NodeID) {
-        let mut packet = NetPacket::unchecked(self.buf_mut());
+        let mut packet = NetPacket::new_unchecked(self.buf_mut());
         packet.set_src_id(id);
     }
     pub fn set_dest_id(&mut self, id: &NodeID) {
-        let mut packet = NetPacket::unchecked(self.buf_mut());
+        let mut packet = NetPacket::new_unchecked(self.buf_mut());
         packet.set_dest_id(id);
     }
     #[cfg(any(feature = "aes-gcm", feature = "chacha20-poly1305"))]
     pub(crate) fn set_encrypt_flag(&mut self, flag: bool) {
-        let mut packet = NetPacket::unchecked(self.buf_mut());
+        let mut packet = NetPacket::new_unchecked(self.buf_mut());
         packet.set_encrypt_flag(flag);
     }
 }
 impl SendPacket {
     #[cfg(any(feature = "aes-gcm", feature = "chacha20-poly1305"))]
     pub(crate) fn is_user_data(&self) -> bool {
-        let packet = NetPacket::unchecked(self.buf());
+        let packet = NetPacket::new_unchecked(self.buf());
         if let Ok(p) = packet.protocol() {
             return p == ProtocolType::MessageData;
         }

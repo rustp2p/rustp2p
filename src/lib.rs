@@ -1,10 +1,13 @@
-pub mod protocol;
+mod protocol;
 
 pub mod cipher;
-pub mod config;
-pub mod extend;
+mod config;
+mod extend;
 mod reliable;
-pub mod tunnel;
+mod tunnel;
+pub use protocol::node_id;
+pub use tunnel::{HandleError, RecvUserData};
+
 #[cfg(feature = "use-kcp")]
 pub use reliable::*;
 
@@ -13,7 +16,10 @@ use crate::protocol::protocol_type::ProtocolType;
 use crate::tunnel::{RecvMetadata, RecvResult};
 use async_trait::async_trait;
 use cipher::Algorithm;
-use config::{Config, TcpTunnelConfig, UdpTunnelConfig};
+pub use config::{
+    Config, NatType, PunchModel, PunchModelIntersect, PunchModelSet, TcpTunnelConfig,
+    UdpTunnelConfig,
+};
 use flume::{Receiver, Sender, TryRecvError};
 use protocol::node_id::{GroupCode, NodeID};
 use rust_p2p_core::route::RouteKey;
@@ -21,7 +27,7 @@ use std::io;
 use std::ops::Deref;
 use std::sync::Arc;
 use tokio::task::JoinHandle;
-use tunnel::{PeerNodeAddress, RecvUserData, Tunnel, TunnelDispatcher, TunnelRouter};
+use tunnel::{PeerNodeAddress, Tunnel, TunnelDispatcher, TunnelRouter};
 
 pub struct EndPoint {
     #[cfg(feature = "use-kcp")]

@@ -9,7 +9,7 @@ use pnet_packet::icmp::IcmpTypes;
 use pnet_packet::ip::IpNextHeaderProtocols;
 use pnet_packet::Packet;
 use rustp2p::cipher::Algorithm;
-use rustp2p::protocol::node_id::{GroupCode, NodeID};
+use rustp2p::node_id::NodeID;
 use rustp2p::tunnel::PeerNodeAddress;
 use rustp2p::{Builder, EndPoint};
 use tun_rs::AsyncDevice;

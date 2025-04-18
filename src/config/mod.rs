@@ -14,8 +14,7 @@ use crate::protocol::node_id::{GroupCode, NodeID};
 use crate::protocol::{NetPacket, HEAD_LEN};
 use crate::tunnel::{NodeAddress, PeerNodeAddress, RecvResult};
 pub use rust_p2p_core::nat::*;
-pub use rust_p2p_core::punch::config::{PunchModel, PunchModelSet};
-pub use rust_p2p_core::route::*;
+pub use rust_p2p_core::punch::config::{PunchModel, PunchModelIntersect, PunchModelSet};
 pub use rust_p2p_core::socket::LocalInterface;
 pub use rust_p2p_core::tunnel::config::LoadBalance;
 use rust_p2p_core::tunnel::recycle::RecycleBuf;
@@ -409,7 +408,7 @@ impl LengthPrefixedDecoder {
             self.buf.clear();
             return None;
         }
-        let packet = NetPacket::unchecked(self.buf.as_ref());
+        let packet = NetPacket::new_unchecked(self.buf.as_ref());
         let data_length = packet.data_length() as usize;
         if data_length > src.len() {
             return Some(Err(io::Error::new(io::ErrorKind::Other, "too short")));
@@ -433,7 +432,7 @@ impl LengthPrefixedDecoder {
         if offset < HEAD_LEN {
             return None;
         }
-        let packet = NetPacket::unchecked(&src);
+        let packet = NetPacket::new_unchecked(&src);
         let data_length = packet.data_length() as usize;
         if data_length > src.len() {
             return Some(Err(io::Error::new(io::ErrorKind::Other, "too short")));
@@ -452,7 +451,7 @@ impl LengthPrefixedDecoder {
 impl Encoder for LengthPrefixedEncoder {
     async fn encode(&mut self, write: &mut OwnedWriteHalf, data: &[u8]) -> io::Result<()> {
         let len = data.len();
-        let packet = NetPacket::unchecked(data);
+        let packet = NetPacket::new_unchecked(data);
         if packet.data_length() as usize != len {
             return Err(io::Error::from(io::ErrorKind::InvalidData));
         }

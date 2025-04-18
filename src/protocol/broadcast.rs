@@ -23,15 +23,15 @@ use crate::protocol::protocol_type::ProtocolType;
 use crate::protocol::{NetPacket, HEAD_LEN};
 use std::io;
 
-pub struct RangeBroadcastPacket<B> {
+pub(crate) struct RangeBroadcastPacket<B> {
     buffer: B,
 }
 
 impl<B: AsRef<[u8]>> RangeBroadcastPacket<B> {
-    pub fn unchecked(buffer: B) -> RangeBroadcastPacket<B> {
+    pub(crate) fn unchecked(buffer: B) -> RangeBroadcastPacket<B> {
         Self { buffer }
     }
-    pub fn new(buffer: B) -> io::Result<RangeBroadcastPacket<B>> {
+    pub(crate) fn new(buffer: B) -> io::Result<RangeBroadcastPacket<B>> {
         let len = buffer.as_ref().len();
         if len == 0 {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "buf len == 0"));
@@ -46,19 +46,19 @@ impl<B: AsRef<[u8]>> RangeBroadcastPacket<B> {
         }
         Ok(packet)
     }
-    pub fn head_len(&self) -> usize {
+    pub(crate) fn head_len(&self) -> usize {
         1 + self.range_id_num() as usize * ID_LEN
     }
-    pub fn range_id_num(&self) -> u8 {
+    pub(crate) fn range_id_num(&self) -> u8 {
         self.buffer.as_ref()[0]
     }
-    pub fn payload(&self) -> &[u8] {
+    pub(crate) fn payload(&self) -> &[u8] {
         &self.buffer.as_ref()[self.head_len()..]
     }
-    pub fn buffer(&self) -> &[u8] {
+    pub(crate) fn buffer(&self) -> &[u8] {
         self.buffer.as_ref()
     }
-    pub fn iter(&self) -> RangeBroadcastIter<B> {
+    pub(crate) fn iter(&self) -> RangeBroadcastIter<B> {
         RangeBroadcastIter {
             packet: self,
             index: 0,
@@ -66,16 +66,18 @@ impl<B: AsRef<[u8]>> RangeBroadcastPacket<B> {
     }
 }
 impl<B: AsRef<[u8]> + AsMut<[u8]>> RangeBroadcastPacket<B> {
-    pub fn payload_mut(&mut self) -> &mut [u8] {
+    #[allow(dead_code)]
+    pub(crate) fn payload_mut(&mut self) -> &mut [u8] {
         let head_len = self.head_len();
         &mut self.buffer.as_mut()[head_len..]
     }
-    pub fn buffer_mut(&mut self) -> &mut [u8] {
+    #[allow(dead_code)]
+    pub(crate) fn buffer_mut(&mut self) -> &mut [u8] {
         self.buffer.as_mut()
     }
 }
 
-pub struct RangeBroadcastIter<'a, B> {
+pub(crate) struct RangeBroadcastIter<'a, B> {
     packet: &'a RangeBroadcastPacket<B>,
     index: usize,
 }
@@ -94,9 +96,9 @@ impl<B: AsRef<[u8]>> Iterator for RangeBroadcastIter<'_, B> {
         Some(NodeID::try_from(&self.packet.buffer()[start..end]).unwrap())
     }
 }
-pub struct Builder;
+pub(crate) struct Builder;
 impl Builder {
-    pub fn calculate_len(list: &[NodeID], payload_len: usize) -> io::Result<(usize, usize)> {
+    pub(crate) fn calculate_len(list: &[NodeID], payload_len: usize) -> io::Result<(usize, usize)> {
         if list.is_empty() {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "empty"));
         }
@@ -109,12 +111,12 @@ impl Builder {
         let len = HEAD_LEN + broadcast_packet_head + payload_len;
         Ok((broadcast_packet_head, len))
     }
-    pub fn build_range_broadcast(
+    pub(crate) fn build_range_broadcast(
         list: &[NodeID],
         broadcast_payload: &[u8],
     ) -> io::Result<NetPacket<Vec<u8>>> {
         let (broadcast_packet_head, len) = Self::calculate_len(list, broadcast_payload.len())?;
-        let mut packet = NetPacket::unchecked(vec![0; len]);
+        let mut packet = NetPacket::new_unchecked(vec![0; len]);
         packet.set_high_flag();
         packet.set_protocol(ProtocolType::RangeBroadcast);
         packet.set_ttl(1);

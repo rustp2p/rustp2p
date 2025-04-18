@@ -1,6 +1,6 @@
 use clap::Parser;
 use env_logger::Env;
-use rustp2p::protocol::node_id::{GroupCode, NodeID};
+use rustp2p::node_id::NodeID;
 use rustp2p::tunnel::PeerNodeAddress;
 use rustp2p::Builder;
 use std::io;
