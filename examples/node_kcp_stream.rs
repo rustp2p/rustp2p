@@ -56,7 +56,7 @@ pub async fn main() -> io::Result<()> {
     let manager = endpoint.kcp_stream();
 
     if let Some(request) = request {
-        let client_kcp_stream = manager.new_stream(NodeID::from(request))?;
+        let client_kcp_stream = manager.open_stream(NodeID::from(request))?;
         let (mut write, mut read) = client_kcp_stream.split();
         tokio::spawn(async move {
             let mut buf = [0; 1024];

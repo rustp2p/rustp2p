@@ -28,8 +28,8 @@ impl KcpStreamHub {
     pub async fn accept(&self) -> io::Result<(KcpStream, NodeID)> {
         self.inner.accept().await
     }
-    pub fn new_stream(&self, node_id: NodeID) -> io::Result<KcpStream> {
-        self.inner.new_stream(node_id)
+    pub fn open_stream(&self, node_id: NodeID) -> io::Result<KcpStream> {
+        self.inner.open_stream(node_id)
     }
     fn downgrade(&self) -> Weak<KcpStreamHubInner> {
         Arc::downgrade(&self.inner)
@@ -132,7 +132,7 @@ impl KcpStreamHubInner {
                 continue;
             }
             let conv = kcp::get_conv(&bytes);
-            match self.new_stream_impl(node_id, conv) {
+            match self.open_stream_impl(node_id, conv) {
                 Ok(stream) => {
                     self.send_data_to_kcp(node_id, conv, bytes).await?;
                     return Ok((stream, node_id));
@@ -164,10 +164,10 @@ impl KcpStreamHubInner {
             Err(Error::new(io::ErrorKind::NotFound, "not found stream"))
         }
     }
-    pub fn new_stream(&self, node_id: NodeID) -> io::Result<KcpStream> {
-        self.new_stream_impl(node_id, self.conv_id.add())
+    pub fn open_stream(&self, node_id: NodeID) -> io::Result<KcpStream> {
+        self.open_stream_impl(node_id, self.conv_id.add())
     }
-    fn new_stream_impl(&self, node_id: NodeID, conv: u32) -> io::Result<KcpStream> {
+    fn open_stream_impl(&self, node_id: NodeID, conv: u32) -> io::Result<KcpStream> {
         KcpStream::new(node_id, conv, self.map.clone(), self.output.clone())
     }
 }
