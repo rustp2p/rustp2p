@@ -1493,7 +1493,7 @@ pub(crate) enum RecvError {
 
 #[derive(thiserror::Error, Debug)]
 #[error("handle error {route_key:?},err={err:?}")]
-pub struct HandleError {
+pub(crate) struct HandleError {
     route_key: RouteKey,
     err: io::Error,
 }
@@ -1502,10 +1502,12 @@ impl HandleError {
     pub(crate) fn new(route_key: RouteKey, err: io::Error) -> Self {
         Self { route_key, err }
     }
-    pub fn addr(&self) -> SocketAddr {
+    #[allow(dead_code)]
+    pub(crate) fn addr(&self) -> SocketAddr {
         self.route_key.addr()
     }
-    pub fn err(&self) -> &io::Error {
+    #[allow(dead_code)]
+    pub(crate) fn err(&self) -> &io::Error {
         &self.err
     }
 }

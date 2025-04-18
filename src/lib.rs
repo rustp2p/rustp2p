@@ -6,12 +6,12 @@ mod extend;
 mod reliable;
 mod tunnel;
 pub use protocol::node_id;
-pub use tunnel::{HandleError, RecvUserData};
+pub use tunnel::RecvUserData;
 
 #[cfg(feature = "use-kcp")]
 pub use reliable::*;
 
-use crate::config::DataInterceptor;
+pub use crate::config::DataInterceptor;
 use crate::protocol::protocol_type::ProtocolType;
 use crate::tunnel::{RecvMetadata, RecvResult};
 use async_trait::async_trait;
