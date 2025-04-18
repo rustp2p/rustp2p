@@ -21,13 +21,13 @@ pub struct KcpStream {
     write: KcpStreamWrite,
 }
 pub struct KcpListener {
-    inner: Arc<KcpStreamHubInner>,
+    inner: Arc<KcpListenerInner>,
 }
 impl KcpListener {
     pub async fn accept(&self) -> io::Result<(KcpStream, NodeID)> {
         self.inner.accept().await
     }
-    fn downgrade(&self) -> Weak<KcpStreamHubInner> {
+    fn downgrade(&self) -> Weak<KcpListenerInner> {
         Arc::downgrade(&self.inner)
     }
 }
@@ -38,7 +38,7 @@ struct OwnedKcp {
 }
 
 type Map = Arc<RwLock<HashMap<(NodeID, u32), Sender<BytesMut>>>>;
-struct KcpStreamHubInner {
+struct KcpListenerInner {
     input_receiver: flume::Receiver<(NodeID, BytesMut)>,
     map: Map,
     output: TunnelRouter,
@@ -49,7 +49,7 @@ pub(crate) struct KcpContext {
     conv: Counter,
     map: Map,
     #[allow(clippy::type_complexity)]
-    channel: Arc<Mutex<Option<(flume::Sender<(NodeID, BytesMut)>, Weak<KcpStreamHubInner>)>>>,
+    channel: Arc<Mutex<Option<(flume::Sender<(NodeID, BytesMut)>, Weak<KcpListenerInner>)>>>,
 }
 impl Default for KcpContext {
     fn default() -> Self {
@@ -112,7 +112,7 @@ impl KcpContext {
             }
         }
         let (input_sender, input_receiver) = flume::bounded(128);
-        let inner = KcpStreamHubInner {
+        let inner = KcpListenerInner {
             input_receiver,
             map: self.map.clone(),
             output: sender,
@@ -132,8 +132,8 @@ impl KcpContext {
     }
 }
 
-impl KcpStreamHubInner {
-    pub async fn accept(&self) -> io::Result<(KcpStream, NodeID)> {
+impl KcpListenerInner {
+    async fn accept(&self) -> io::Result<(KcpStream, NodeID)> {
         loop {
             let (node_id, bytes) = self
                 .input_receiver
