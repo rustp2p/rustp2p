@@ -14,14 +14,14 @@ use tokio::time::Interval;
 pub(crate) struct KcpHandle {
     local_addr: SocketAddr,
     tunnel_sender: WeakUdpTunnelSender,
-    kcp_hub_sender: flume::Sender<KcpMessageHub>,
+    kcp_hub_sender: Sender<KcpMessageHub>,
     map: HashMap<SocketAddr, Sender<BytesMut>>,
 }
 impl KcpHandle {
     pub fn new(
         local_addr: SocketAddr,
         tunnel_sender: WeakUdpTunnelSender,
-        kcp_hub_sender: flume::Sender<KcpMessageHub>,
+        kcp_hub_sender: Sender<KcpMessageHub>,
     ) -> Self {
         Self {
             local_addr,
@@ -69,7 +69,7 @@ impl KcpHandle {
             });
             _ = self
                 .kcp_hub_sender
-                .send_async(KcpMessageHub::new(
+                .send(KcpMessageHub::new(
                     self.local_addr,
                     remote_addr,
                     data_out_sender,

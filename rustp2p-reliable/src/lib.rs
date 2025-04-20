@@ -63,8 +63,8 @@ pub struct ReliableTunnelListener {
     shutdown_manager: ShutdownManager<()>,
     punch_context: Arc<PunchContext>,
     unified_tunnel_factory: TunnelDispatcher,
-    kcp_receiver: Receiver<KcpMessageHub>,
-    kcp_sender: flume::Sender<KcpMessageHub>,
+    kcp_receiver: tokio::sync::mpsc::Receiver<KcpMessageHub>,
+    kcp_sender: Sender<KcpMessageHub>,
 }
 #[derive(Clone)]
 pub struct Puncher {
@@ -275,7 +275,7 @@ impl ReliableTunnelListener {
         unified_tunnel_factory: TunnelDispatcher,
         punch_context: Arc<PunchContext>,
     ) -> Self {
-        let (kcp_sender, kcp_receiver) = flume::bounded(64);
+        let (kcp_sender, kcp_receiver) = tokio::sync::mpsc::channel(64);
         Self {
             shutdown_manager,
             punch_context,
@@ -303,8 +303,8 @@ impl ReliableTunnelListener {
                         }
                     }
                 }
-                rs=self.kcp_receiver.recv_async()=>{
-                    return if let Ok(hub) = rs{
+                rs=self.kcp_receiver.recv()=>{
+                    return if let Some(hub) = rs{
                         Ok(ReliableTunnel::Kcp(hub))
                     }else{
                         Err(io::Error::from(io::ErrorKind::UnexpectedEof))
@@ -432,7 +432,7 @@ async fn handle_tcp(
 fn handle_udp(
     shutdown_manager: ShutdownManager<()>,
     mut udp_tunnel: UdpTunnel,
-    sender: flume::Sender<KcpMessageHub>,
+    sender: Sender<KcpMessageHub>,
     punch_context: Arc<PunchContext>,
 ) -> io::Result<()> {
     let mut kcp_handle = KcpHandle::new(udp_tunnel.local_addr(), udp_tunnel.sender()?, sender);
