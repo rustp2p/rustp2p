@@ -208,7 +208,7 @@ impl Puncher {
                 .filter(|a| a.is_ipv4())
                 .copied()
                 .collect();
-            udp_socket_manager.try_main_batch_send_to(buf, &mapping_udp_v4_addr);
+            udp_socket_manager.try_main_v4_batch_send_to(buf, &mapping_udp_v4_addr);
 
             let mapping_udp_v6_addr: Vec<SocketAddr> = peer_nat_info
                 .mapping_udp_addr
@@ -216,16 +216,16 @@ impl Puncher {
                 .filter(|a| a.is_ipv6())
                 .copied()
                 .collect();
-            udp_socket_manager.try_main_batch_send_to(buf, &mapping_udp_v6_addr);
+            udp_socket_manager.try_main_v6_batch_send_to(buf, &mapping_udp_v6_addr);
         }
         let local_ipv4_addrs = peer_nat_info.local_ipv4_addrs();
         if !local_ipv4_addrs.is_empty() {
-            udp_socket_manager.try_main_batch_send_to(buf, &local_ipv4_addrs);
+            udp_socket_manager.try_main_v4_batch_send_to(buf, &local_ipv4_addrs);
         }
 
         if punch_model.is_match(PunchModel::IPv6Udp) {
             let v6_addr = peer_nat_info.ipv6_udp_addr();
-            udp_socket_manager.try_main_batch_send_to(buf, &v6_addr);
+            udp_socket_manager.try_main_v6_batch_send_to(buf, &v6_addr);
         }
         if !punch_model.is_match(PunchModel::IPv4Udp) {
             return Ok(());
@@ -307,7 +307,7 @@ impl Puncher {
                 if addr.is_empty() {
                     return Ok(());
                 }
-                udp_socket_manager.try_main_batch_send_to(buf, &addr);
+                udp_socket_manager.try_main_v4_batch_send_to(buf, &addr);
                 udp_socket_manager.try_sub_batch_send_to(buf, addr[0]);
             }
         }

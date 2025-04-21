@@ -178,8 +178,16 @@ impl UdpSocketManager {
             }
         }
     }
-    pub(crate) fn try_main_batch_send_to(&self, buf: &[u8], addr: &[SocketAddr]) {
+    pub(crate) fn try_main_v4_batch_send_to(&self, buf: &[u8], addr: &[SocketAddr]) {
         let len = self.main_udp_v4_count();
+        self.try_main_batch_send_to_impl(buf, addr, len);
+    }
+    pub(crate) fn try_main_v6_batch_send_to(&self, buf: &[u8], addr: &[SocketAddr]) {
+        let len = self.main_udp_v6_count();
+        self.try_main_batch_send_to_impl(buf, addr, len);
+    }
+
+    pub(crate) fn try_main_batch_send_to_impl(&self, buf: &[u8], addr: &[SocketAddr], len: usize) {
         for (i, addr) in addr.iter().enumerate() {
             if let Err(e) = self.try_send_to(buf, (i % len, *addr)) {
                 log::info!("try_main_send_to_addr: {e:?},{},{addr}", i % len);
