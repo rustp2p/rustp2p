@@ -1,5 +1,5 @@
 use crate::KcpMessageHub;
-use bytes::{Buf, BytesMut};
+use bytes::{Buf, BufMut, BytesMut};
 use kcp::Kcp;
 use rust_p2p_core::route::RouteKey;
 use rust_p2p_core::tunnel::udp::WeakUdpTunnelSender;
@@ -15,7 +15,7 @@ pub(crate) struct KcpHandle {
     local_addr: SocketAddr,
     tunnel_sender: WeakUdpTunnelSender,
     kcp_hub_sender: Sender<KcpMessageHub>,
-    map: HashMap<SocketAddr, Sender<BytesMut>>,
+    map: HashMap<SocketAddr, (Sender<BytesMut>, flume::Sender<BytesMut>)>,
 }
 impl KcpHandle {
     pub fn new(
@@ -33,21 +33,24 @@ impl KcpHandle {
     pub async fn handle(&mut self, buf: &[u8], route_key: RouteKey) {
         let remote_addr = route_key.addr();
         let map = &mut self.map;
-        if let Some(kcp_data_sender) = map.get(&remote_addr) {
-            if buf.len() >= 24 && kcp_data_sender.send(buf.into()).await.is_err() {
+        if let Some((kcp_data_sender, data_in_sender)) = map.get(&remote_addr) {
+            if buf[0] == 0x03 {
+                _ = data_in_sender.send_async(buf[1..].into()).await;
+            } else if buf.len() >= 24 && kcp_data_sender.send(buf.into()).await.is_err() {
                 map.remove(&remote_addr);
             }
-        } else if buf.len() >= 8 {
+        } else if buf.len() >= 8 && buf[0] == 0x02 {
             let conv = u32::from_le_bytes(buf[0..4].try_into().unwrap());
             // create kcp
             let (input_sender, input_receiver) = tokio::sync::mpsc::channel(128);
+            let (data_in_sender, data_in_receiver) = flume::bounded(128);
             if buf.len() >= 24 {
                 //kcp client connect
                 _ = input_sender.send(buf.into()).await;
             }
-            map.insert(remote_addr, input_sender);
+            map.insert(remote_addr, (input_sender, data_in_sender.clone()));
             let output_sender = self.tunnel_sender.clone();
-            let (data_in_sender, data_in_receiver) = flume::bounded(128);
+            let tunnel_sender = output_sender.clone();
             let (data_out_sender, data_out_receiver) = tokio::sync::mpsc::channel(128);
             let mut kcp = Kcp::new(
                 conv,
@@ -61,8 +64,15 @@ impl KcpHandle {
             kcp.set_nodelay(true, 10, 2, true);
 
             tokio::spawn(async move {
-                if let Err(e) =
-                    kcp_run(input_receiver, kcp, data_out_receiver, data_in_sender).await
+                if let Err(e) = kcp_run(
+                    tunnel_sender,
+                    remote_addr,
+                    input_receiver,
+                    kcp,
+                    data_out_receiver,
+                    data_in_sender,
+                )
+                .await
                 {
                     log::warn!("kcp run: {e:?}");
                 }
@@ -79,11 +89,17 @@ impl KcpHandle {
         }
     }
 }
-
+#[derive(Debug)]
+pub(crate) enum DataType {
+    Raw(BytesMut),
+    Kcp(BytesMut),
+}
 async fn kcp_run(
+    tunnel_sender: WeakUdpTunnelSender,
+    remote_addr: SocketAddr,
     mut input: Receiver<BytesMut>,
     mut kcp: Kcp<KcpOutput>,
-    mut data_out_receiver: Receiver<BytesMut>,
+    mut data_out_receiver: Receiver<DataType>,
     data_in_sender: flume::Sender<BytesMut>,
 ) -> io::Result<()> {
     let mut interval = tokio::time::interval(Duration::from_millis(10));
@@ -117,10 +133,18 @@ async fn kcp_run(
                     input_data.replace(buf);
                 }
             }
-            Event::Output(buf) => {
-                kcp.send(&buf)
-                    .map_err(|e| Error::new(io::ErrorKind::Other, e))?;
-            }
+            Event::Output(buf) => match buf {
+                DataType::Raw(buf) => {
+                    let mut new_buf = BytesMut::with_capacity(buf.len() + 1);
+                    new_buf.put_u8(0x03);
+                    new_buf.extend_from_slice(&buf[..]);
+                    tunnel_sender.send_to(new_buf, remote_addr).await?;
+                }
+                DataType::Kcp(buf) => {
+                    kcp.send(&buf)
+                        .map_err(|e| Error::new(io::ErrorKind::Other, e))?;
+                }
+            },
             Event::Timeout => {
                 let now = std::time::SystemTime::now();
                 let millis = now
@@ -141,7 +165,7 @@ async fn kcp_run(
 }
 async fn all_event(
     input: &mut Receiver<BytesMut>,
-    data_out_receiver: &mut Receiver<BytesMut>,
+    data_out_receiver: &mut Receiver<DataType>,
     interval: &mut Interval,
 ) -> io::Result<Event> {
     tokio::select! {
@@ -170,7 +194,7 @@ async fn input_event(input: &mut Receiver<BytesMut>, interval: &mut Interval) ->
     }
 }
 async fn output_event(
-    data_out_receiver: &mut Receiver<BytesMut>,
+    data_out_receiver: &mut Receiver<DataType>,
     interval: &mut Interval,
 ) -> io::Result<Event> {
     tokio::select! {
@@ -185,7 +209,7 @@ async fn output_event(
 }
 #[derive(Debug)]
 enum Event {
-    Output(BytesMut),
+    Output(DataType),
     Input(BytesMut),
     Timeout,
 }

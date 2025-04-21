@@ -1,5 +1,5 @@
 pub use crate::config::Config;
-use crate::kcp::KcpHandle;
+use crate::kcp::{DataType, KcpHandle};
 use crate::maintain::start_task;
 use async_shutdown::ShutdownManager;
 use bytes::BytesMut;
@@ -244,6 +244,8 @@ impl Puncher {
     pub async fn punch_conv(&self, kcp_conv: u32, punch_info: PunchInfo) -> io::Result<()> {
         let mut punch_udp_buf = [0; 8];
         punch_udp_buf[..4].copy_from_slice(&kcp_conv.to_le_bytes());
+        // kcp flag
+        punch_udp_buf[0] = 0x02;
         if rust_p2p_core::stun::is_stun_response(&punch_udp_buf) {
             return Err(io::Error::new(io::ErrorKind::Other, "kcp_conv error"));
         }
@@ -322,6 +324,12 @@ impl ReliableTunnel {
             ReliableTunnel::Kcp(kcp) => kcp.send(buf).await,
         }
     }
+    pub async fn send_raw(&self, buf: BytesMut) -> io::Result<()> {
+        match &self {
+            ReliableTunnel::Tcp(tcp) => tcp.send(buf).await,
+            ReliableTunnel::Kcp(kcp) => kcp.send_raw(buf).await,
+        }
+    }
     pub async fn next(&self) -> io::Result<BytesMut> {
         match &self {
             ReliableTunnel::Tcp(tcp) => tcp.next().await,
@@ -380,14 +388,15 @@ impl TcpMessageHub {
 pub struct KcpMessageHub {
     local_addr: SocketAddr,
     remote_addr: SocketAddr,
-    input: Sender<BytesMut>,
+    input: Sender<DataType>,
     output: Receiver<BytesMut>,
 }
+
 impl KcpMessageHub {
     pub(crate) fn new(
         local_addr: SocketAddr,
         remote_addr: SocketAddr,
-        input: Sender<BytesMut>,
+        input: Sender<DataType>,
         output: Receiver<BytesMut>,
     ) -> Self {
         Self {
@@ -399,7 +408,13 @@ impl KcpMessageHub {
     }
     pub async fn send(&self, buf: BytesMut) -> io::Result<()> {
         self.input
-            .send(buf)
+            .send(DataType::Kcp(buf))
+            .await
+            .map_err(|_| io::Error::from(io::ErrorKind::WriteZero))
+    }
+    pub async fn send_raw(&self, buf: BytesMut) -> io::Result<()> {
+        self.input
+            .send(DataType::Raw(buf))
             .await
             .map_err(|_| io::Error::from(io::ErrorKind::WriteZero))
     }
