@@ -177,7 +177,12 @@ impl Builder {
         if let Some(peers) = self.peers {
             config = config.set_direct_addrs(peers);
         }
-        #[cfg(any(feature = "aes-gcm", feature = "chacha20-poly1305"))]
+        #[cfg(any(
+            feature = "aes-gcm-openssl",
+            feature = "aes-gcm-ring",
+            feature = "chacha20-poly1305-openssl",
+            feature = "chacha20-poly1305-ring"
+        ))]
         if let Some(encryption) = self.encryption {
             config = config.set_encryption(encryption);
         }

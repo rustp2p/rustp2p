@@ -103,14 +103,24 @@ impl SendPacket {
         let mut packet = NetPacket::new_unchecked(self.buf_mut());
         packet.set_dest_id(id);
     }
-    #[cfg(any(feature = "aes-gcm", feature = "chacha20-poly1305"))]
+    #[cfg(any(
+        feature = "aes-gcm-openssl",
+        feature = "aes-gcm-ring",
+        feature = "chacha20-poly1305-openssl",
+        feature = "chacha20-poly1305-ring"
+    ))]
     pub(crate) fn set_encrypt_flag(&mut self, flag: bool) {
         let mut packet = NetPacket::new_unchecked(self.buf_mut());
         packet.set_encrypt_flag(flag);
     }
 }
 impl SendPacket {
-    #[cfg(any(feature = "aes-gcm", feature = "chacha20-poly1305"))]
+    #[cfg(any(
+        feature = "aes-gcm-openssl",
+        feature = "aes-gcm-ring",
+        feature = "chacha20-poly1305-openssl",
+        feature = "chacha20-poly1305-ring"
+    ))]
     pub(crate) fn is_user_data(&self) -> bool {
         let packet = NetPacket::new_unchecked(self.buf());
         if let Ok(p) = packet.protocol() {

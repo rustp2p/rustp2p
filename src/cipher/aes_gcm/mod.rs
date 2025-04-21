@@ -1,6 +1,15 @@
 pub const ENCRYPTION_RESERVED: usize = 16 + 12;
+
+#[cfg(feature = "aes-gcm-openssl")]
+mod openssl_aes_gcm_cipher;
+
+#[cfg(feature = "aes-gcm-ring")]
 mod ring_aes_gcm_cipher;
 
+#[cfg(feature = "aes-gcm-openssl")]
+pub use openssl_aes_gcm_cipher::*;
+
+#[cfg(feature = "aes-gcm-ring")]
 pub use ring_aes_gcm_cipher::*;
 use sha2::Digest;
 
