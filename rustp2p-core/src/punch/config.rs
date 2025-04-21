@@ -5,99 +5,99 @@ use std::ops;
 use std::str::FromStr;
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
-pub enum PunchModel {
+pub enum PunchPolicy {
     IPv4Tcp,
     IPv4Udp,
     IPv6Tcp,
     IPv6Udp,
 }
 
-impl ops::BitOr<PunchModel> for PunchModel {
-    type Output = PunchModelSet;
+impl ops::BitOr<PunchPolicy> for PunchPolicy {
+    type Output = PunchPolicySet;
 
-    fn bitor(self, rhs: PunchModel) -> Self::Output {
-        let mut model = PunchModelSet::empty();
+    fn bitor(self, rhs: PunchPolicy) -> Self::Output {
+        let mut model = PunchPolicySet::empty();
         model.or(self);
         model.or(rhs);
         model
     }
 }
-
+/// This is middle representation for inner
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct PunchModelSet {
-    models: HashSet<PunchModel>,
+pub struct PunchPolicySet {
+    models: HashSet<PunchPolicy>,
 }
 
-impl Default for PunchModelSet {
+impl Default for PunchPolicySet {
     fn default() -> Self {
-        PunchModelSet::all()
+        PunchPolicySet::all()
     }
 }
 
-impl ops::BitOr<PunchModel> for PunchModelSet {
-    type Output = PunchModelSet;
+impl ops::BitOr<PunchPolicy> for PunchPolicySet {
+    type Output = PunchPolicySet;
 
-    fn bitor(mut self, rhs: PunchModel) -> Self::Output {
+    fn bitor(mut self, rhs: PunchPolicy) -> Self::Output {
         self.or(rhs);
         self
     }
 }
 
-impl PunchModelSet {
+impl PunchPolicySet {
     pub fn all() -> Self {
-        PunchModel::IPv4Tcp | PunchModel::IPv4Udp | PunchModel::IPv6Tcp | PunchModel::IPv6Udp
+        PunchPolicy::IPv4Tcp | PunchPolicy::IPv4Udp | PunchPolicy::IPv6Tcp | PunchPolicy::IPv6Udp
     }
     pub fn ipv4() -> Self {
-        PunchModel::IPv4Tcp | PunchModel::IPv4Udp
+        PunchPolicy::IPv4Tcp | PunchPolicy::IPv4Udp
     }
     pub fn ipv6() -> Self {
-        PunchModel::IPv6Tcp | PunchModel::IPv6Udp
+        PunchPolicy::IPv6Tcp | PunchPolicy::IPv6Udp
     }
     pub fn empty() -> Self {
         Self {
             models: Default::default(),
         }
     }
-    pub fn or(&mut self, punch_model: PunchModel) {
+    pub fn or(&mut self, punch_model: PunchPolicy) {
         self.models.insert(punch_model);
     }
-    pub fn is_match(&self, punch_model: PunchModel) -> bool {
+    pub fn is_match(&self, punch_model: PunchPolicy) -> bool {
         self.models.contains(&punch_model)
     }
 }
 
 #[derive(Clone, Debug)]
-pub struct PunchModelIntersect {
-    boxes: Vec<PunchModelSet>,
+pub struct PunchModel {
+    set: Vec<PunchPolicySet>,
 }
 
-impl ops::BitAnd<PunchModelSet> for PunchModelSet {
-    type Output = PunchModelIntersect;
+impl ops::BitAnd<PunchPolicySet> for PunchPolicySet {
+    type Output = PunchModel;
 
-    fn bitand(self, rhs: PunchModelSet) -> Self::Output {
-        let mut boxes = PunchModelIntersect::empty();
+    fn bitand(self, rhs: PunchPolicySet) -> Self::Output {
+        let mut boxes = PunchModel::empty();
         boxes.and(rhs);
         boxes
     }
 }
 
-impl PunchModelIntersect {
+impl PunchModel {
     pub fn all() -> Self {
         Self {
-            boxes: vec![PunchModelSet::all()],
+            set: vec![PunchPolicySet::all()],
         }
     }
     pub fn empty() -> Self {
-        Self { boxes: Vec::new() }
+        Self { set: Vec::new() }
     }
-    pub fn and(&mut self, punch_model_box: PunchModelSet) {
-        self.boxes.push(punch_model_box)
+    pub fn and(&mut self, punch_model_box: PunchPolicySet) {
+        self.set.push(punch_model_box)
     }
-    pub fn is_match(&self, punch_model: PunchModel) -> bool {
-        if self.boxes.is_empty() {
+    pub fn is_match(&self, punch_model: PunchPolicy) -> bool {
+        if self.set.is_empty() {
             return false;
         }
-        for x in &self.boxes {
+        for x in &self.set {
             if !x.is_match(punch_model) {
                 return false;
             }
@@ -108,12 +108,12 @@ impl PunchModelIntersect {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PunchConsultInfo {
-    pub peer_punch_model: PunchModelSet,
+    pub peer_punch_model: PunchPolicySet,
     pub peer_nat_info: NatInfo,
 }
 
 impl PunchConsultInfo {
-    pub fn new(peer_punch_model: PunchModelSet, peer_nat_info: NatInfo) -> Self {
+    pub fn new(peer_punch_model: PunchPolicySet, peer_nat_info: NatInfo) -> Self {
         Self {
             peer_punch_model,
             peer_nat_info,
@@ -123,12 +123,12 @@ impl PunchConsultInfo {
 
 #[derive(Clone, Debug)]
 pub struct PunchInfo {
-    pub(crate) punch_model: PunchModelIntersect,
+    pub(crate) punch_model: PunchModel,
     pub(crate) peer_nat_info: NatInfo,
 }
 
 impl PunchInfo {
-    pub fn new(punch_model: PunchModelIntersect, peer_nat_info: NatInfo) -> Self {
+    pub fn new(punch_model: PunchModel, peer_nat_info: NatInfo) -> Self {
         Self {
             punch_model,
             peer_nat_info,
@@ -136,15 +136,15 @@ impl PunchInfo {
     }
 }
 
-impl FromStr for PunchModel {
+impl FromStr for PunchPolicy {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().trim() {
-            "ipv4-tcp" => Ok(PunchModel::IPv4Tcp),
-            "ipv4-udp" => Ok(PunchModel::IPv4Udp),
-            "ipv6-tcp" => Ok(PunchModel::IPv6Tcp),
-            "ipv6-udp" => Ok(PunchModel::IPv6Udp),
+            "ipv4-tcp" => Ok(PunchPolicy::IPv4Tcp),
+            "ipv4-udp" => Ok(PunchPolicy::IPv4Udp),
+            "ipv6-tcp" => Ok(PunchPolicy::IPv6Tcp),
+            "ipv6-udp" => Ok(PunchPolicy::IPv6Udp),
             _ => Err(format!(
                 "not match '{}', enum: ipv4-tcp/ipv4-udp/ipv6-tcp/ipv6-udp",
                 s

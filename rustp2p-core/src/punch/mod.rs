@@ -131,7 +131,7 @@ impl Puncher {
                         Self::connect_tcp(tcp_socket_manager, tcp_buf, *addr, ttl).await;
                     })
                 }
-                if punch_model.is_match(PunchModel::IPv4Tcp) {
+                if punch_model.is_match(PunchPolicy::IPv4Tcp) {
                     if let Some(addr) = peer_nat_info.local_ipv4_tcp() {
                         s.spawn(async move {
                             Self::connect_tcp(tcp_socket_manager, tcp_buf, addr, ttl).await;
@@ -143,7 +143,7 @@ impl Puncher {
                         })
                     }
                 }
-                if punch_model.is_match(PunchModel::IPv6Tcp) {
+                if punch_model.is_match(PunchPolicy::IPv6Tcp) {
                     if let Some(addr) = peer_nat_info.ipv6_tcp_addr() {
                         s.spawn(async move {
                             Self::connect_tcp(tcp_socket_manager, tcp_buf, addr, ttl).await;
@@ -193,7 +193,7 @@ impl Puncher {
         count: usize,
         buf: &[u8],
         peer_nat_info: &NatInfo,
-        punch_model: &PunchModelIntersect,
+        punch_model: &PunchModel,
     ) -> io::Result<()> {
         let udp_socket_manager = if let Some(udp_socket_manager) = self.udp_socket_manager.as_ref()
         {
@@ -223,11 +223,11 @@ impl Puncher {
             udp_socket_manager.try_main_v4_batch_send_to(buf, &local_ipv4_addrs);
         }
 
-        if punch_model.is_match(PunchModel::IPv6Udp) {
+        if punch_model.is_match(PunchPolicy::IPv6Udp) {
             let v6_addr = peer_nat_info.ipv6_udp_addr();
             udp_socket_manager.try_main_v6_batch_send_to(buf, &v6_addr);
         }
-        if !punch_model.is_match(PunchModel::IPv4Udp) {
+        if !punch_model.is_match(PunchPolicy::IPv4Udp) {
             return Ok(());
         }
         if peer_nat_info.public_ips.is_empty() {

@@ -22,7 +22,7 @@ use env_logger::Env;
 use parking_lot::Mutex;
 use rust_p2p_core::idle::IdleRouteManager;
 use rust_p2p_core::nat::NatInfo;
-use rust_p2p_core::punch::{PunchInfo, PunchModelIntersect, Puncher};
+use rust_p2p_core::punch::{PunchInfo, PunchModel, Puncher};
 use rust_p2p_core::route::route_table::RouteTable;
 use rust_p2p_core::route::ConnectProtocol;
 use rust_p2p_core::tunnel::config::{TcpTunnelConfig, TunnelConfig, UdpTunnelConfig};
@@ -231,10 +231,7 @@ impl ContextHandler {
                         let puncher = self.puncher.clone();
                         tokio::spawn(async move {
                             let rs = puncher
-                                .punch(
-                                    &request,
-                                    PunchInfo::new(PunchModelIntersect::all(), peer_nat_info),
-                                )
+                                .punch(&request, PunchInfo::new(PunchModel::all(), peer_nat_info))
                                 .await;
                             log::info!("punch peer_id={src_id},{rs:?}")
                         });
@@ -251,10 +248,7 @@ impl ContextHandler {
                     let puncher = self.puncher.clone();
                     tokio::spawn(async move {
                         let rs = puncher
-                            .punch(
-                                &request,
-                                PunchInfo::new(PunchModelIntersect::all(), peer_nat_info),
-                            )
+                            .punch(&request, PunchInfo::new(PunchModel::all(), peer_nat_info))
                             .await;
                         log::info!("punch peer_id={src_id},{rs:?}")
                     });

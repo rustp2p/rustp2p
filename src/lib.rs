@@ -17,8 +17,7 @@ pub use crate::tunnel::{RecvMetadata, RecvResult};
 use async_trait::async_trait;
 use cipher::Algorithm;
 pub use config::{
-    Config, NatType, PunchModel, PunchModelIntersect, PunchModelSet, TcpTunnelConfig,
-    UdpTunnelConfig,
+    Config, NatType, PunchModel, PunchPolicy, PunchPolicySet, TcpTunnelConfig, UdpTunnelConfig,
 };
 use flume::{Receiver, Sender, TryRecvError};
 use protocol::node_id::{GroupCode, NodeID};

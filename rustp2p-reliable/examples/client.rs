@@ -19,7 +19,7 @@ use parking_lot::Mutex;
 use rustp2p_reliable::LengthPrefixedInitCodec;
 use rustp2p_reliable::NatInfo;
 use rustp2p_reliable::{Config, Puncher};
-use rustp2p_reliable::{PunchInfo, PunchModelIntersect};
+use rustp2p_reliable::{PunchInfo, PunchModel};
 use rustp2p_reliable::{TcpTunnelConfig, TunnelConfig, UdpTunnelConfig};
 use serde::Deserialize;
 use serde_json::Value;
@@ -208,7 +208,7 @@ impl ContextHandler {
                     let puncher = self.puncher.clone();
                     tokio::spawn(async move {
                         let rs = puncher
-                            .punch(PunchInfo::new(PunchModelIntersect::all(), peer_nat_info))
+                            .punch(PunchInfo::new(PunchModel::all(), peer_nat_info))
                             .await;
                         log::info!("punch peer_addr={peer_addr},{rs:?}")
                     });
