@@ -44,7 +44,12 @@ pub struct Config {
     pub mapping_addrs: Option<Vec<NodeAddress>>,
     pub dns: Option<Vec<String>>,
     pub recycle_buf_cap: usize,
-    #[cfg(any(feature = "aes-gcm", feature = "chacha20-poly1305"))]
+    #[cfg(any(
+        feature = "aes-gcm-openssl",
+        feature = "aes-gcm-ring",
+        feature = "chacha20-poly1305-openssl",
+        feature = "chacha20-poly1305-ring"
+    ))]
     pub encryption: Option<crate::cipher::Algorithm>,
     pub default_interface: Option<LocalInterface>,
     pub use_v6: bool,
@@ -82,7 +87,12 @@ impl Default for Config {
             mapping_addrs: None,
             dns: None,
             recycle_buf_cap: 64,
-            #[cfg(any(feature = "aes-gcm", feature = "chacha20-poly1305"))]
+            #[cfg(any(
+                feature = "aes-gcm-openssl",
+                feature = "aes-gcm-ring",
+                feature = "chacha20-poly1305-openssl",
+                feature = "chacha20-poly1305-ring"
+            ))]
             encryption: None,
             default_interface: None,
             use_v6: rust_p2p_core::tunnel::config::UdpTunnelConfig::default()
@@ -176,7 +186,12 @@ impl Config {
         self.recycle_buf_cap = recycle_buf_cap;
         self
     }
-    #[cfg(any(feature = "aes-gcm", feature = "chacha20-poly1305"))]
+    #[cfg(any(
+        feature = "aes-gcm-openssl",
+        feature = "aes-gcm-ring",
+        feature = "chacha20-poly1305-openssl",
+        feature = "chacha20-poly1305-ring"
+    ))]
     pub fn set_encryption(mut self, encryption: crate::cipher::Algorithm) -> Self {
         self.encryption.replace(encryption);
         self

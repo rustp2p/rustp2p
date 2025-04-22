@@ -1,6 +1,11 @@
 #![allow(clippy::type_complexity)]
 
-#[cfg(any(feature = "aes-gcm", feature = "chacha20-poly1305"))]
+#[cfg(any(
+    feature = "aes-gcm-openssl",
+    feature = "aes-gcm-ring",
+    feature = "chacha20-poly1305-openssl",
+    feature = "chacha20-poly1305-ring"
+))]
 use crate::cipher::Cipher;
 use crate::config::punch_info::NodePunchInfo;
 use crate::extend::dns_query::{dns_query_all, dns_query_txt};
@@ -32,7 +37,12 @@ pub struct NodeContext {
     default_interface: Option<LocalInterface>,
     dns: Vec<String>,
     pub(crate) other_route_table: Arc<DashMap<GroupCode, RouteTable<NodeID>>>,
-    #[cfg(any(feature = "aes-gcm", feature = "chacha20-poly1305"))]
+    #[cfg(any(
+        feature = "aes-gcm-openssl",
+        feature = "aes-gcm-ring",
+        feature = "chacha20-poly1305-openssl",
+        feature = "chacha20-poly1305-ring"
+    ))]
     pub(crate) cipher: Option<Cipher>,
     pub(crate) major_tunnel_count: usize,
 }
@@ -44,7 +54,13 @@ impl NodeContext {
         local_tcp_port: u16,
         default_interface: Option<LocalInterface>,
         dns: Option<Vec<String>>,
-        #[cfg(any(feature = "aes-gcm", feature = "chacha20-poly1305"))] cipher: Option<Cipher>,
+        #[cfg(any(
+            feature = "aes-gcm-openssl",
+            feature = "aes-gcm-ring",
+            feature = "chacha20-poly1305-openssl",
+            feature = "chacha20-poly1305-ring"
+        ))]
+        cipher: Option<Cipher>,
     ) -> Self {
         let punch_info = NodePunchInfo::new(local_udp_ports, local_tcp_port);
         Self {
@@ -58,7 +74,12 @@ impl NodeContext {
             default_interface,
             dns: dns.unwrap_or_default(),
             other_route_table: Arc::new(Default::default()),
-            #[cfg(any(feature = "aes-gcm", feature = "chacha20-poly1305"))]
+            #[cfg(any(
+                feature = "aes-gcm-openssl",
+                feature = "aes-gcm-ring",
+                feature = "chacha20-poly1305-openssl",
+                feature = "chacha20-poly1305-ring"
+            ))]
             cipher,
         }
     }
