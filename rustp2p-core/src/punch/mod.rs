@@ -19,7 +19,7 @@ pub mod config;
 #[derive(Clone)]
 pub struct Puncher {
     // 端口顺序
-    port_vec: Vec<u16>,
+    port_vec: Arc<Vec<u16>>,
     // 指定IP的打洞记录
     sym_record: Arc<Mutex<HashMap<SocketAddr, usize>>>,
     #[allow(clippy::type_complexity)]
@@ -45,7 +45,7 @@ impl Puncher {
         let mut rng = rand::rng();
         port_vec.shuffle(&mut rng);
         Self {
-            port_vec,
+            port_vec: Arc::new(port_vec),
             sym_record: Arc::new(Mutex::new(HashMap::new())),
             count_record: Arc::new(Mutex::new(HashMap::new())),
             udp_socket_manager,

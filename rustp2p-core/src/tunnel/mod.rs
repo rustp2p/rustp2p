@@ -243,6 +243,12 @@ impl Tunnel {
             }
         }
     }
+    pub async fn send_to<A: Into<SocketAddr>>(&self, buf: BytesMut, addr: A) -> io::Result<()> {
+        match self {
+            Tunnel::Udp(tunnel) => tunnel.send_bytes_to(buf, addr).await,
+            Tunnel::Tcp(tunnel) => tunnel.send(buf).await,
+        }
+    }
     pub fn done(&mut self) {
         match self {
             Tunnel::Udp(tunnel) => tunnel.done(),

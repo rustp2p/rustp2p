@@ -8,7 +8,7 @@ description = "A decentralized p2p library powered by Rust, which is devoted to 
 repository = "https://github.com/rustp2p/rustp2p"
 
 [dependencies]
-rust-p2p-core = { path = "rustp2p-core", version = "0.3" }
+rust-p2p-core = { workspace = true }
 async-trait = { workspace = true }
 tokio = { workspace = true }
 log = { workspace = true }
@@ -57,6 +57,8 @@ members = [
 ]
 
 [workspace.dependencies]
+rust-p2p-core = { path = "rustp2p-core", version = "0.3" }
+rustp2p-reliable = { path = "rustp2p-reliable", version = "0.1" }
 tachyonix = "0.3"
 thiserror = "2"
 tokio = { version = "1.42", features = ["full"] }

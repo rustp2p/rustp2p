@@ -8,7 +8,7 @@ description = "Simple, fast and easy Nat traversal for peer-to-peer"
 repository = "https://github.com/rustp2p/rustp2p"
 
 [dependencies]
-rust-p2p-core = { path = "../rustp2p-core", version = "0.3" }
+rust-p2p-core = { workspace = true }
 kcp = { workspace = true }
 
 tokio = { workspace = true }

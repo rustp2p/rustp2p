@@ -469,9 +469,10 @@ struct KcpOutput {
 }
 impl Write for KcpOutput {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.sender
-            .try_kcp_send_to(buf, self.node_id)
-            .map_err(|_| Error::from(io::ErrorKind::WriteZero))?;
+        match self.sender.try_kcp_send_to(buf, self.node_id) {
+            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {}
+            rs => rs?,
+        }
         Ok(buf.len())
     }
 
