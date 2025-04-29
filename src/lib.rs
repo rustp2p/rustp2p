@@ -22,6 +22,7 @@ pub use config::{
 use flume::{Receiver, Sender, TryRecvError};
 use protocol::node_id::{GroupCode, NodeID};
 pub use rust_p2p_core::route::RouteKey;
+pub use rust_p2p_core::socket::LocalInterface;
 use std::io;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -116,6 +117,8 @@ pub struct Builder {
     encryption: Option<Algorithm>,
     node_id: Option<NodeID>,
     interceptor: Option<Interceptor>,
+    interface: Option<LocalInterface>,
+    config: Option<Config>,
 }
 impl Builder {
     pub fn new() -> Self {
@@ -127,6 +130,21 @@ impl Builder {
             encryption: None,
             node_id: None,
             interceptor: None,
+            interface: None,
+            config: None,
+        }
+    }
+    pub fn from_config(config: Config) -> Self {
+        Self {
+            udp_port: None,
+            tcp_port: None,
+            peers: None,
+            group_code: None,
+            encryption: None,
+            node_id: None,
+            interceptor: None,
+            interface: None,
+            config: Some(config),
         }
     }
     pub fn udp_port(mut self, port: u16) -> Self {
@@ -159,18 +177,30 @@ impl Builder {
         });
         self
     }
+    pub fn bind_interface(mut self, interface: LocalInterface) -> Self {
+        self.interface = Some(interface);
+        self
+    }
     pub async fn build(self) -> io::Result<EndPoint> {
-        let mut config = Config::empty()
-            .set_udp_tunnel_config(
-                UdpTunnelConfig::default().set_simple_udp_port(self.udp_port.unwrap_or_default()),
-            )
-            .set_tcp_tunnel_config(
-                TcpTunnelConfig::default().set_tcp_port(self.tcp_port.unwrap_or(0)),
-            )
-            .set_node_id(self.node_id.ok_or(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "node_id is required",
-            ))?);
+        let mut config = if let Some(config) = self.config {
+            config
+        } else {
+            Config::empty()
+                .set_udp_tunnel_config(
+                    UdpTunnelConfig::default()
+                        .set_simple_udp_port(self.udp_port.unwrap_or_default()),
+                )
+                .set_tcp_tunnel_config(
+                    TcpTunnelConfig::default().set_tcp_port(self.tcp_port.unwrap_or(0)),
+                )
+                .set_node_id(self.node_id.ok_or(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "node_id is required",
+                ))?)
+        };
+        if let Some(interface) = self.interface {
+            config = config.set_default_interface(interface);
+        }
         if let Some(group_code) = self.group_code {
             config = config.set_group_code(group_code);
         }
