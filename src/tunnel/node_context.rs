@@ -96,7 +96,7 @@ impl NodeContext {
         self.self_node_id.store(Some(node_id));
         Ok(())
     }
-    pub fn store_group_code(&self, group_code: GroupCode) -> io::Result<()> {
+    pub(crate) fn store_group_code(&self, group_code: GroupCode) -> io::Result<()> {
         if group_code.is_unspecified() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
