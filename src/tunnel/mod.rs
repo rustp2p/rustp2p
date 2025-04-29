@@ -848,7 +848,7 @@ impl Tunnel {
         }
         let mut recv_result = RecvResult::new(&mut block, route_key);
         if let Some(interceptor) = interceptor {
-            if interceptor.pre_handle(&mut recv_result).await {
+            if !interceptor.pre_handle(&mut recv_result).await {
                 return Err(block);
             }
         }
