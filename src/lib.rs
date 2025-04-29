@@ -5,7 +5,10 @@ mod config;
 mod extend;
 mod reliable;
 mod tunnel;
-pub use protocol::{node_id, NetPacket, HEAD_LEN};
+pub use protocol::{
+    node_id::{self, GroupCode, NodeID},
+    NetPacket, HEAD_LEN,
+};
 pub use tunnel::{NodeAddress, PeerNodeAddress, RecvUserData};
 
 #[cfg(feature = "use-kcp")]
@@ -20,7 +23,6 @@ pub use config::{
     Config, NatType, PunchModel, PunchPolicy, PunchPolicySet, TcpTunnelConfig, UdpTunnelConfig,
 };
 use flume::{Receiver, Sender, TryRecvError};
-use protocol::node_id::{GroupCode, NodeID};
 pub use rust_p2p_core::route::RouteKey;
 pub use rust_p2p_core::socket::LocalInterface;
 use std::io;

@@ -83,6 +83,9 @@ impl NodeContext {
             cipher,
         }
     }
+    pub fn load_punch_info(&self) -> NodePunchInfo {
+        self.punch_info.read().clone()
+    }
     pub fn store_self_id(&self, node_id: NodeID) -> io::Result<()> {
         if node_id.is_unspecified() || node_id.is_broadcast() {
             return Err(io::Error::new(
