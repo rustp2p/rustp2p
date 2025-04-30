@@ -127,7 +127,7 @@ impl Builder {
         all_id_num: u16,
     ) -> io::Result<NetPacket<Vec<u8>>> {
         let len = Self::calculate_len(list)?;
-        let mut packet = NetPacket::new_unchecked(vec![0; len]);
+        let mut packet = unsafe { NetPacket::new_unchecked(vec![0; len]) };
 
         packet.set_protocol(ProtocolType::IDRouteReply);
         packet.set_ttl(15);

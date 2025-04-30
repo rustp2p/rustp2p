@@ -40,7 +40,9 @@ pub struct NetPacket<B> {
 }
 
 impl<B: AsRef<[u8]>> NetPacket<B> {
-    pub fn new_unchecked(buffer: B) -> NetPacket<B> {
+    /// # Safety
+    /// Ensures that the given buffer has enough space
+    pub unsafe fn new_unchecked(buffer: B) -> NetPacket<B> {
         Self { buffer }
     }
     pub fn new(buffer: B) -> io::Result<NetPacket<B>> {
@@ -48,7 +50,7 @@ impl<B: AsRef<[u8]>> NetPacket<B> {
         if len < HEAD_LEN {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "overflow"));
         }
-        let packet = Self::new_unchecked(buffer);
+        let packet = unsafe { Self::new_unchecked(buffer) };
         if packet.data_length() as usize != len {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -203,7 +205,7 @@ mod test {
     #[test]
     fn test_build() {
         let mut buf = [0u8; HEAD_LEN + 4];
-        let mut packet = NetPacket::new_unchecked(&mut buf);
+        let mut packet = unsafe { NetPacket::new_unchecked(&mut buf) };
         packet.set_ttl(2);
         packet.reset_data_len();
         packet.set_group_code(&100000u128.into());

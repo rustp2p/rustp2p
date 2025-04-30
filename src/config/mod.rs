@@ -423,7 +423,7 @@ impl LengthPrefixedDecoder {
             self.buf.clear();
             return None;
         }
-        let packet = NetPacket::new_unchecked(self.buf.as_ref());
+        let packet = unsafe { NetPacket::new_unchecked(self.buf.as_ref()) };
         let data_length = packet.data_length() as usize;
         if data_length > src.len() {
             return Some(Err(io::Error::new(io::ErrorKind::Other, "too short")));
@@ -447,7 +447,7 @@ impl LengthPrefixedDecoder {
         if offset < HEAD_LEN {
             return None;
         }
-        let packet = NetPacket::new_unchecked(&src);
+        let packet = unsafe { NetPacket::new_unchecked(&src) };
         let data_length = packet.data_length() as usize;
         if data_length > src.len() {
             return Some(Err(io::Error::new(io::ErrorKind::Other, "too short")));
@@ -466,7 +466,7 @@ impl LengthPrefixedDecoder {
 impl Encoder for LengthPrefixedEncoder {
     async fn encode(&mut self, write: &mut OwnedWriteHalf, data: &[u8]) -> io::Result<()> {
         let len = data.len();
-        let packet = NetPacket::new_unchecked(data);
+        let packet = unsafe { NetPacket::new_unchecked(data) };
         if packet.data_length() as usize != len {
             return Err(io::Error::from(io::ErrorKind::InvalidData));
         }

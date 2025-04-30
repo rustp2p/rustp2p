@@ -648,7 +648,7 @@ impl TunnelRouter {
         unsafe {
             send_packet.set_payload_len(payload_size);
         }
-        let mut packet = NetPacket::new_unchecked(send_packet.buf_mut());
+        let mut packet = unsafe { NetPacket::new_unchecked(send_packet.buf_mut()) };
         packet.set_high_flag();
         packet.set_protocol(protocol_type);
         packet.set_ttl(15);

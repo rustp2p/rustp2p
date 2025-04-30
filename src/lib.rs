@@ -40,13 +40,14 @@ pub struct EndPoint {
 }
 
 impl EndPoint {
+    /// Recv remote data from this endpoint
     pub async fn recv_from(&self) -> io::Result<(RecvUserData, RecvMetadata)> {
         self.input
             .recv_async()
             .await
             .map_err(|_| io::Error::new(io::ErrorKind::UnexpectedEof, "shutdown"))
     }
-
+    /// Send data to remote endpoint
     pub async fn send_to<D: Into<NodeID>>(&self, buf: &[u8], dest: D) -> io::Result<()> {
         self.output.send_to(buf, dest).await
     }

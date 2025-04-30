@@ -50,7 +50,7 @@ async fn poll_direct_peer_node(
     buf: &mut [u8],
 ) {
     let self_group_code = tunnel_tx.node_context().load_group_code();
-    let mut packet = NetPacket::new_unchecked(buf);
+    let mut packet = unsafe { NetPacket::new_unchecked(buf) };
     for (addr, id, node_id) in direct_nodes {
         if let Some((group_code, node_id)) = node_id {
             if self_group_code == group_code && sent_ids.contains(&node_id) {

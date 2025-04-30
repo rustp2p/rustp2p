@@ -116,7 +116,7 @@ impl Builder {
         broadcast_payload: &[u8],
     ) -> io::Result<NetPacket<Vec<u8>>> {
         let (broadcast_packet_head, len) = Self::calculate_len(list, broadcast_payload.len())?;
-        let mut packet = NetPacket::new_unchecked(vec![0; len]);
+        let mut packet = unsafe { NetPacket::new_unchecked(vec![0; len]) };
         packet.set_high_flag();
         packet.set_protocol(ProtocolType::RangeBroadcast);
         packet.set_ttl(1);
