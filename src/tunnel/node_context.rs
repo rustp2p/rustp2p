@@ -86,7 +86,7 @@ impl NodeContext {
     pub fn load_punch_info(&self) -> NodePunchInfo {
         self.punch_info.read().clone()
     }
-    pub(crate) fn store_self_id(&self, node_id: NodeID) -> io::Result<()> {
+    pub fn store_self_id(&self, node_id: NodeID) -> io::Result<()> {
         if node_id.is_unspecified() || node_id.is_broadcast() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -96,7 +96,7 @@ impl NodeContext {
         self.self_node_id.store(Some(node_id));
         Ok(())
     }
-    pub(crate) fn store_group_code(&self, group_code: GroupCode) -> io::Result<()> {
+    pub fn store_group_code(&self, group_code: GroupCode) -> io::Result<()> {
         if group_code.is_unspecified() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
