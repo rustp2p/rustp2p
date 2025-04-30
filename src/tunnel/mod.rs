@@ -1155,6 +1155,8 @@ impl Tunnel {
 
                 let broadcast_packet = RangeBroadcastPacket::new(packet.payload_mut())?;
                 let in_packet = NetPacket::new(broadcast_packet.payload())?;
+                let src_id = NodeID::try_from(in_packet.src_id())?;
+                let dest_id = NodeID::try_from(in_packet.dest_id())?;
                 let start = HEAD_LEN + broadcast_packet.head_len() + HEAD_LEN;
                 let mut broadcast_to_self = false;
 
