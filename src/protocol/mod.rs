@@ -40,10 +40,10 @@ pub struct NetPacket<B> {
 }
 
 impl<B: AsRef<[u8]>> NetPacket<B> {
-    pub(crate) fn new_unchecked(buffer: B) -> NetPacket<B> {
+    pub fn new_unchecked(buffer: B) -> NetPacket<B> {
         Self { buffer }
     }
-    pub(crate) fn new(buffer: B) -> io::Result<NetPacket<B>> {
+    pub fn new(buffer: B) -> io::Result<NetPacket<B>> {
         let len = buffer.as_ref().len();
         if len < HEAD_LEN {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "overflow"));
@@ -57,7 +57,7 @@ impl<B: AsRef<[u8]>> NetPacket<B> {
         }
         Ok(packet)
     }
-    pub(crate) fn protocol(&self) -> io::Result<ProtocolType> {
+    pub fn protocol(&self) -> io::Result<ProtocolType> {
         (self.buffer.as_ref()[0] & 0x7F).try_into()
     }
 
