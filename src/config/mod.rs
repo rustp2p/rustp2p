@@ -482,6 +482,10 @@ impl Encoder for LengthPrefixedEncoder {
         let mut total_written = 0;
         let total: usize = bufs.iter().map(|v| v.len()).sum();
         loop {
+            if index == bufs.len() - 1 {
+                write.write_all(&bufs[index]).await?;
+                return Ok(());
+            }
             let len = write.write_vectored(&bufs[index..]).await?;
             if len == 0 {
                 return Err(io::Error::from(io::ErrorKind::WriteZero));
@@ -500,10 +504,6 @@ impl Encoder for LengthPrefixedEncoder {
                         if index == bufs.len() {
                             return Ok(());
                         }
-                    }
-                    if index == bufs.len() - 1 {
-                        write.write_all(buf).await?;
-                        return Ok(());
                     }
                     break;
                 } else {

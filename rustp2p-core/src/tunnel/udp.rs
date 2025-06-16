@@ -514,6 +514,9 @@ impl UdpTunnelDispatcher {
                                 let rs = write_with(&udp, || sendmmsg(fd, bufs)).await;
                                 match rs {
                                     Ok(size) => {
+                                        if size == 0 {
+                                            break;
+                                        }
                                         if size < bufs.len() {
                                             bufs = &mut bufs[size..];
                                             continue;
