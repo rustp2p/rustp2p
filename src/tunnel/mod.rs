@@ -219,6 +219,11 @@ impl TunnelDispatcher {
             return Err(io::Error::new(io::ErrorKind::Other, "shutdown"));
         };
         let tunnel = tunnel?;
+        log::debug!(
+            "tunnel dispatched: {:?}-{:?}",
+            tunnel.protocol(),
+            tunnel.remote_addr()
+        );
         let recv_buff = Vec::with_capacity(BUF_SIZE);
         let recv_sizes = Vec::with_capacity(BUF_SIZE);
         let recv_addrs = Vec::with_capacity(BUF_SIZE);
