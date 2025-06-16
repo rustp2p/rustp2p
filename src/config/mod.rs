@@ -377,6 +377,9 @@ impl Decoder for LengthPrefixedDecoder {
         loop {
             if self.buf.is_empty() {
                 let len = read.read(&mut src[offset..]).await?;
+                if len == 0 {
+                    return Err(io::Error::from(io::ErrorKind::UnexpectedEof));
+                }
                 offset += len;
                 if let Some(rs) = self.process_packet(src, offset) {
                     return rs;
