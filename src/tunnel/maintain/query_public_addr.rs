@@ -81,7 +81,12 @@ pub(crate) async fn query_tcp_public_addr_loop(
                                         }
                                     }
                                     match tcp_stream.try_read(&mut buf) {
-                                        Ok(_) => {}
+                                        Ok(len) => {
+                                            if len == 0 {
+                                                log::debug!("stun tcp r close {cur_index},{stun} {addr} EOF");
+                                                break;
+                                            }
+                                        }
                                         Err(e) => {
                                             if std::io::ErrorKind::WouldBlock != e.kind() {
                                                 log::debug!("stun tcp r close {cur_index},{stun} {addr} {e}");

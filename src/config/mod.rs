@@ -399,6 +399,9 @@ impl Decoder for LengthPrefixedDecoder {
             if self.buf.is_empty() {
                 match read.try_read(&mut src[offset..]) {
                     Ok(len) => {
+                        if len == 0 {
+                            return Err(io::Error::from(io::ErrorKind::UnexpectedEof));
+                        }
                         offset += len;
                     }
                     Err(e) => {
