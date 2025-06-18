@@ -28,7 +28,7 @@ impl<PeerID: Hash + Eq + Clone> IdleRouteManager<PeerID> {
             } else {
                 self.read_idle
             };
-            tokio::time::sleep(time).await;
+            tokio::time::sleep(time.max(Duration::from_millis(1))).await;
         }
     }
     pub fn delay(&self, peer_id: &PeerID, route_key: &RouteKey) -> bool {
