@@ -741,6 +741,11 @@ impl Tunnel {
                 self.tunnel.done();
                 return Err(RecvError::Done);
             };
+            if num == 0 {
+                return Err(RecvError::Io(std::io::Error::from(
+                    io::ErrorKind::UnexpectedEof,
+                )));
+            }
             for index in 0..num {
                 let len = self.recv_sizes[index];
 

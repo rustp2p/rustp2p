@@ -20,7 +20,7 @@ impl<PeerID: Hash + Eq + Clone> IdleRouteManager<PeerID> {
     pub async fn next_idle(&self) -> (PeerID, Route, Instant) {
         loop {
             let time = if let Some((peer_id, route, instant)) = self.route_table.oldest_route() {
-                let time = Instant::now() - instant;
+                let time = instant.saturating_duration_since(Instant::now());
                 if time > self.read_idle {
                     return (peer_id, route, instant);
                 }

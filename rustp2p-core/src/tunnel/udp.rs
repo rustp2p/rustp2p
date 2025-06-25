@@ -984,6 +984,9 @@ fn recvmmsg<B: AsMut<[u8]>>(
         return Err(io::Error::last_os_error());
     }
     let nmsgs = res as usize;
+    if nmsgs == 0 {
+        return Err(io::Error::from(io::ErrorKind::UnexpectedEof));
+    }
     for i in 0..nmsgs {
         let addr = sockaddr_to_socket_addr(&addrs[i], msgs[i].msg_hdr.msg_namelen);
         sizes[i] = msgs[i].msg_len as usize;
