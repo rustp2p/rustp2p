@@ -231,7 +231,7 @@ impl Tunnel {
             Tunnel::Udp(tunnel) => tunnel.batch_recv_from(bufs, sizes, addrs).await,
             Tunnel::Tcp(tunnel) => {
                 if addrs.len() != bufs.len() {
-                    return Some(Err(io::Error::new(io::ErrorKind::Other, "addrs error")));
+                    return Some(Err(io::Error::other("addrs error")));
                 }
                 match tunnel.batch_recv_from(bufs, sizes).await {
                     Ok((n, route_key)) => {

@@ -372,9 +372,7 @@ async fn kcp_run(
             all_event(&mut input, &mut data_out_receiver, &mut interval).await?
         };
         if let Some(mut buf) = input_data.take() {
-            let len = kcp
-                .input(&buf)
-                .map_err(|e| Error::new(io::ErrorKind::Other, e))?;
+            let len = kcp.input(&buf).map_err(|e| Error::other(e))?;
             if len < buf.len() {
                 buf.advance(len);
                 input_data.replace(buf);
@@ -382,17 +380,14 @@ async fn kcp_run(
         }
         match event {
             Event::Input(mut buf) => {
-                let len = kcp
-                    .input(&buf)
-                    .map_err(|e| Error::new(io::ErrorKind::Other, e))?;
+                let len = kcp.input(&buf).map_err(|e| Error::other(e))?;
                 if len < buf.len() {
                     buf.advance(len);
                     input_data.replace(buf);
                 }
             }
             Event::Output(buf) => {
-                kcp.send(&buf)
-                    .map_err(|e| Error::new(io::ErrorKind::Other, e))?;
+                kcp.send(&buf).map_err(|e| Error::other(e))?;
             }
             Event::Timeout => {
                 let now = std::time::SystemTime::now();
@@ -400,7 +395,7 @@ async fn kcp_run(
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default();
                 kcp.update(millis.as_millis() as _)
-                    .map_err(|e| Error::new(io::ErrorKind::Other, e))?;
+                    .map_err(|e| Error::other(e))?;
             }
         }
 
@@ -419,11 +414,11 @@ async fn all_event(
 ) -> io::Result<Event> {
     tokio::select! {
         rs=input.recv()=>{
-            let buf = rs.ok_or(Error::new(io::ErrorKind::Other, "input close"))?;
+            let buf = rs.ok_or(Error::other( "input close"))?;
             Ok(Event::Input(buf))
         }
         rs=data_out_receiver.recv()=>{
-            let buf = rs.ok_or(Error::new(io::ErrorKind::Other, "output close"))?;
+            let buf = rs.ok_or(Error::other("output close"))?;
             Ok(Event::Output(buf))
         }
         _=interval.tick()=>{
@@ -434,7 +429,7 @@ async fn all_event(
 async fn input_event(input: &mut Receiver<BytesMut>, interval: &mut Interval) -> io::Result<Event> {
     tokio::select! {
         rs=input.recv()=>{
-            let buf = rs.ok_or(Error::new(io::ErrorKind::Other, "input close"))?;
+            let buf = rs.ok_or(Error::other("input close"))?;
             Ok(Event::Input(buf))
         }
         _=interval.tick()=>{
@@ -448,7 +443,7 @@ async fn output_event(
 ) -> io::Result<Event> {
     tokio::select! {
         rs=data_out_receiver.recv()=>{
-            let buf = rs.ok_or(Error::new(io::ErrorKind::Other, "output close"))?;
+            let buf = rs.ok_or(Error::other( "output close"))?;
             Ok(Event::Output(buf))
         }
         _=interval.tick()=>{

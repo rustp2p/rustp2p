@@ -371,7 +371,7 @@ impl LengthPrefixedDecoder {
 impl Decoder for LengthPrefixedDecoder {
     async fn decode(&mut self, read: &mut OwnedReadHalf, src: &mut [u8]) -> io::Result<usize> {
         if src.len() < HEAD_LEN {
-            return Err(io::Error::new(io::ErrorKind::Other, "too short"));
+            return Err(io::Error::other("too short"));
         }
         let mut offset = 0;
         loop {
@@ -392,7 +392,7 @@ impl Decoder for LengthPrefixedDecoder {
 
     fn try_decode(&mut self, read: &mut OwnedReadHalf, src: &mut [u8]) -> io::Result<usize> {
         if src.len() < HEAD_LEN {
-            return Err(io::Error::new(io::ErrorKind::Other, "too short"));
+            return Err(io::Error::other("too short"));
         }
         let mut offset = 0;
         loop {
@@ -432,7 +432,7 @@ impl LengthPrefixedDecoder {
         let packet = unsafe { NetPacket::new_unchecked(self.buf.as_ref()) };
         let data_length = packet.data_length() as usize;
         if data_length > src.len() {
-            return Some(Err(io::Error::new(io::ErrorKind::Other, "too short")));
+            return Some(Err(io::Error::other("too short")));
         }
         if data_length > len {
             src[..len].copy_from_slice(self.buf.as_ref());
@@ -456,7 +456,7 @@ impl LengthPrefixedDecoder {
         let packet = unsafe { NetPacket::new_unchecked(&src) };
         let data_length = packet.data_length() as usize;
         if data_length > src.len() {
-            return Some(Err(io::Error::new(io::ErrorKind::Other, "too short")));
+            return Some(Err(io::Error::other("too short")));
         }
         match data_length.cmp(&offset) {
             std::cmp::Ordering::Less => {

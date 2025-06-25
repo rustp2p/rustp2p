@@ -202,16 +202,16 @@ impl UdpSocketManager {
         let route_key = if addr.is_ipv4() {
             let len = self.main_udp_v4.len();
             if index >= len {
-                return Err(io::Error::new(io::ErrorKind::Other, "index out of bounds"));
+                return Err(io::Error::other("index out of bounds"));
             }
             RouteKey::new(Index::Udp(UDPIndex::MainV4(index)), addr)
         } else {
             let len = self.main_udp_v6.len();
             if len == 0 {
-                return Err(io::Error::new(io::ErrorKind::Other, "Not support IPV6"));
+                return Err(io::Error::other("Not support IPV6"));
             }
             if index >= len {
-                return Err(io::Error::new(io::ErrorKind::Other, "index out of bounds"));
+                return Err(io::Error::other("index out of bounds"));
             }
             RouteKey::new(Index::Udp(UDPIndex::MainV6(index)), addr)
         };
@@ -252,7 +252,7 @@ impl UdpSocketManager {
                 Some(sub_close_notify_receiver.clone()),
             );
             if self.tunnel_dispatcher.try_send(udp_tunnel).is_err() {
-                Err(io::Error::new(io::ErrorKind::Other, "tunnel channel error"))?
+                Err(io::Error::other("tunnel channel error"))?
             }
         }
         sub_close_notify_guard.replace(sub_close_notify_sender);
@@ -266,18 +266,18 @@ impl UdpSocketManager {
             UDPIndex::MainV4(index) => self
                 .main_udp_v4
                 .get(index)
-                .ok_or(io::Error::new(io::ErrorKind::Other, "index out of bounds"))?
+                .ok_or(io::Error::other("index out of bounds"))?
                 .clone(),
             UDPIndex::MainV6(index) => self
                 .main_udp_v6
                 .get(index)
-                .ok_or(io::Error::new(io::ErrorKind::Other, "index out of bounds"))?
+                .ok_or(io::Error::other("index out of bounds"))?
                 .clone(),
             UDPIndex::SubV4(index) => {
                 let guard = self.sub_udp.read();
                 let len = guard.len();
                 if len <= index {
-                    return Err(io::Error::new(io::ErrorKind::Other, "index out of bounds"));
+                    return Err(io::Error::other("index out of bounds"));
                 } else {
                     guard[index].clone()
                 }
@@ -439,7 +439,7 @@ impl UdpTunnelDispatcher {
                 .try_send(tunnel)
                 .is_err()
             {
-                Err(io::Error::new(io::ErrorKind::Other, "tunnel channel error"))?
+                Err(io::Error::other("tunnel channel error"))?
             }
         }
         for (index, udp) in self.socket_manager.main_udp_v6.iter().enumerate() {
@@ -452,7 +452,7 @@ impl UdpTunnelDispatcher {
                 .try_send(tunnel)
                 .is_err()
             {
-                Err(io::Error::new(io::ErrorKind::Other, "tunnel channel error"))?
+                Err(io::Error::other("tunnel channel error"))?
             }
         }
         Ok(())
@@ -470,7 +470,7 @@ impl UdpTunnelDispatcher {
             .tunnel_receiver
             .recv()
             .await
-            .map_err(|_| io::Error::new(io::ErrorKind::Other, "Udp tunnel close"))?;
+            .map_err(|_| io::Error::other("Udp tunnel close"))?;
         let option = self
             .socket_manager
             .sender_map
@@ -798,7 +798,7 @@ impl UdpTunnel {
                 sender: v.sender.clone(),
             })
         } else {
-            Err(io::Error::new(io::ErrorKind::Other, "closed"))
+            Err(io::Error::other("closed"))
         }
     }
 }
@@ -810,7 +810,7 @@ impl UdpTunnel {
             udp.send_to(buf, addr.into()).await?;
             Ok(())
         } else {
-            Err(io::Error::new(io::ErrorKind::Other, "closed"))
+            Err(io::Error::other("closed"))
         }
     }
     /// Try to write `buf` to the target denoted by SocketAddr via this tunnel
@@ -819,7 +819,7 @@ impl UdpTunnel {
             udp.try_send_to(buf, addr.into())?;
             Ok(())
         } else {
-            Err(io::Error::new(io::ErrorKind::Other, "closed"))
+            Err(io::Error::other("closed"))
         }
     }
     pub async fn send_bytes_to<A: Into<SocketAddr>>(
@@ -830,7 +830,7 @@ impl UdpTunnel {
         if let Some(sender) = &self.sender {
             sender.send_to(buf, addr).await
         } else {
-            Err(io::Error::new(io::ErrorKind::Other, "closed"))
+            Err(io::Error::other("closed"))
         }
     }
 
@@ -885,7 +885,7 @@ impl UdpTunnel {
         addrs: &mut [RouteKey],
     ) -> Option<io::Result<usize>> {
         if bufs.is_empty() || bufs.len() != sizes.len() || bufs.len() != addrs.len() {
-            return Some(Err(io::Error::new(io::ErrorKind::Other, "bufs error")));
+            return Some(Err(io::Error::other("bufs error")));
         }
         let rs = self.recv_from(bufs[0].as_mut()).await?;
         match rs {
@@ -917,10 +917,7 @@ impl UdpTunnel {
         addrs: &mut [RouteKey],
     ) -> Option<io::Result<usize>> {
         if bufs.is_empty() || bufs.len() != sizes.len() || bufs.len() != addrs.len() {
-            return Some(Err(io::Error::new(
-                io::ErrorKind::Other,
-                "bufs/sizes/addrs error",
-            )));
+            return Some(Err(io::Error::other("bufs/sizes/addrs error")));
         }
         let udp = self.udp.as_ref()?;
         let fd = udp.as_raw_fd();

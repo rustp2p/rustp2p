@@ -130,16 +130,10 @@ impl TcpTunnelConfig {
     }
     pub fn check(&self) -> io::Result<()> {
         if self.tcp_multiplexing_limit == 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                "tcp_multiplexing_limit cannot be 0",
-            ));
+            return Err(io::Error::other("tcp_multiplexing_limit cannot be 0"));
         }
         if self.tcp_multiplexing_limit > MAX_MAIN_SOCKET_COUNT {
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                "tcp_multiplexing_limit cannot too large",
-            ));
+            return Err(io::Error::other("tcp_multiplexing_limit cannot too large"));
         }
         if self.use_v6 {
             socket2::Socket::new(socket2::Domain::IPV6, socket2::Type::STREAM, None)?;
@@ -196,20 +190,13 @@ impl Default for UdpTunnelConfig {
 impl UdpTunnelConfig {
     pub fn check(&self) -> io::Result<()> {
         if self.main_udp_count == 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                "main socket count cannot be 0",
-            ));
+            return Err(io::Error::other("main socket count cannot be 0"));
         }
         if self.main_udp_count > MAX_MAIN_SOCKET_COUNT {
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                "main socket count is too large",
-            ));
+            return Err(io::Error::other("main socket count is too large"));
         }
         if self.sub_udp_count > MAX_SYMMETRIC_SOCKET_COUNT {
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
+            return Err(io::Error::other(
                 "socket count for symmetric nat is too large",
             ));
         }

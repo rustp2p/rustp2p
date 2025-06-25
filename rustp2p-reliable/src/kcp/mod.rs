@@ -115,9 +115,7 @@ async fn kcp_run(
             all_event(&mut input, &mut data_out_receiver, &mut interval).await?
         };
         if let Some(mut buf) = input_data.take() {
-            let len = kcp
-                .input(&buf)
-                .map_err(|e| Error::new(io::ErrorKind::Other, e))?;
+            let len = kcp.input(&buf).map_err(|e| Error::other(e))?;
             if len < buf.len() {
                 buf.advance(len);
                 input_data.replace(buf);
@@ -125,9 +123,7 @@ async fn kcp_run(
         }
         match event {
             Event::Input(mut buf) => {
-                let len = kcp
-                    .input(&buf)
-                    .map_err(|e| Error::new(io::ErrorKind::Other, e))?;
+                let len = kcp.input(&buf).map_err(|e| Error::other(e))?;
                 if len < buf.len() {
                     buf.advance(len);
                     input_data.replace(buf);
@@ -141,8 +137,7 @@ async fn kcp_run(
                     tunnel_sender.send_to(new_buf, remote_addr).await?;
                 }
                 DataType::Kcp(buf) => {
-                    kcp.send(&buf)
-                        .map_err(|e| Error::new(io::ErrorKind::Other, e))?;
+                    kcp.send(&buf).map_err(|e| Error::other(e))?;
                 }
             },
             Event::Timeout => {
@@ -151,7 +146,7 @@ async fn kcp_run(
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default();
                 kcp.update(millis.as_millis() as _)
-                    .map_err(|e| Error::new(io::ErrorKind::Other, e))?;
+                    .map_err(|e| Error::other(e))?;
             }
         }
 

@@ -309,28 +309,20 @@ impl PeerNodeAddress {
                 let mut addrs = Vec::with_capacity(txt.len());
                 for x in txt {
                     let x = x.to_lowercase();
-                    let addr = if let Some(v) = x.strip_prefix("udp://") {
-                        NodeAddress::Udp(SocketAddr::from_str(v).map_err(|_| {
-                            io::Error::new(
-                                io::ErrorKind::Other,
-                                "record type txt is not SocketAddr",
-                            )
-                        })?)
-                    } else if let Some(v) = x.strip_prefix("tcp://") {
-                        NodeAddress::Tcp(SocketAddr::from_str(v).map_err(|_| {
-                            io::Error::new(
-                                io::ErrorKind::Other,
-                                "record type txt is not SocketAddr",
-                            )
-                        })?)
-                    } else {
-                        NodeAddress::Tcp(SocketAddr::from_str(&x).map_err(|_| {
-                            io::Error::new(
-                                io::ErrorKind::Other,
-                                "record type txt is not SocketAddr",
-                            )
-                        })?)
-                    };
+                    let addr =
+                        if let Some(v) = x.strip_prefix("udp://") {
+                            NodeAddress::Udp(SocketAddr::from_str(v).map_err(|_| {
+                                io::Error::other("record type txt is not SocketAddr")
+                            })?)
+                        } else if let Some(v) = x.strip_prefix("tcp://") {
+                            NodeAddress::Tcp(SocketAddr::from_str(v).map_err(|_| {
+                                io::Error::other("record type txt is not SocketAddr")
+                            })?)
+                        } else {
+                            NodeAddress::Tcp(SocketAddr::from_str(&x).map_err(|_| {
+                                io::Error::other("record type txt is not SocketAddr")
+                            })?)
+                        };
                     addrs.push(addr);
                 }
                 addrs
