@@ -175,7 +175,7 @@ async fn test_nat_(
             return Ok((addr, changed_addr));
         }
     }
-    Err(io::Error::new(io::ErrorKind::Other, "stun response err"))
+    Err(io::Error::other("stun response err"))
 }
 
 fn stun_addr(addr: stun_format::SocketAddr) -> SocketAddr {

@@ -209,14 +209,14 @@ impl Drop for TunnelDispatcher {
 impl TunnelDispatcher {
     pub(crate) async fn dispatch(&mut self) -> io::Result<Tunnel> {
         if self.shutdown_manager.is_shutdown_triggered() {
-            return Err(io::Error::new(io::ErrorKind::Other, "shutdown"));
+            return Err(io::Error::other("shutdown"));
         }
         let Ok(tunnel) = self
             .shutdown_manager
             .wrap_cancel(self.tunnel_dispatcher.dispatch())
             .await
         else {
-            return Err(io::Error::new(io::ErrorKind::Other, "shutdown"));
+            return Err(io::Error::other("shutdown"));
         };
         let tunnel = tunnel?;
         log::debug!(
@@ -276,7 +276,7 @@ impl TunnelRouter {
     }
     pub(crate) fn switch_model(&self, nat_type: NatType) -> io::Result<()> {
         if self.shutdown_manager.is_shutdown_triggered() {
-            return Err(io::Error::new(io::ErrorKind::Other, "shutdown"));
+            return Err(io::Error::other("shutdown"));
         }
         use rust_p2p_core::tunnel::udp::Model;
         match nat_type {
@@ -425,10 +425,7 @@ impl TunnelRouter {
         dest_id: &NodeID,
     ) -> io::Result<()> {
         if dest_id.is_broadcast() {
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                "broadcast requires asynchronous",
-            ));
+            return Err(io::Error::other("broadcast requires asynchronous"));
         }
 
         if let Ok(route) = self.route_table.get_route_by_id(dest_id) {
@@ -539,7 +536,7 @@ impl TunnelRouter {
             self.send_to_impl(packet.into_buf(), &group_code, &src_id, dest_id)
                 .await
         } else {
-            Err(io::Error::new(io::ErrorKind::Other, "no id specified"))
+            Err(io::Error::other("no id specified"))
         }
     }
     #[cfg(any(
@@ -590,7 +587,7 @@ impl TunnelRouter {
             }
             self.try_send_to_impl(packet.into_buf(), &group_code, dest_id)
         } else {
-            Err(io::Error::new(io::ErrorKind::Other, "no id specified"))
+            Err(io::Error::other("no id specified"))
         }
     }
     pub(crate) fn try_send_packet_to(
@@ -647,7 +644,7 @@ impl TunnelRouter {
         let src_id = if let Some(src_id) = self.node_context.load_id() {
             src_id
         } else {
-            return Err(io::Error::new(io::ErrorKind::Other, "no id specified"));
+            return Err(io::Error::other("no id specified"));
         };
         let mut send_packet = SendPacket::with_capacity(payload_size);
         unsafe {
@@ -666,7 +663,7 @@ impl TunnelRouter {
     pub fn shutdown(&self) -> io::Result<()> {
         self.shutdown_manager
             .trigger_shutdown(())
-            .map_err(|_| io::Error::new(io::ErrorKind::Other, "already shutdown"))?;
+            .map_err(|_| io::Error::other("already shutdown"))?;
         Ok(())
     }
 }
@@ -878,14 +875,11 @@ impl Tunnel {
                         if rs.is_encrypt != self.node_context.cipher.is_some() {
                             return Ok(Ok(Err(HandleError::new(
                                 route_key,
-                                io::Error::new(
-                                    io::ErrorKind::Other,
-                                    format!(
-                                        "Inconsistent encryption status: data tag-{} current tag-{}",
-                                        rs.is_encrypt,
-                                        self.node_context.cipher.is_some()
-                                    ),
-                                ),
+                                io::Error::other(format!(
+                                    "Inconsistent encryption status: data tag-{} current tag-{}",
+                                    rs.is_encrypt,
+                                    self.node_context.cipher.is_some()
+                                )),
                             ))));
                         }
                         if let Some(cipher) = self.node_context.cipher.as_ref() {
@@ -1195,14 +1189,11 @@ impl Tunnel {
             }
             ProtocolType::PunchConsultRequest => {
                 let punch_info = rmp_serde::from_slice::<PunchConsultInfo>(packet.payload())
-                    .map_err(|e| {
-                        io::Error::new(io::ErrorKind::Other, format!("RmpDecodeError: {e:?}"))
-                    })?;
+                    .map_err(|e| io::Error::other(format!("RmpDecodeError: {e:?}")))?;
                 log::debug!("PunchConsultRequest {:?}", punch_info);
                 let consult_info = self.node_context.gen_punch_info();
-                let data = rmp_serde::to_vec(&consult_info).map_err(|e| {
-                    io::Error::new(io::ErrorKind::Other, format!("RmpEncodeError: {e:?}"))
-                })?;
+                let data = rmp_serde::to_vec(&consult_info)
+                    .map_err(|e| io::Error::other(format!("RmpEncodeError: {e:?}")))?;
                 let mut send_packet = self
                     .tunnel_transmit
                     .allocate_send_packet_proto(ProtocolType::PunchConsultReply, data.len())?;
@@ -1216,9 +1207,7 @@ impl Tunnel {
             }
             ProtocolType::PunchConsultReply => {
                 let punch_info = rmp_serde::from_slice::<PunchConsultInfo>(packet.payload())
-                    .map_err(|e| {
-                        io::Error::new(io::ErrorKind::Other, format!("RmpDecodeError: {e:?}"))
-                    })?;
+                    .map_err(|e| io::Error::other(format!("RmpDecodeError: {e:?}")))?;
                 log::debug!("PunchConsultReply {:?}", punch_info);
 
                 if self
@@ -1584,7 +1573,7 @@ fn tag(src_id: &NodeID, dest_id: &NodeID) -> [u8; 12] {
 fn now() -> io::Result<u32> {
     let time = std::time::SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_err(|_e| io::Error::new(io::ErrorKind::Other, "system time error"))?
+        .map_err(|_e| io::Error::other("system time error"))?
         .as_millis() as u32;
     Ok(time)
 }

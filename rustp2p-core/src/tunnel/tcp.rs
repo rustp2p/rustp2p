@@ -70,7 +70,7 @@ impl TcpTunnelDispatcher {
         tokio::select! {
             rs=self.connect_receiver.recv()=>{
                 let (route_key,read_half,sender) = rs.
-                    map_err(|_| io::Error::new(io::ErrorKind::Other,"connect_receiver done"))?;
+                    map_err(|_| io::Error::other("connect_receiver done"))?;
                 let local_addr = read_half.read_half.local_addr()?;
                 Ok(TcpTunnel::new(local_addr,self.route_idle_time,route_key,read_half,sender))
             },
@@ -382,9 +382,9 @@ impl WriteHalfCollect {
     ) -> io::Result<Sender<BytesMut>> {
         match route_key.index() {
             Index::Tcp(index) => {
-                let sender = self.get_write_half(&index).ok_or_else(|| {
-                    io::Error::new(io::ErrorKind::Other, format!("not found {route_key:?}"))
-                })?;
+                let sender = self
+                    .get_write_half(&index)
+                    .ok_or_else(|| io::Error::other(format!("not found {route_key:?}")))?;
                 Ok(sender)
             }
             _ => Err(io::Error::from(io::ErrorKind::InvalidInput)),

@@ -35,10 +35,7 @@ pub async fn dns_query_txt(
     if let Some(e) = err {
         Err(e)
     } else {
-        Err(io::Error::new(
-            io::ErrorKind::Other,
-            format!("DNS query failed {:?}", domain),
-        ))
+        Err(io::Error::other(format!("DNS query failed {:?}", domain)))
     }
 }
 pub async fn dns_query_all(
@@ -52,24 +49,18 @@ pub async fn dns_query_all(
             if name_servers.is_empty() {
                 return Ok(domain
                     .to_socket_addrs()
-                    .map_err(|_| {
-                        io::Error::new(
-                            io::ErrorKind::Other,
-                            format!("DNS query failed: {:?}", domain),
-                        )
-                    })?
+                    .map_err(|_| io::Error::other(format!("DNS query failed: {:?}", domain)))?
                     .collect());
             }
 
             let mut err: Option<io::Error> = None;
             for name_server in name_servers {
-                let end_index = domain.rfind(':').ok_or_else(|| {
-                    io::Error::new(io::ErrorKind::Other, format!("not port: {:?}", domain))
-                })?;
+                let end_index = domain
+                    .rfind(':')
+                    .ok_or_else(|| io::Error::other(format!("not port: {:?}", domain)))?;
                 let host = &domain[..end_index];
-                let port = u16::from_str(&domain[end_index + 1..]).map_err(|_| {
-                    io::Error::new(io::ErrorKind::Other, format!("not port: {:?}", domain))
-                })?;
+                let port = u16::from_str(&domain[end_index + 1..])
+                    .map_err(|_| io::Error::other(format!("not port: {:?}", domain)))?;
                 let th1 = {
                     let host = host.to_string();
                     let name_server = name_server.clone();
@@ -114,10 +105,7 @@ pub async fn dns_query_all(
             if let Some(e) = err {
                 Err(e)
             } else {
-                Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("DNS query failed {:?}", domain),
-                ))
+                Err(io::Error::other(format!("DNS query failed {:?}", domain)))
             }
         }
     }
@@ -148,37 +136,31 @@ async fn query<'a>(
                 if count < 3 {
                     continue;
                 }
-                Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("DNS {:?} recv error ", name_server),
-                ))?
+                Err(io::Error::other(format!(
+                    "DNS {:?} recv error ",
+                    name_server
+                )))?
             }
         };
     };
 
     let pkt = Packet::parse(&buf[..len]).map_err(|e| {
-        io::Error::new(
-            io::ErrorKind::Other,
-            format!("domain {:?} DNS {:?} data error: {e}", domain, name_server),
-        )
+        io::Error::other(format!(
+            "domain {:?} DNS {:?} data error: {e}",
+            domain, name_server
+        ))
     })?;
     if pkt.header.response_code != ResponseCode::NoError {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            format!(
-                "response_code {} DNS {:?} domain {:?}",
-                pkt.header.response_code, name_server, domain
-            ),
-        ));
+        return Err(io::Error::other(format!(
+            "response_code {} DNS {:?} domain {:?}",
+            pkt.header.response_code, name_server, domain
+        )));
     }
     if pkt.answers.is_empty() {
-        return Err(io::Error::new(
-            io::ErrorKind::Other,
-            format!(
-                "No records received DNS {:?} domain {:?}",
-                name_server, domain
-            ),
-        ));
+        return Err(io::Error::other(format!(
+            "No records received DNS {:?} domain {:?}",
+            name_server, domain
+        )));
     }
 
     Ok(pkt)
@@ -189,12 +171,9 @@ pub async fn txt_dns(
     name_server: String,
     default_interface: &Option<LocalInterface>,
 ) -> io::Result<Vec<String>> {
-    let name_server: SocketAddr = name_server.parse().map_err(|e| {
-        io::Error::new(
-            io::ErrorKind::Other,
-            format!("dns {name_server} is error :{e:?}"),
-        )
-    })?;
+    let name_server: SocketAddr = name_server
+        .parse()
+        .map_err(|e| io::Error::other(format!("dns {name_server} is error :{e:?}")))?;
     let udp = bind_udp(name_server, default_interface)?;
     let mut buf = [0; 65536];
     let message = query(&udp, domain, name_server, QueryType::TXT, &mut buf).await?;
@@ -202,9 +181,8 @@ pub async fn txt_dns(
     for record in message.answers {
         if let RData::TXT(txt) = record.data {
             for x in txt.iter() {
-                let txt = std::str::from_utf8(x).map_err(|_| {
-                    io::Error::new(io::ErrorKind::Other, "record type txt is not string")
-                })?;
+                let txt = std::str::from_utf8(x)
+                    .map_err(|_| io::Error::other("record type txt is not string"))?;
                 rs.push(txt.to_string());
             }
         }
@@ -230,12 +208,9 @@ pub async fn a_dns(
     name_server: String,
     default_interface: Option<LocalInterface>,
 ) -> io::Result<Vec<Ipv4Addr>> {
-    let name_server: SocketAddr = name_server.parse().map_err(|e| {
-        io::Error::new(
-            io::ErrorKind::Other,
-            format!("dns {name_server} is error :{e:?}"),
-        )
-    })?;
+    let name_server: SocketAddr = name_server
+        .parse()
+        .map_err(|e| io::Error::other(format!("dns {name_server} is error :{e:?}")))?;
     let udp = bind_udp(name_server, &default_interface)?;
     let mut buf = [0; 65536];
     let message = query(&udp, &domain, name_server, QueryType::A, &mut buf).await?;
@@ -253,12 +228,9 @@ pub async fn aaaa_dns(
     name_server: String,
     default_interface: Option<LocalInterface>,
 ) -> io::Result<Vec<Ipv6Addr>> {
-    let name_server: SocketAddr = name_server.parse().map_err(|e| {
-        io::Error::new(
-            io::ErrorKind::Other,
-            format!("dns {name_server} is error :{e:?}"),
-        )
-    })?;
+    let name_server: SocketAddr = name_server
+        .parse()
+        .map_err(|e| io::Error::other(format!("dns {name_server} is error :{e:?}")))?;
     let udp = bind_udp(name_server, &default_interface)?;
     let mut buf = [0; 65536];
     let message = query(&udp, &domain, name_server, QueryType::AAAA, &mut buf).await?;
