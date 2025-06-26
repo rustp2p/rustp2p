@@ -20,7 +20,7 @@ impl<PeerID: Hash + Eq + Clone> IdleRouteManager<PeerID> {
     pub async fn next_idle(&self) -> (PeerID, Route, Instant) {
         loop {
             let time = if let Some((peer_id, route, instant)) = self.route_table.oldest_route() {
-                let time = Instant::now() - instant;
+                let time = Instant::now().saturating_duration_since(instant);
                 if time > self.read_idle {
                     return (peer_id, route, instant);
                 }
@@ -28,7 +28,7 @@ impl<PeerID: Hash + Eq + Clone> IdleRouteManager<PeerID> {
             } else {
                 self.read_idle
             };
-            tokio::time::sleep(time).await;
+            tokio::time::sleep(time.max(Duration::from_millis(1))).await;
         }
     }
     pub fn delay(&self, peer_id: &PeerID, route_key: &RouteKey) -> bool {

@@ -247,7 +247,7 @@ impl Puncher {
         // kcp flag
         punch_udp_buf[0] = 0x02;
         if rust_p2p_core::stun::is_stun_response(&punch_udp_buf) {
-            return Err(io::Error::new(io::ErrorKind::Other, "kcp_conv error"));
+            return Err(io::Error::other("kcp_conv error"));
         }
         if !self.puncher.need_punch(&punch_info) {
             return Ok(());

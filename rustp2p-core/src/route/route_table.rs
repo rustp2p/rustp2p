@@ -114,30 +114,15 @@ impl<PeerID: Hash + Eq> RouteTable<PeerID> {
     pub fn get_route_by_id(&self, id: &PeerID) -> io::Result<Route> {
         if let Some(entry) = self.route_table.get(id) {
             let (count, routes) = entry.value();
-            if LoadBalance::LowestLatency == self.load_balance {
+            if LoadBalance::RoundRobin != self.load_balance {
                 if let Some((route, _)) = routes.first() {
                     return Ok(*route);
                 }
             } else {
                 let len = routes.len();
                 if len != 0 {
-                    let index = if LoadBalance::RoundRobin == self.load_balance {
-                        count.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % len
-                    } else {
-                        0
-                    };
+                    let index = count.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % len;
                     return Ok(routes[index].0);
-                    // let route = &routes[index].0;
-                    // // 尝试跳过默认rt的路由(一般是刚加入的)，这有助于提升稳定性
-                    // if route.rtt != DEFAULT_RTT {
-                    //     return Ok(*route);
-                    // }
-                    // for (route, _) in routes {
-                    //     if route.rtt != DEFAULT_RTT {
-                    //         return Ok(*route);
-                    //     }
-                    // }
-                    // return Ok(routes[0].0);
                 }
             }
         }

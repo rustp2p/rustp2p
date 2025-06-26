@@ -917,10 +917,7 @@ impl UdpTunnel {
         addrs: &mut [RouteKey],
     ) -> Option<io::Result<usize>> {
         if bufs.is_empty() || bufs.len() != sizes.len() || bufs.len() != addrs.len() {
-            return Some(Err(io::Error::new(
-                io::ErrorKind::Other,
-                "bufs/sizes/addrs error",
-            )));
+            return Some(Err(io::Error::other("bufs/sizes/addrs error")));
         }
         let udp = self.udp.as_ref()?;
         let fd = udp.as_raw_fd();
@@ -984,6 +981,9 @@ fn recvmmsg<B: AsMut<[u8]>>(
         return Err(io::Error::last_os_error());
     }
     let nmsgs = res as usize;
+    if nmsgs == 0 {
+        return Err(io::Error::from(io::ErrorKind::UnexpectedEof));
+    }
     for i in 0..nmsgs {
         let addr = sockaddr_to_socket_addr(&addrs[i], msgs[i].msg_hdr.msg_namelen);
         sizes[i] = msgs[i].msg_len as usize;
