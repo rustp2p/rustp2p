@@ -1,6 +1,6 @@
 [package]
 name = "rustp2p"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2021"
 license = "Apache-2.0"
 readme = "README.md"
@@ -58,7 +58,6 @@ members = [
 
 [workspace.dependencies]
 rust-p2p-core = { path = "rustp2p-core", version = "0.3" }
-rustp2p-reliable = { path = "rustp2p-reliable", version = "0.1" }
 tachyonix = "0.3"
 thiserror = "2"
 tokio = { version = "1.42", features = ["full"] }
@@ -70,7 +69,7 @@ dashmap = "6.1"
 rand = "0.9"
 crossbeam-utils = "0.8"
 crossbeam-queue = "0.3"
-kcp = "0.5.3"
+kcp = "0.6.0"
 tokio-util = "0.7"
 flume = { version = "0.11.1", features = ["async"] }
 async-shutdown = "0.2"
