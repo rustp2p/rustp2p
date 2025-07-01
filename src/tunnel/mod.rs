@@ -607,7 +607,8 @@ impl TunnelRouter {
         send_packet.set_payload(buf);
         self.try_send_packet_to(send_packet, &dest.into())
     }
-    pub fn try_kcp_send_to<D: Into<NodeID>>(&self, buf: &[u8], dest: D) -> io::Result<()> {
+    #[allow(dead_code)]
+    pub(crate) fn try_kcp_send_to<D: Into<NodeID>>(&self, buf: &[u8], dest: D) -> io::Result<()> {
         let mut send_packet = self.allocate_send_packet();
         send_packet.set_payload(buf);
         send_packet.set_protocol(ProtocolType::KcpData);
