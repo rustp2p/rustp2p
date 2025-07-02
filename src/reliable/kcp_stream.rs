@@ -4,6 +4,7 @@ use bytes::{Buf, BytesMut};
 use kcp::Kcp;
 use parking_lot::{Mutex, RwLock};
 use std::collections::HashMap;
+use std::future::Future;
 use std::io;
 use std::io::{Error, Write};
 use std::pin::Pin;
@@ -135,15 +136,23 @@ impl KcpContext {
 impl KcpListenerInner {
     async fn accept(&self) -> io::Result<(KcpStream, NodeID)> {
         loop {
-            let (node_id, bytes) = self
+            let (node_id, mut bytes) = self
                 .input_receiver
                 .recv_async()
                 .await
                 .map_err(|_| io::Error::from(io::ErrorKind::Other))?;
-            if bytes.is_empty() {
+            if bytes.len() < 24 {
                 continue;
             }
             let conv = kcp::get_conv(&bytes);
+            let sn = kcp::get_sn(&bytes);
+            if sn != 0 {
+                //reset
+                bytes.truncate(24);
+                bytes[5] = 1;
+                _ = self.output.try_kcp_send_to(&bytes, node_id);
+                continue;
+            }
             match self.new_stream_impl(node_id, conv) {
                 Ok(stream) => {
                     self.send_data_to_kcp(node_id, conv, bytes).await?;
@@ -321,10 +330,10 @@ impl KcpStream {
             KcpOutput {
                 node_id,
                 sender: output_sender,
+                send_fut: None,
             },
         );
-        kcp.set_wndsize(128, 128);
-        kcp.set_wndsize(128, 128);
+        kcp.set_wndsize(1024, 1024);
         kcp.set_nodelay(true, 10, 2, true);
         let (data_in_sender, data_in_receiver) = tokio::sync::mpsc::channel(128);
         let (data_out_sender, data_out_receiver) = tokio::sync::mpsc::channel(128);
@@ -360,10 +369,12 @@ async fn kcp_run(
     data_in_sender: Sender<BytesMut>,
 ) -> io::Result<()> {
     let mut interval = tokio::time::interval(Duration::from_millis(10));
-    let mut buf = [0; 65536];
+    let mut buf = vec![0; 65536];
     let mut input_data = Option::<BytesMut>::None;
-
-    loop {
+    'out: loop {
+        if kcp.is_dead_link() {
+            break;
+        }
         let event = if kcp.wait_snd() >= kcp.snd_wnd() as usize {
             input_event(&mut input, &mut interval).await?
         } else if input_data.is_some() {
@@ -388,20 +399,22 @@ async fn kcp_run(
             }
             Event::Output(buf) => {
                 kcp.send(&buf).map_err(|e| Error::other(e))?;
+                _ = kcp.async_flush().await;
             }
             Event::Timeout => {
                 let now = std::time::SystemTime::now();
                 let millis = now
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default();
-                kcp.update(millis.as_millis() as _)
+                kcp.async_update(millis.as_millis() as _)
+                    .await
                     .map_err(|e| Error::other(e))?;
             }
         }
 
-        if let Ok(len) = kcp.recv(&mut buf) {
+        while let Ok(len) = kcp.recv(&mut buf) {
             if data_in_sender.send(buf[..len].into()).await.is_err() {
-                break;
+                break 'out;
             }
         }
     }
@@ -461,13 +474,55 @@ enum Event {
 struct KcpOutput {
     node_id: NodeID,
     sender: TunnelRouter,
+    send_fut: Option<futures::future::BoxFuture<'static, io::Result<usize>>>,
+}
+
+impl AsyncWrite for KcpOutput {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<Result<usize, Error>> {
+        if self.send_fut.is_none() {
+            match self.sender.try_kcp_send_to(buf, self.node_id) {
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
+                _ => {
+                    return Poll::Ready(Ok(buf.len()));
+                }
+            }
+            let sender = self.sender.clone();
+            let data = buf.to_vec();
+            let node_id = self.node_id;
+            self.send_fut = Some(Box::pin(async move {
+                _ = sender.kcp_send_to(&data, node_id).await;
+                Ok(data.len())
+            }));
+        }
+
+        let fut = self.send_fut.as_mut().unwrap();
+        match Pin::new(fut).poll(cx) {
+            Poll::Ready(res) => {
+                self.send_fut = None;
+                match res {
+                    Ok(n) => Poll::Ready(Ok(n)),
+                    Err(e) => Poll::Ready(Err(e)),
+                }
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
+        Poll::Ready(Ok(()))
+    }
 }
 impl Write for KcpOutput {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        match self.sender.try_kcp_send_to(buf, self.node_id) {
-            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {}
-            rs => rs?,
-        }
+        _ = self.sender.try_kcp_send_to(buf, self.node_id);
         Ok(buf.len())
     }
 

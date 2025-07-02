@@ -296,6 +296,9 @@ impl TunnelRouter {
     pub fn lookup_route(&self, node_id: &NodeID) -> Option<Vec<Route>> {
         self.route_table.route(node_id)
     }
+    pub fn lookup_route_one(&self, node_id: &NodeID) -> Option<Route> {
+        self.route_table.route_one(node_id)
+    }
     pub fn nodes(&self) -> Vec<NodeID> {
         self.route_table.route_table_ids()
     }
@@ -613,6 +616,13 @@ impl TunnelRouter {
         send_packet.set_payload(buf);
         send_packet.set_protocol(ProtocolType::KcpData);
         self.try_send_packet_to(send_packet, &dest.into())
+    }
+    #[allow(dead_code)]
+    pub(crate) async fn kcp_send_to<D: Into<NodeID>>(&self, buf: &[u8], dest: D) -> io::Result<()> {
+        let mut send_packet = self.allocate_send_packet();
+        send_packet.set_payload(buf);
+        send_packet.set_protocol(ProtocolType::KcpData);
+        self.send_packet_to(send_packet, &dest.into()).await
     }
     pub(crate) async fn send_packet_to(
         &self,

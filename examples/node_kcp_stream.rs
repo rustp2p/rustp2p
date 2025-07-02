@@ -1,11 +1,12 @@
 use clap::Parser;
 use env_logger::Env;
+use futures::{SinkExt, StreamExt};
 use rustp2p::node_id::NodeID;
 use rustp2p::Builder;
 use rustp2p::PeerNodeAddress;
 use std::io;
 use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio_util::codec::{Framed, FramedRead, FramedWrite, LengthDelimitedCodec};
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -57,12 +58,15 @@ pub async fn main() -> io::Result<()> {
 
     if let Some(request) = request {
         let client_kcp_stream = endpoint.open_kcp_stream(NodeID::from(request))?;
-        let (mut write, mut read) = client_kcp_stream.split();
+        let (write, read) = client_kcp_stream.split();
+        let mut framed_write = FramedWrite::new(write, LengthDelimitedCodec::new());
+
+        let mut framed_read = FramedRead::new(read, LengthDelimitedCodec::new());
+
         tokio::spawn(async move {
-            let mut buf = [0; 1024];
             loop {
-                let len = read.read(&mut buf).await.unwrap();
-                log::info!("Echo,message={:?}", String::from_utf8(buf[..len].into()));
+                let buf = framed_read.next().await.unwrap().unwrap();
+                log::info!("Echo,message={:?}", std::str::from_utf8(&buf));
             }
         });
         use tokio::io::{AsyncBufReadExt, BufReader};
@@ -72,31 +76,27 @@ pub async fn main() -> io::Result<()> {
             if line.trim() == "exit" {
                 break;
             }
-            write.write_all(line.as_bytes()).await?;
+            framed_write.send(line.as_bytes().to_vec().into()).await?;
         }
     } else {
         tokio::spawn(async move {
-            while let Ok((mut stream, remote_id)) = kcp_listener.accept().await {
+            while let Ok((stream, remote_id)) = kcp_listener.accept().await {
                 let remote_id: u32 = remote_id.into();
+                let mut framed = Framed::new(stream, LengthDelimitedCodec::new());
                 log::info!("=========== accept kcp_stream from {:?}", remote_id);
                 tokio::spawn(async move {
-                    let mut buf = [0; 1024];
                     loop {
                         let result =
-                            tokio::time::timeout(Duration::from_secs(100), stream.read(&mut buf))
-                                .await;
+                            tokio::time::timeout(Duration::from_secs(100), framed.next()).await;
                         match result {
-                            Ok(Ok(len)) => {
-                                if len == 0 {
-                                    break;
-                                }
+                            Ok(Some(Ok(buf))) => {
                                 log::info!(
                                     "read remote_id={remote_id:?},message={:?}",
-                                    String::from_utf8(buf[..len].into())
+                                    std::str::from_utf8(&buf)
                                 );
-                                stream.write_all(&buf[..len]).await.unwrap();
+                                framed.send(buf.freeze()).await.unwrap();
                             }
-                            Ok(Err(e)) => {
+                            Ok(e) => {
                                 log::info!("read remote_id={remote_id:?},error={e:?}",);
                                 break;
                             }
