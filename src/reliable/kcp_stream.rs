@@ -1,4 +1,5 @@
 use crate::protocol::node_id::NodeID;
+use crate::protocol::protocol_type::ProtocolType;
 use crate::tunnel::TunnelRouter;
 use bytes::{Buf, BytesMut};
 use kcp::Kcp;
@@ -6,7 +7,7 @@ use parking_lot::{Mutex, RwLock};
 use std::collections::HashMap;
 use std::future::Future;
 use std::io;
-use std::io::{Error, Write};
+use std::io::Error;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Weak};
@@ -491,11 +492,14 @@ impl AsyncWrite for KcpOutput {
                 }
             }
             let sender = self.sender.clone();
-            let data = buf.to_vec();
             let node_id = self.node_id;
+            let mut send_packet = sender.allocate_send_packet();
+            send_packet.set_payload(buf);
+            send_packet.set_protocol(ProtocolType::KcpData);
+            let len = buf.len();
             self.send_fut = Some(Box::pin(async move {
-                _ = sender.kcp_send_to(&data, node_id).await;
-                Ok(data.len())
+                _ = sender.send_packet_to(send_packet, &node_id).await;
+                Ok(len)
             }));
         }
 
@@ -518,15 +522,5 @@ impl AsyncWrite for KcpOutput {
 
     fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
         Poll::Ready(Ok(()))
-    }
-}
-impl Write for KcpOutput {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        _ = self.sender.try_kcp_send_to(buf, self.node_id);
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
     }
 }
