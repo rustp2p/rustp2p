@@ -372,11 +372,12 @@ async fn kcp_run(
     let mut interval = tokio::time::interval(Duration::from_millis(10));
     let mut buf = vec![0; 65536];
     let mut input_data = Option::<BytesMut>::None;
+    let mut output_data = Option::<BytesMut>::None;
     'out: loop {
         if kcp.is_dead_link() {
             break;
         }
-        let event = if kcp.wait_snd() >= kcp.snd_wnd() as usize {
+        let event = if output_data.is_some() {
             input_event(&mut input, &mut interval).await?
         } else if input_data.is_some() {
             output_event(&mut data_out_receiver, &mut interval).await?
@@ -390,6 +391,13 @@ async fn kcp_run(
                 input_data.replace(buf);
             }
         }
+        if let Some(mut buf) = output_data.take() {
+            let len = kcp.send(&buf).map_err(|e| Error::other(e))?;
+            if len < buf.len() {
+                buf.advance(len);
+                output_data.replace(buf);
+            }
+        }
         match event {
             Event::Input(mut buf) => {
                 let len = kcp.input(&buf).map_err(|e| Error::other(e))?;
@@ -398,8 +406,12 @@ async fn kcp_run(
                     input_data.replace(buf);
                 }
             }
-            Event::Output(buf) => {
-                kcp.send(&buf).map_err(|e| Error::other(e))?;
+            Event::Output(mut buf) => {
+                let len = kcp.send(&buf).map_err(|e| Error::other(e))?;
+                if len < buf.len() {
+                    buf.advance(len);
+                    output_data.replace(buf);
+                }
                 _ = kcp.async_flush().await;
             }
             Event::Timeout => {
