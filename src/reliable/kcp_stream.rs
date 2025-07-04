@@ -334,7 +334,7 @@ impl KcpStream {
                 send_fut: None,
             },
         );
-        kcp.set_wndsize(1024, 1024);
+        kcp.set_wndsize(128, 128);
         kcp.set_nodelay(true, 10, 2, true);
         let (data_in_sender, data_in_receiver) = tokio::sync::mpsc::channel(128);
         let (data_out_sender, data_out_receiver) = tokio::sync::mpsc::channel(128);
@@ -377,7 +377,7 @@ async fn kcp_run(
         if kcp.is_dead_link() {
             break;
         }
-        let event = if output_data.is_some() {
+        let event = if kcp.wait_snd() >= kcp.snd_wnd() as usize || output_data.is_some() {
             input_event(&mut input, &mut interval).await?
         } else if input_data.is_some() {
             output_event(&mut data_out_receiver, &mut interval).await?
