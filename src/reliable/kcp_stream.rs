@@ -371,47 +371,22 @@ async fn kcp_run(
 ) -> io::Result<()> {
     let mut interval = tokio::time::interval(Duration::from_millis(10));
     let mut buf = vec![0; 65536];
-    let mut input_data = Option::<BytesMut>::None;
-    let mut output_data = Option::<BytesMut>::None;
     'out: loop {
         if kcp.is_dead_link() {
             break;
         }
-        let event = if kcp.wait_snd() >= kcp.snd_wnd() as usize || output_data.is_some() {
+        let event = if kcp.wait_snd() >= kcp.snd_wnd() as usize {
             input_event(&mut input, &mut interval).await?
-        } else if input_data.is_some() {
-            output_event(&mut data_out_receiver, &mut interval).await?
         } else {
             all_event(&mut input, &mut data_out_receiver, &mut interval).await?
         };
-        if let Some(mut buf) = input_data.take() {
-            let len = kcp.input(&buf).map_err(|e| Error::other(e))?;
-            if len < buf.len() {
-                buf.advance(len);
-                input_data.replace(buf);
-            }
-        }
-        if let Some(mut buf) = output_data.take() {
-            let len = kcp.send(&buf).map_err(|e| Error::other(e))?;
-            if len < buf.len() {
-                buf.advance(len);
-                output_data.replace(buf);
-            }
-        }
+
         match event {
-            Event::Input(mut buf) => {
-                let len = kcp.input(&buf).map_err(|e| Error::other(e))?;
-                if len < buf.len() {
-                    buf.advance(len);
-                    input_data.replace(buf);
-                }
+            Event::Input(buf) => {
+                _ = kcp.input(&buf).map_err(|e| Error::other(e))?;
             }
-            Event::Output(mut buf) => {
-                let len = kcp.send(&buf).map_err(|e| Error::other(e))?;
-                if len < buf.len() {
-                    buf.advance(len);
-                    output_data.replace(buf);
-                }
+            Event::Output(buf) => {
+                _ = kcp.send(&buf).map_err(|e| Error::other(e))?;
                 _ = kcp.async_flush().await;
             }
             Event::Timeout => {
@@ -457,20 +432,6 @@ async fn input_event(input: &mut Receiver<BytesMut>, interval: &mut Interval) ->
         rs=input.recv()=>{
             let buf = rs.ok_or(Error::other("input close"))?;
             Ok(Event::Input(buf))
-        }
-        _=interval.tick()=>{
-            Ok(Event::Timeout)
-        }
-    }
-}
-async fn output_event(
-    data_out_receiver: &mut Receiver<BytesMut>,
-    interval: &mut Interval,
-) -> io::Result<Event> {
-    tokio::select! {
-        rs=data_out_receiver.recv()=>{
-            let buf = rs.ok_or(Error::other( "output close"))?;
-            Ok(Event::Output(buf))
         }
         _=interval.tick()=>{
             Ok(Event::Timeout)
