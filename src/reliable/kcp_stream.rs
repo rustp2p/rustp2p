@@ -375,7 +375,6 @@ async fn kcp_run(
 ) -> io::Result<()> {
     let mut interval = tokio::time::interval(Duration::from_millis(10));
     let mut buf = vec![0; 65536];
-    kcp.set_maximum_resend_times(5);
     'out: loop {
         if kcp.is_dead_link() {
             break;
