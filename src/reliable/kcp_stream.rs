@@ -78,7 +78,7 @@ impl Counter {
 }
 impl KcpContext {
     pub(crate) async fn input(&self, buf: &[u8], node_id: NodeID) {
-        if buf.is_empty() {
+        if buf.len() < 24 {
             return;
         }
         let conv = kcp::get_conv(buf);
@@ -145,12 +145,16 @@ impl KcpListenerInner {
             if bytes.len() < 24 {
                 continue;
             }
+            if bytes[4] == 1 {
+                continue;
+            }
             let conv = kcp::get_conv(&bytes);
             let sn = kcp::get_sn(&bytes);
             if sn != 0 {
                 //reset
                 bytes.truncate(24);
-                bytes[5] = 1;
+                bytes[4] = 1;
+                bytes[20..24].fill(0);
                 _ = self.output.try_kcp_send_to(&bytes, node_id);
                 continue;
             }
@@ -335,7 +339,7 @@ impl KcpStream {
             },
         );
         kcp.set_wndsize(128, 128);
-        kcp.set_nodelay(true, 10, 2, true);
+        kcp.set_nodelay(true, 10, 2, false);
         let (data_in_sender, data_in_receiver) = tokio::sync::mpsc::channel(128);
         let (data_out_sender, data_out_receiver) = tokio::sync::mpsc::channel(128);
         tokio::spawn(async move {
@@ -371,6 +375,7 @@ async fn kcp_run(
 ) -> io::Result<()> {
     let mut interval = tokio::time::interval(Duration::from_millis(10));
     let mut buf = vec![0; 65536];
+    kcp.set_maximum_resend_times(5);
     'out: loop {
         if kcp.is_dead_link() {
             break;
