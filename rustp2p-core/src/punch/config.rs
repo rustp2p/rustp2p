@@ -76,6 +76,7 @@ impl ops::BitAnd<PunchPolicySet> for PunchPolicySet {
 
     fn bitand(self, rhs: PunchPolicySet) -> Self::Output {
         let mut boxes = PunchModel::empty();
+        boxes.and(self);
         boxes.and(rhs);
         boxes
     }

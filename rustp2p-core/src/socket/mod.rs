@@ -69,9 +69,11 @@ pub(crate) fn create_tcp0(
         socket.set_ip_unicast_if(default_interface.unwrap())?;
     }
     if bind_port != 0 {
-        socket.set_reuse_address(true)?;
+        _ = socket.set_reuse_address(true);
         #[cfg(unix)]
-        socket.set_reuse_port(true)?;
+        {
+            _ = socket.set_reuse_port(true);
+        }
         if v4 {
             let addr: SocketAddr = format!("0.0.0.0:{}", bind_port).parse().unwrap();
             socket.bind(&addr.into())?;
@@ -82,7 +84,7 @@ pub(crate) fn create_tcp0(
         }
     }
     if let Some(ttl) = ttl {
-        socket.set_ttl(ttl as _)?;
+        _ = socket.set_ttl(ttl as _);
     }
     socket.set_nonblocking(true)?;
     socket.set_nodelay(true)?;

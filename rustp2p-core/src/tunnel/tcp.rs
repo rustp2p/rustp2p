@@ -440,7 +440,7 @@ impl WriteHalfCollect {
 }
 
 pub struct TcpSocketManager {
-    lock: Mutex<()>,
+    lock: DashMap<SocketAddr, Arc<Mutex<()>>>,
     local_addr: SocketAddr,
     tcp_multiplexing_limit: usize,
     write_half_collect: WriteHalfCollect,
@@ -495,7 +495,13 @@ impl TcpSocketManager {
                 "index out of bounds",
             ));
         }
-        let _guard = self.lock.lock().await;
+        let lock = self
+            .lock
+            .entry(addr)
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .value()
+            .clone();
+        let _guard = lock.lock().await;
         if let Some(route_key) = self
             .write_half_collect
             .get_limit_route_key(index_offset, &addr)
@@ -506,14 +512,26 @@ impl TcpSocketManager {
     }
     /// Initiate a connection.
     pub async fn connect(&self, addr: SocketAddr) -> io::Result<RouteKey> {
-        let _guard = self.lock.lock().await;
+        let lock = self
+            .lock
+            .entry(addr)
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .value()
+            .clone();
+        let _guard = lock.lock().await;
         if let Some(route_key) = self.write_half_collect.get_one_route_key(&addr) {
             return Ok(route_key);
         }
         self.connect_impl(0, addr, 0, None).await
     }
     pub async fn connect_ttl(&self, addr: SocketAddr, ttl: Option<u8>) -> io::Result<RouteKey> {
-        let _guard = self.lock.lock().await;
+        let lock = self
+            .lock
+            .entry(addr)
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .value()
+            .clone();
+        let _guard = lock.lock().await;
         if let Some(route_key) = self.write_half_collect.get_one_route_key(&addr) {
             return Ok(route_key);
         }
@@ -521,7 +539,13 @@ impl TcpSocketManager {
     }
     /// Reuse the bound port to initiate a connection, which can be used to penetrate NAT1 network type.
     pub async fn connect_reuse_port(&self, addr: SocketAddr) -> io::Result<RouteKey> {
-        let _guard = self.lock.lock().await;
+        let lock = self
+            .lock
+            .entry(addr)
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .value()
+            .clone();
+        let _guard = lock.lock().await;
         if let Some(route_key) = self.write_half_collect.get_one_route_key(&addr) {
             return Ok(route_key);
         }
