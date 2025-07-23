@@ -35,7 +35,7 @@ pub async fn dns_query_txt(
     if let Some(e) = err {
         Err(e)
     } else {
-        Err(io::Error::other(format!("DNS query failed {:?}", domain)))
+        Err(io::Error::other(format!("DNS query failed {domain:?}")))
     }
 }
 pub async fn dns_query_all(
@@ -49,7 +49,7 @@ pub async fn dns_query_all(
             if name_servers.is_empty() {
                 return Ok(domain
                     .to_socket_addrs()
-                    .map_err(|_| io::Error::other(format!("DNS query failed: {:?}", domain)))?
+                    .map_err(|_| io::Error::other(format!("DNS query failed: {domain:?}")))?
                     .collect());
             }
 
@@ -57,10 +57,10 @@ pub async fn dns_query_all(
             for name_server in name_servers {
                 let end_index = domain
                     .rfind(':')
-                    .ok_or_else(|| io::Error::other(format!("not port: {:?}", domain)))?;
+                    .ok_or_else(|| io::Error::other(format!("not port: {domain:?}")))?;
                 let host = &domain[..end_index];
                 let port = u16::from_str(&domain[end_index + 1..])
-                    .map_err(|_| io::Error::other(format!("not port: {:?}", domain)))?;
+                    .map_err(|_| io::Error::other(format!("not port: {domain:?}")))?;
                 let th1 = {
                     let host = host.to_string();
                     let name_server = name_server.clone();
@@ -105,7 +105,7 @@ pub async fn dns_query_all(
             if let Some(e) = err {
                 Err(e)
             } else {
-                Err(io::Error::other(format!("DNS query failed {:?}", domain)))
+                Err(io::Error::other(format!("DNS query failed {domain:?}")))
             }
         }
     }
@@ -137,8 +137,7 @@ async fn query<'a>(
                     continue;
                 }
                 Err(io::Error::other(format!(
-                    "DNS {:?} recv error ",
-                    name_server
+                    "DNS {name_server:?} recv error "
                 )))?
             }
         };
@@ -146,8 +145,7 @@ async fn query<'a>(
 
     let pkt = Packet::parse(&buf[..len]).map_err(|e| {
         io::Error::other(format!(
-            "domain {:?} DNS {:?} data error: {e}",
-            domain, name_server
+            "domain {domain:?} DNS {name_server:?} data error: {e}"
         ))
     })?;
     if pkt.header.response_code != ResponseCode::NoError {
@@ -158,8 +156,7 @@ async fn query<'a>(
     }
     if pkt.answers.is_empty() {
         return Err(io::Error::other(format!(
-            "No records received DNS {:?} domain {:?}",
-            name_server, domain
+            "No records received DNS {name_server:?} domain {domain:?}"
         )));
     }
 

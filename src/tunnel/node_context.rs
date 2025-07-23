@@ -376,6 +376,6 @@ impl Display for PeerNodeAddress {
                 format!("txt://{addr}")
             }
         };
-        write!(f, "{}", str)
+        write!(f, "{str}")
     }
 }

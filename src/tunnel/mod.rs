@@ -1206,7 +1206,7 @@ impl Tunnel {
             ProtocolType::PunchConsultRequest => {
                 let punch_info = rmp_serde::from_slice::<PunchConsultInfo>(packet.payload())
                     .map_err(|e| io::Error::other(format!("RmpDecodeError: {e:?}")))?;
-                log::debug!("PunchConsultRequest {:?}", punch_info);
+                log::debug!("PunchConsultRequest {punch_info:?}");
                 let consult_info = self.node_context.gen_punch_info();
                 let data = rmp_serde::to_vec(&consult_info)
                     .map_err(|e| io::Error::other(format!("RmpEncodeError: {e:?}")))?;
@@ -1224,7 +1224,7 @@ impl Tunnel {
             ProtocolType::PunchConsultReply => {
                 let punch_info = rmp_serde::from_slice::<PunchConsultInfo>(packet.payload())
                     .map_err(|e| io::Error::other(format!("RmpDecodeError: {e:?}")))?;
-                log::debug!("PunchConsultReply {:?}", punch_info);
+                log::debug!("PunchConsultReply {punch_info:?}");
 
                 if self
                     .active_punch_sender

@@ -50,7 +50,7 @@ pub async fn punch_consult_loop(tunnel_tx: TunnelRouter) {
                 .await
                 .is_ok()
             {
-                log::debug!("punch_consult {:?}", node_id);
+                log::debug!("punch_consult {node_id:?}");
                 count += 1;
             }
             if count > 3 {

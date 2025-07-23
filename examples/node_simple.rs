@@ -54,7 +54,7 @@ pub async fn main() -> io::Result<()> {
         .await?;
     if let Some(request) = request {
         tokio::time::sleep(Duration::from_secs(3)).await;
-        log::info!("=========== send 'hello' to {}", request);
+        log::info!("=========== send 'hello' to {request}");
         endpoint.send_to(b"hello", NodeID::from(request)).await?;
         tokio::time::sleep(Duration::from_secs(3)).await;
     } else {

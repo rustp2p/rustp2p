@@ -212,7 +212,7 @@ mod test {
         packet.set_src_id(&3.into());
         packet.set_dest_id(&2.into());
         packet.set_protocol(ProtocolType::IDRouteQuery);
-        println!("{:?}", packet);
+        println!("{packet:?}");
         assert_eq!(packet.max_ttl(), packet.ttl());
         assert_eq!(packet.max_ttl(), 2);
         assert_eq!(packet.dest_id(), &2_u32.to_be_bytes());

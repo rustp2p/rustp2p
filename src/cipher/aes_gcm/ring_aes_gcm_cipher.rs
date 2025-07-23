@@ -108,7 +108,7 @@ fn test_aes_gcm() {
     let src = [3; 100];
     let mut data = src;
     d.encrypt([0; 12], &mut data).unwrap();
-    println!("{:?}", data);
+    println!("{data:?}");
     let len = d.decrypt([0; 12], &mut data).unwrap();
     assert_eq!(&data[..len], &src[..len]);
 }
