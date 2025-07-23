@@ -32,7 +32,7 @@ pub async fn stun_test_nat(
                 }
             }
             Err(e) => {
-                log::warn!("{:?}", e);
+                log::warn!("{e:?}");
             }
         }
     }
@@ -56,7 +56,7 @@ pub(crate) async fn stun_test_nat0(
                 pub_addrs.extend(addr);
             }
             Err(e) => {
-                log::warn!("stun {} error {:?} ", x, e);
+                log::warn!("stun {x} error {e:?} ");
             }
         }
     }
@@ -102,16 +102,13 @@ async fn test_nat(udp: &UdpSocket, stun_server: &String) -> io::Result<HashSet<S
                     }
                 }
                 Err(e) => {
-                    log::warn!("stun {} error {:?} ", stun_server, e);
+                    log::warn!("stun {stun_server} error {e:?} ");
                 }
             }
         }
     }
     log::info!(
-        "stun {} mapped_addr {:?}  changed_addr {:?}",
-        stun_server,
-        addr,
-        changed_addr1,
+        "stun {stun_server} mapped_addr {addr:?}  changed_addr {changed_addr1:?}",
     );
 
     Ok(addr)
@@ -139,7 +136,7 @@ async fn test_nat_(
             match tokio::time::timeout(Duration::from_secs(3), udp.recv_from(&mut buf)).await {
                 Ok(rs) => rs?,
                 Err(e) => {
-                    log::warn!("stun {} error {:?}", stun_server, e);
+                    log::warn!("stun {stun_server} error {e:?}");
                     continue;
                 }
             };

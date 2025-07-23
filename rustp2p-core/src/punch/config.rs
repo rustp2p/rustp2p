@@ -147,8 +147,7 @@ impl FromStr for PunchPolicy {
             "ipv6-tcp" => Ok(PunchPolicy::IPv6Tcp),
             "ipv6-udp" => Ok(PunchPolicy::IPv6Udp),
             _ => Err(format!(
-                "not match '{}', enum: ipv4-tcp/ipv4-udp/ipv6-tcp/ipv6-udp",
-                s
+                "not match '{s}', enum: ipv4-tcp/ipv4-udp/ipv6-tcp/ipv6-udp"
             )),
         }
     }

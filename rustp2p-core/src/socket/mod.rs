@@ -75,11 +75,11 @@ pub(crate) fn create_tcp0(
             _ = socket.set_reuse_port(true);
         }
         if v4 {
-            let addr: SocketAddr = format!("0.0.0.0:{}", bind_port).parse().unwrap();
+            let addr: SocketAddr = format!("0.0.0.0:{bind_port}").parse().unwrap();
             socket.bind(&addr.into())?;
         } else {
             socket.set_only_v6(true)?;
-            let addr: SocketAddr = format!("[::]:{}", bind_port).parse().unwrap();
+            let addr: SocketAddr = format!("[::]:{bind_port}").parse().unwrap();
             socket.bind(&addr.into())?;
         }
     }
