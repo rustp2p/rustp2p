@@ -110,7 +110,7 @@ pub(crate) fn create_tcp_listener(addr: SocketAddr) -> io::Result<std::net::TcpL
     socket.set_reuse_address(true)?;
     #[cfg(unix)]
     if let Err(e) = socket.set_reuse_port(true) {
-        log::warn!("set_reuse_port {:?}", e)
+        log::warn!("set_reuse_port {e:?}")
     }
     socket.bind(&addr.into())?;
     socket.listen(128)?;
