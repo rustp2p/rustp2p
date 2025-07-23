@@ -136,9 +136,7 @@ async fn query<'a>(
                 if count < 3 {
                     continue;
                 }
-                Err(io::Error::other(format!(
-                    "DNS {name_server:?} recv error "
-                )))?
+                Err(io::Error::other(format!("DNS {name_server:?} recv error ")))?
             }
         };
     };
