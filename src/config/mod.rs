@@ -3,30 +3,34 @@ use std::io::IoSlice;
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use crate::pipe::{NodeAddress, PeerNodeAddress};
-use crate::protocol::node_id::{GroupCode, NodeID};
-use crate::protocol::{NetPacket, HEAD_LEN};
 use async_trait::async_trait;
 use bytes::{Buf, BytesMut};
-use rust_p2p_core::pipe::recycle::RecycleBuf;
-use rust_p2p_core::pipe::tcp_pipe::{Decoder, Encoder, InitCodec};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
+
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+use crate::protocol::node_id::{GroupCode, NodeID};
+use crate::protocol::{NetPacket, HEAD_LEN};
+use crate::tunnel::{NodeAddress, PeerNodeAddress, RecvResult};
+pub use rust_p2p_core::nat::*;
+pub use rust_p2p_core::punch::config::{PunchModel, PunchPolicy, PunchPolicySet};
+pub use rust_p2p_core::socket::LocalInterface;
+pub use rust_p2p_core::tunnel::config::LoadBalance;
+use rust_p2p_core::tunnel::recycle::RecycleBuf;
+use rust_p2p_core::tunnel::tcp::{Decoder, Encoder, InitCodec};
+pub use rust_p2p_core::tunnel::udp::Model;
 
 pub(crate) mod punch_info;
 
-pub use rust_p2p_core::pipe::udp_pipe::Model;
-pub use rust_p2p_core::socket::LocalInterface;
-
 pub(crate) const ROUTE_IDLE_TIME: Duration = Duration::from_secs(10);
 
-pub struct PipeConfig {
-    pub first_latency: bool,
-    pub multi_pipeline: usize,
+pub struct Config {
+    pub load_balance: LoadBalance,
+    pub major_socket_count: usize,
     pub route_idle_time: Duration,
-    pub udp_pipe_config: Option<UdpPipeConfig>,
-    pub tcp_pipe_config: Option<TcpPipeConfig>,
-    pub enable_extend: bool,
+    pub udp_tunnel_config: Option<UdpTunnelConfig>,
+    pub tcp_tunnel_config: Option<TcpTunnelConfig>,
     pub group_code: Option<GroupCode>,
     pub self_id: Option<NodeID>,
     pub direct_addrs: Option<Vec<PeerNodeAddress>>,
@@ -40,17 +44,24 @@ pub struct PipeConfig {
     pub mapping_addrs: Option<Vec<NodeAddress>>,
     pub dns: Option<Vec<String>>,
     pub recycle_buf_cap: usize,
-    pub encryption: Option<String>,
+    #[cfg(any(
+        feature = "aes-gcm-openssl",
+        feature = "aes-gcm-ring",
+        feature = "chacha20-poly1305-openssl",
+        feature = "chacha20-poly1305-ring"
+    ))]
+    pub encryption: Option<crate::cipher::Algorithm>,
+    pub default_interface: Option<LocalInterface>,
+    pub use_v6: bool,
 }
 
-impl Default for PipeConfig {
+impl Default for Config {
     fn default() -> Self {
         Self {
-            first_latency: false,
-            multi_pipeline: MULTI_PIPELINE,
-            enable_extend: false,
-            udp_pipe_config: Some(Default::default()),
-            tcp_pipe_config: Some(Default::default()),
+            load_balance: LoadBalance::MinHopLowestLatency,
+            major_socket_count: MAX_MAJOR_SOCKET_COUNT,
+            udp_tunnel_config: Some(Default::default()),
+            tcp_tunnel_config: Some(Default::default()),
             route_idle_time: ROUTE_IDLE_TIME,
             group_code: None,
             self_id: None,
@@ -76,42 +87,50 @@ impl Default for PipeConfig {
             mapping_addrs: None,
             dns: None,
             recycle_buf_cap: 64,
+            #[cfg(any(
+                feature = "aes-gcm-openssl",
+                feature = "aes-gcm-ring",
+                feature = "chacha20-poly1305-openssl",
+                feature = "chacha20-poly1305-ring"
+            ))]
             encryption: None,
+            default_interface: None,
+            use_v6: rust_p2p_core::tunnel::config::UdpTunnelConfig::default()
+                .set_use_v6(true)
+                .check()
+                .is_ok(),
         }
     }
 }
 
-pub(crate) const MULTI_PIPELINE: usize = 2;
-pub(crate) const UDP_SUB_PIPELINE_NUM: usize = 82;
+pub(crate) const MAX_MAJOR_SOCKET_COUNT: usize = 2;
+pub(crate) const MAX_UDP_SUB_SOCKET_COUNT: usize = 82;
 
-impl PipeConfig {
+impl Config {
     pub fn none_tcp(self) -> Self {
         self
     }
 }
 
-impl PipeConfig {
+impl Config {
     pub fn empty() -> Self {
         Self::default()
     }
-    pub fn set_first_latency(mut self, first_latency: bool) -> Self {
-        self.first_latency = first_latency;
+    pub fn set_load_balance(mut self, load_balance: LoadBalance) -> Self {
+        self.load_balance = load_balance;
         self
     }
-    pub fn set_main_pipeline_num(mut self, main_pipeline_num: usize) -> Self {
-        self.multi_pipeline = main_pipeline_num;
+    pub fn set_main_socket_count(mut self, count: usize) -> Self {
+        self.major_socket_count = count;
         self
     }
-    pub fn set_enable_extend(mut self, enable_extend: bool) -> Self {
-        self.enable_extend = enable_extend;
+
+    pub fn set_udp_tunnel_config(mut self, config: UdpTunnelConfig) -> Self {
+        self.udp_tunnel_config.replace(config);
         self
     }
-    pub fn set_udp_pipe_config(mut self, udp_pipe_config: UdpPipeConfig) -> Self {
-        self.udp_pipe_config.replace(udp_pipe_config);
-        self
-    }
-    pub fn set_tcp_pipe_config(mut self, tcp_pipe_config: TcpPipeConfig) -> Self {
-        self.tcp_pipe_config.replace(tcp_pipe_config);
+    pub fn set_tcp_tunnel_config(mut self, config: TcpTunnelConfig) -> Self {
+        self.tcp_tunnel_config.replace(config);
         self
     }
     pub fn set_group_code(mut self, group_code: GroupCode) -> Self {
@@ -154,6 +173,7 @@ impl PipeConfig {
         self.udp_stun_servers.replace(udp_stun_servers);
         self
     }
+    /// Other nodes will attempt to connect to the current node through this configuration
     pub fn set_mapping_addrs(mut self, mapping_addrs: Vec<NodeAddress>) -> Self {
         self.mapping_addrs.replace(mapping_addrs);
         self
@@ -166,33 +186,45 @@ impl PipeConfig {
         self.recycle_buf_cap = recycle_buf_cap;
         self
     }
-    pub fn set_encryption(mut self, encryption: String) -> Self {
+    #[cfg(any(
+        feature = "aes-gcm-openssl",
+        feature = "aes-gcm-ring",
+        feature = "chacha20-poly1305-openssl",
+        feature = "chacha20-poly1305-ring"
+    ))]
+    pub fn set_encryption(mut self, encryption: crate::cipher::Algorithm) -> Self {
         self.encryption.replace(encryption);
+        self
+    }
+    /// Bind to this network card
+    pub fn set_default_interface(mut self, default_interface: LocalInterface) -> Self {
+        self.default_interface = Some(default_interface.clone());
+        self
+    }
+    /// Whether to use IPv6
+    pub fn set_use_v6(mut self, use_v6: bool) -> Self {
+        self.use_v6 = use_v6;
         self
     }
 }
 
-pub struct TcpPipeConfig {
+pub struct TcpTunnelConfig {
     pub route_idle_time: Duration,
     pub tcp_multiplexing_limit: usize,
-    pub default_interface: Option<LocalInterface>,
     pub tcp_port: u16,
-    pub use_v6: bool,
 }
 
-impl Default for TcpPipeConfig {
+impl Default for TcpTunnelConfig {
     fn default() -> Self {
         Self {
             route_idle_time: ROUTE_IDLE_TIME,
-            tcp_multiplexing_limit: MULTI_PIPELINE,
-            default_interface: None,
+            tcp_multiplexing_limit: MAX_MAJOR_SOCKET_COUNT,
             tcp_port: 0,
-            use_v6: true,
         }
     }
 }
 
-impl TcpPipeConfig {
+impl TcpTunnelConfig {
     pub fn set_tcp_multiplexing_limit(mut self, tcp_multiplexing_limit: usize) -> Self {
         self.tcp_multiplexing_limit = tcp_multiplexing_limit;
         self
@@ -201,60 +233,45 @@ impl TcpPipeConfig {
         self.route_idle_time = route_idle_time;
         self
     }
-    pub fn set_default_interface(mut self, default_interface: LocalInterface) -> Self {
-        self.default_interface = Some(default_interface.clone());
-        self
-    }
     pub fn set_tcp_port(mut self, tcp_port: u16) -> Self {
         self.tcp_port = tcp_port;
-        self
-    }
-    pub fn set_use_v6(mut self, use_v6: bool) -> Self {
-        self.use_v6 = use_v6;
         self
     }
 }
 
 #[derive(Clone)]
-pub struct UdpPipeConfig {
-    pub main_pipeline_num: usize,
-    pub sub_pipeline_num: usize,
+pub struct UdpTunnelConfig {
+    pub main_socket_count: usize,
+    pub sub_socket_count: usize,
     pub model: Model,
-    pub default_interface: Option<LocalInterface>,
     pub udp_ports: Vec<u16>,
-    pub use_v6: bool,
 }
 
-impl Default for UdpPipeConfig {
+impl Default for UdpTunnelConfig {
     fn default() -> Self {
         Self {
-            main_pipeline_num: MULTI_PIPELINE,
-            sub_pipeline_num: UDP_SUB_PIPELINE_NUM,
+            main_socket_count: MAX_MAJOR_SOCKET_COUNT,
+            sub_socket_count: MAX_UDP_SUB_SOCKET_COUNT,
             model: Model::Low,
-            default_interface: None,
             udp_ports: vec![0, 0],
-            use_v6: true,
         }
     }
 }
 
-impl UdpPipeConfig {
-    pub fn set_main_pipeline_num(mut self, main_pipeline_num: usize) -> Self {
-        self.main_pipeline_num = main_pipeline_num;
+impl UdpTunnelConfig {
+    pub fn set_main_socket_count(mut self, count: usize) -> Self {
+        self.main_socket_count = count;
         self
     }
-    pub fn set_sub_pipeline_num(mut self, sub_pipeline_num: usize) -> Self {
-        self.sub_pipeline_num = sub_pipeline_num;
+    pub fn set_sub_socket_count(mut self, count: usize) -> Self {
+        self.sub_socket_count = count;
         self
     }
     pub fn set_model(mut self, model: Model) -> Self {
         self.model = model;
         self
     }
-    pub fn set_default_interface(mut self, default_interface: LocalInterface) -> Self {
-        self.default_interface = Some(default_interface.clone());
-        self
-    }
+
     pub fn set_udp_ports(mut self, udp_ports: Vec<u16>) -> Self {
         self.udp_ports = udp_ports;
         self
@@ -263,65 +280,66 @@ impl UdpPipeConfig {
         self.udp_ports = vec![udp_port];
         self
     }
-    pub fn set_use_v6(mut self, use_v6: bool) -> Self {
-        self.use_v6 = use_v6;
-        self
-    }
 }
 
-impl From<PipeConfig> for rust_p2p_core::pipe::config::PipeConfig {
-    fn from(value: PipeConfig) -> Self {
+impl From<Config> for rust_p2p_core::tunnel::config::TunnelConfig {
+    fn from(value: Config) -> Self {
         let recycle_buf = if value.recycle_buf_cap > 0 {
             Some(RecycleBuf::new(
                 value.recycle_buf_cap,
-                value.send_buffer_size..value.send_buffer_size + 1,
+                value.send_buffer_size..usize::MAX,
             ))
         } else {
             None
         };
-        let udp_pipe_config = value.udp_pipe_config.map(|v| {
-            let mut config: rust_p2p_core::pipe::config::UdpPipeConfig = v.into();
-            config.recycle_buf = recycle_buf.clone();
+        let udp_tunnel_config = value.udp_tunnel_config.map(|v| {
+            let mut config: rust_p2p_core::tunnel::config::UdpTunnelConfig = v.into();
+            config.recycle_buf.clone_from(&recycle_buf);
+            config.use_v6 = value.use_v6;
+            config
+                .default_interface
+                .clone_from(&value.default_interface);
             config
         });
-        let tcp_pipe_config = value.tcp_pipe_config.map(|v| {
-            let mut config: rust_p2p_core::pipe::config::TcpPipeConfig = v.into();
+        let tcp_tunnel_config = value.tcp_tunnel_config.map(|v| {
+            let mut config: rust_p2p_core::tunnel::config::TcpTunnelConfig = v.into();
             config.recycle_buf = recycle_buf;
+            config.use_v6 = value.use_v6;
+            config
+                .default_interface
+                .clone_from(&value.default_interface);
             config
         });
-        rust_p2p_core::pipe::config::PipeConfig {
-            first_latency: value.first_latency,
-            multi_pipeline: value.multi_pipeline,
-            route_idle_time: value.route_idle_time,
-            udp_pipe_config,
-            tcp_pipe_config,
-            enable_extend: value.enable_extend,
+        rust_p2p_core::tunnel::config::TunnelConfig {
+            major_socket_count: value.major_socket_count,
+            udp_tunnel_config,
+            tcp_tunnel_config,
         }
     }
 }
 
-impl From<UdpPipeConfig> for rust_p2p_core::pipe::config::UdpPipeConfig {
-    fn from(value: UdpPipeConfig) -> Self {
-        rust_p2p_core::pipe::config::UdpPipeConfig {
-            main_pipeline_num: value.main_pipeline_num,
-            sub_pipeline_num: value.sub_pipeline_num,
+impl From<UdpTunnelConfig> for rust_p2p_core::tunnel::config::UdpTunnelConfig {
+    fn from(value: UdpTunnelConfig) -> Self {
+        rust_p2p_core::tunnel::config::UdpTunnelConfig {
+            main_udp_count: value.main_socket_count,
+            sub_udp_count: value.sub_socket_count,
             model: value.model,
-            default_interface: value.default_interface,
+            default_interface: None,
             udp_ports: value.udp_ports,
-            use_v6: value.use_v6,
+            use_v6: false,
             recycle_buf: None,
         }
     }
 }
 
-impl From<TcpPipeConfig> for rust_p2p_core::pipe::config::TcpPipeConfig {
-    fn from(value: TcpPipeConfig) -> Self {
-        rust_p2p_core::pipe::config::TcpPipeConfig {
+impl From<TcpTunnelConfig> for rust_p2p_core::tunnel::config::TcpTunnelConfig {
+    fn from(value: TcpTunnelConfig) -> Self {
+        rust_p2p_core::tunnel::config::TcpTunnelConfig {
             route_idle_time: value.route_idle_time,
             tcp_multiplexing_limit: value.tcp_multiplexing_limit,
-            default_interface: value.default_interface,
+            default_interface: None,
             tcp_port: value.tcp_port,
-            use_v6: value.use_v6,
+            use_v6: false,
             init_codec: Box::new(LengthPrefixedInitCodec),
             recycle_buf: None,
         }
@@ -353,70 +371,108 @@ impl LengthPrefixedDecoder {
 impl Decoder for LengthPrefixedDecoder {
     async fn decode(&mut self, read: &mut OwnedReadHalf, src: &mut [u8]) -> io::Result<usize> {
         if src.len() < HEAD_LEN {
-            return Err(io::Error::new(io::ErrorKind::Other, "too short"));
+            return Err(io::Error::other("too short"));
         }
         let mut offset = 0;
         loop {
             if self.buf.is_empty() {
                 let len = read.read(&mut src[offset..]).await?;
+                if len == 0 {
+                    return Err(io::Error::from(io::ErrorKind::UnexpectedEof));
+                }
                 offset += len;
-                if offset < HEAD_LEN {
-                    continue;
+                if let Some(rs) = self.process_packet(src, offset) {
+                    return rs;
                 }
-                let packet = NetPacket::unchecked(&src);
-                let data_length = packet.data_length() as usize;
-                if data_length > src.len() {
-                    return Err(io::Error::new(io::ErrorKind::Other, "too short"));
-                }
-                match data_length.cmp(&offset) {
-                    std::cmp::Ordering::Less => {
-                        self.buf.extend_from_slice(&src[data_length..offset]);
-                        return Ok(data_length);
+            } else if let Some(rs) = self.process_buf(src, &mut offset) {
+                return rs;
+            }
+        }
+    }
+
+    fn try_decode(&mut self, read: &mut OwnedReadHalf, src: &mut [u8]) -> io::Result<usize> {
+        if src.len() < HEAD_LEN {
+            return Err(io::Error::other("too short"));
+        }
+        let mut offset = 0;
+        loop {
+            if self.buf.is_empty() {
+                match read.try_read(&mut src[offset..]) {
+                    Ok(len) => {
+                        if len == 0 {
+                            return Err(io::Error::from(io::ErrorKind::UnexpectedEof));
+                        }
+                        offset += len;
                     }
-                    std::cmp::Ordering::Equal => {
-                        return Ok(data_length);
+                    Err(e) => {
+                        if e.kind() == io::ErrorKind::WouldBlock && offset > 0 {
+                            self.buf.extend_from_slice(&src[..offset]);
+                        }
+                        return Err(e);
                     }
-                    std::cmp::Ordering::Greater => {
-                        continue;
-                    }
                 }
-            } else {
-                let len = self.buf.len();
-                if len < HEAD_LEN {
-                    src[..len].copy_from_slice(self.buf.as_ref());
-                    offset += len;
-                    self.buf.clear();
-                    continue;
+                if let Some(rs) = self.process_packet(src, offset) {
+                    return rs;
                 }
-                let packet = NetPacket::unchecked(self.buf.as_ref());
-                let data_length = packet.data_length() as usize;
-                if data_length > src.len() {
-                    return Err(io::Error::new(io::ErrorKind::Other, "too short"));
-                }
-                if data_length > len {
-                    src[..len].copy_from_slice(self.buf.as_ref());
-                    offset += len;
-                    self.buf.clear();
-                    continue;
-                } else {
-                    src[..data_length].copy_from_slice(&self.buf[..data_length]);
-                    if data_length == len {
-                        self.buf.clear();
-                    } else {
-                        self.buf.advance(data_length);
-                    }
-                    return Ok(data_length);
-                }
+            } else if let Some(rs) = self.process_buf(src, &mut offset) {
+                return rs;
             }
         }
     }
 }
-
+impl LengthPrefixedDecoder {
+    fn process_buf(&mut self, src: &mut [u8], offset: &mut usize) -> Option<io::Result<usize>> {
+        let len = self.buf.len();
+        if len < HEAD_LEN {
+            src[..len].copy_from_slice(self.buf.as_ref());
+            *offset += len;
+            self.buf.clear();
+            return None;
+        }
+        let packet = unsafe { NetPacket::new_unchecked(self.buf.as_ref()) };
+        let data_length = packet.data_length() as usize;
+        if data_length > src.len() {
+            return Some(Err(io::Error::other("too short")));
+        }
+        if data_length > len {
+            src[..len].copy_from_slice(self.buf.as_ref());
+            *offset += len;
+            self.buf.clear();
+            None
+        } else {
+            src[..data_length].copy_from_slice(&self.buf[..data_length]);
+            if data_length == len {
+                self.buf.clear();
+            } else {
+                self.buf.advance(data_length);
+            }
+            Some(Ok(data_length))
+        }
+    }
+    fn process_packet(&mut self, src: &mut [u8], offset: usize) -> Option<io::Result<usize>> {
+        if offset < HEAD_LEN {
+            return None;
+        }
+        let packet = unsafe { NetPacket::new_unchecked(&src) };
+        let data_length = packet.data_length() as usize;
+        if data_length > src.len() {
+            return Some(Err(io::Error::other("too short")));
+        }
+        match data_length.cmp(&offset) {
+            std::cmp::Ordering::Less => {
+                self.buf.extend_from_slice(&src[data_length..offset]);
+                Some(Ok(data_length))
+            }
+            std::cmp::Ordering::Equal => Some(Ok(data_length)),
+            std::cmp::Ordering::Greater => None,
+        }
+    }
+}
 #[async_trait]
 impl Encoder for LengthPrefixedEncoder {
     async fn encode(&mut self, write: &mut OwnedWriteHalf, data: &[u8]) -> io::Result<()> {
         let len = data.len();
-        let packet = NetPacket::unchecked(data);
+        let packet = unsafe { NetPacket::new_unchecked(data) };
         if packet.data_length() as usize != len {
             return Err(io::Error::from(io::ErrorKind::InvalidData));
         }
@@ -432,6 +488,10 @@ impl Encoder for LengthPrefixedEncoder {
         let mut total_written = 0;
         let total: usize = bufs.iter().map(|v| v.len()).sum();
         loop {
+            if index == bufs.len() - 1 {
+                write.write_all(&bufs[index]).await?;
+                return Ok(());
+            }
             let len = write.write_vectored(&bufs[index..]).await?;
             if len == 0 {
                 return Err(io::Error::from(io::ErrorKind::WriteZero));
@@ -451,10 +511,6 @@ impl Encoder for LengthPrefixedEncoder {
                             return Ok(());
                         }
                     }
-                    if index == bufs.len() - 1 {
-                        write.write_all(buf).await?;
-                        return Ok(());
-                    }
                     break;
                 } else {
                     index += 1;
@@ -465,6 +521,7 @@ impl Encoder for LengthPrefixedEncoder {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct LengthPrefixedInitCodec;
 
 impl InitCodec for LengthPrefixedInitCodec {
@@ -473,5 +530,18 @@ impl InitCodec for LengthPrefixedInitCodec {
             Box::new(LengthPrefixedDecoder::new()),
             Box::new(LengthPrefixedEncoder::new()),
         ))
+    }
+}
+#[async_trait]
+pub trait DataInterceptor: Send + Sync {
+    async fn pre_handle(&self, data: &mut RecvResult) -> bool;
+}
+#[derive(Clone)]
+pub struct DefaultInterceptor;
+
+#[async_trait]
+impl DataInterceptor for DefaultInterceptor {
+    async fn pre_handle(&self, _data: &mut RecvResult) -> bool {
+        false
     }
 }

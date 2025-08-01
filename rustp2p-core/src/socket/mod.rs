@@ -1,26 +1,21 @@
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-
-use anyhow::{anyhow, Context};
-use network_interface::{NetworkInterface, NetworkInterfaceConfig};
-use socket2::Protocol;
-
-#[cfg(unix)]
-pub use unix::*;
 #[cfg(windows)]
-pub use windows::*;
+use crate::socket::windows::ignore_conn_reset;
+use socket2::Protocol;
+use std::io;
+use std::net::SocketAddr;
 
 #[cfg(unix)]
 mod unix;
 #[cfg(windows)]
 mod windows;
 
-pub(crate) trait VntSocketTrait {
-    fn set_ip_unicast_if(&self, _interface: &LocalInterface) -> crate::error::Result<()> {
+pub(crate) trait SocketTrait {
+    fn set_ip_unicast_if(&self, _interface: &LocalInterface) -> io::Result<()> {
         Ok(())
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct LocalInterface {
     #[cfg(not(any(target_os = "linux", target_os = "android")))]
     pub index: u32,
@@ -39,31 +34,24 @@ impl LocalInterface {
     }
 }
 
-#[allow(dead_code)]
 pub(crate) async fn connect_tcp(
     addr: SocketAddr,
     bind_port: u16,
     default_interface: Option<&LocalInterface>,
-    ttl: Option<u32>,
-) -> crate::error::Result<tokio::net::TcpStream> {
-    let socket = create_tcp0(addr.is_ipv4(), bind_port, default_interface, ttl)?;
-    Ok(socket.connect(addr).await?)
-}
-
-#[allow(dead_code)]
-pub(crate) fn create_tcp(
-    v4: bool,
-    default_interface: Option<&LocalInterface>,
-) -> crate::error::Result<tokio::net::TcpSocket> {
-    create_tcp0(v4, 0, default_interface, None)
+    ttl: Option<u8>,
+) -> io::Result<tokio::net::TcpStream> {
+    let socket = create_tcp0(addr, bind_port, default_interface, ttl)?;
+    socket.writable().await?;
+    Ok(socket)
 }
 
 pub(crate) fn create_tcp0(
-    v4: bool,
+    addr: SocketAddr,
     bind_port: u16,
     default_interface: Option<&LocalInterface>,
-    ttl: Option<u32>,
-) -> crate::error::Result<tokio::net::TcpSocket> {
+    ttl: Option<u8>,
+) -> io::Result<tokio::net::TcpStream> {
+    let v4 = addr.is_ipv4();
     let socket = if v4 {
         socket2::Socket::new(
             socket2::Domain::IPV4,
@@ -81,42 +69,48 @@ pub(crate) fn create_tcp0(
         socket.set_ip_unicast_if(default_interface.unwrap())?;
     }
     if bind_port != 0 {
-        socket.set_reuse_address(true)?;
+        _ = socket.set_reuse_address(true);
         #[cfg(unix)]
-        socket.set_reuse_port(true)?;
+        {
+            _ = socket.set_reuse_port(true);
+        }
         if v4 {
-            let addr: SocketAddr = format!("0.0.0.0:{}", bind_port).parse().unwrap();
+            let addr: SocketAddr = format!("0.0.0.0:{bind_port}").parse().unwrap();
             socket.bind(&addr.into())?;
         } else {
             socket.set_only_v6(true)?;
-            let addr: SocketAddr = format!("[::]:{}", bind_port).parse().unwrap();
+            let addr: SocketAddr = format!("[::]:{bind_port}").parse().unwrap();
             socket.bind(&addr.into())?;
         }
     }
     if let Some(ttl) = ttl {
-        socket.set_ttl(ttl)?;
+        _ = socket.set_ttl(ttl as _);
     }
     socket.set_nonblocking(true)?;
     socket.set_nodelay(true)?;
-    Ok(tokio::net::TcpSocket::from_std_stream(socket.into()))
+    let res = socket.connect(&addr.into());
+    match res {
+        Ok(()) => {}
+        Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {}
+        #[cfg(unix)]
+        Err(ref e) if e.raw_os_error() == Some(libc::EINPROGRESS) => {}
+        Err(e) => Err(e)?,
+    }
+    tokio::net::TcpStream::from_std(socket.into())
 }
 
-pub(crate) fn create_tcp_listener(addr: SocketAddr) -> anyhow::Result<std::net::TcpListener> {
+pub(crate) fn create_tcp_listener(addr: SocketAddr) -> io::Result<std::net::TcpListener> {
     let socket = if addr.is_ipv6() {
         let socket = socket2::Socket::new(socket2::Domain::IPV6, socket2::Type::STREAM, None)?;
-        socket
-            .set_only_v6(false)
-            .with_context(|| format!("set_only_v6 failed: {}", &addr))?;
+        socket.set_only_v6(false)?;
         socket
     } else {
         socket2::Socket::new(socket2::Domain::IPV4, socket2::Type::STREAM, None)?
     };
-    socket
-        .set_reuse_address(true)
-        .context("set_reuse_address")?;
+    socket.set_reuse_address(true)?;
     #[cfg(unix)]
     if let Err(e) = socket.set_reuse_port(true) {
-        log::warn!("set_reuse_port {:?}", e)
+        log::warn!("set_reuse_port {e:?}")
     }
     socket.bind(&addr.into())?;
     socket.listen(128)?;
@@ -129,7 +123,7 @@ pub(crate) fn bind_udp_ops(
     addr: SocketAddr,
     only_v6: bool,
     default_interface: Option<&LocalInterface>,
-) -> anyhow::Result<socket2::Socket> {
+) -> io::Result<socket2::Socket> {
     let socket = if addr.is_ipv4() {
         let socket = socket2::Socket::new(
             socket2::Domain::IPV4,
@@ -146,9 +140,7 @@ pub(crate) fn bind_udp_ops(
             socket2::Type::DGRAM,
             Some(Protocol::UDP),
         )?;
-        socket
-            .set_only_v6(only_v6)
-            .with_context(|| format!("set_only_v6 failed: {}", &addr))?;
+        socket.set_only_v6(only_v6)?;
         socket
     };
     #[cfg(windows)]
@@ -163,26 +155,6 @@ pub(crate) fn bind_udp_ops(
 pub fn bind_udp(
     addr: SocketAddr,
     default_interface: Option<&LocalInterface>,
-) -> anyhow::Result<socket2::Socket> {
-    bind_udp_ops(addr, true, default_interface).with_context(|| format!("bind_udp {}", addr))
-}
-
-/// Obtain network interface with the specified IP address
-pub fn get_interface(dest_ip: Ipv4Addr) -> anyhow::Result<LocalInterface> {
-    let network_interfaces = NetworkInterface::show()?;
-    for iface in network_interfaces {
-        for addr in iface.addr {
-            if let IpAddr::V4(ip) = addr.ip() {
-                if ip == dest_ip {
-                    return Ok(LocalInterface {
-                        #[cfg(not(any(target_os = "linux", target_os = "android")))]
-                        index: iface.index,
-                        #[cfg(any(target_os = "linux", target_os = "android"))]
-                        name: iface.name,
-                    });
-                }
-            }
-        }
-    }
-    Err(anyhow!("No network card with IP {} found", dest_ip))
+) -> io::Result<socket2::Socket> {
+    bind_udp_ops(addr, true, default_interface)
 }

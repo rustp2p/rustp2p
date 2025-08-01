@@ -1,263 +1,89 @@
-use std::collections::{HashMap, HashSet};
-use std::hash::Hash;
+use std::collections::HashMap;
+use std::io;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
-use std::ops;
 use std::ops::{Div, Mul};
-use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
 use parking_lot::Mutex;
 use rand::seq::SliceRandom;
 use rand::Rng;
-use serde::{Deserialize, Serialize};
 
 use crate::nat::{NatInfo, NatType};
-use crate::pipe::tcp_pipe::TcpPipeWriter;
-use crate::pipe::udp_pipe::UdpPipeWriter;
-use crate::pipe::Pipe;
-use crate::route::route_table::RouteTable;
 
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
-pub enum PunchModel {
-    IPv4Tcp,
-    IPv4Udp,
-    IPv6Tcp,
-    IPv6Udp,
-}
-
-impl ops::BitOr<PunchModel> for PunchModel {
-    type Output = PunchModelBox;
-
-    fn bitor(self, rhs: PunchModel) -> Self::Output {
-        let mut model = PunchModelBox::empty();
-        model.or(self);
-        model.or(rhs);
-        model
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct PunchModelBox {
-    models: HashSet<PunchModel>,
-}
-
-impl Default for PunchModelBox {
-    fn default() -> Self {
-        PunchModelBox::all()
-    }
-}
-
-impl ops::BitOr<PunchModel> for PunchModelBox {
-    type Output = PunchModelBox;
-
-    fn bitor(mut self, rhs: PunchModel) -> Self::Output {
-        self.or(rhs);
-        self
-    }
-}
-
-impl PunchModelBox {
-    pub fn all() -> Self {
-        PunchModel::IPv4Tcp | PunchModel::IPv4Udp | PunchModel::IPv6Tcp | PunchModel::IPv6Udp
-    }
-    pub fn ipv4() -> Self {
-        PunchModel::IPv4Tcp | PunchModel::IPv4Udp
-    }
-    pub fn ipv6() -> Self {
-        PunchModel::IPv6Tcp | PunchModel::IPv6Udp
-    }
-    pub fn empty() -> Self {
-        Self {
-            models: Default::default(),
-        }
-    }
-    pub fn or(&mut self, punch_model: PunchModel) {
-        self.models.insert(punch_model);
-    }
-    pub fn is_match(&self, punch_model: PunchModel) -> bool {
-        self.models.contains(&punch_model)
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct PunchModelBoxes {
-    boxes: Vec<PunchModelBox>,
-}
-
-impl ops::BitAnd<PunchModelBox> for PunchModelBox {
-    type Output = PunchModelBoxes;
-
-    fn bitand(self, rhs: PunchModelBox) -> Self::Output {
-        let mut boxes = PunchModelBoxes::empty();
-        boxes.and(rhs);
-        boxes
-    }
-}
-
-impl PunchModelBoxes {
-    pub fn all() -> Self {
-        Self {
-            boxes: vec![PunchModelBox::all()],
-        }
-    }
-    pub fn empty() -> Self {
-        Self { boxes: Vec::new() }
-    }
-    pub fn and(&mut self, punch_model_box: PunchModelBox) {
-        self.boxes.push(punch_model_box)
-    }
-    pub fn is_match(&self, punch_model: PunchModel) -> bool {
-        if self.boxes.is_empty() {
-            return false;
-        }
-        for x in &self.boxes {
-            if !x.is_match(punch_model) {
-                return false;
-            }
-        }
-        true
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct PunchConsultInfo {
-    pub peer_punch_model: PunchModelBox,
-    pub peer_nat_info: NatInfo,
-}
-
-impl PunchConsultInfo {
-    pub fn new(peer_punch_model: PunchModelBox, peer_nat_info: NatInfo) -> Self {
-        Self {
-            peer_punch_model,
-            peer_nat_info,
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct PunchInfo {
-    initiate_by_oneself: bool,
-    punch_model: PunchModelBoxes,
-    peer_nat_info: NatInfo,
-}
-
-impl PunchInfo {
-    pub fn new(
-        initiate_by_oneself: bool,
-        punch_model: PunchModelBoxes,
-        peer_nat_info: NatInfo,
-    ) -> Self {
-        Self {
-            initiate_by_oneself,
-            punch_model,
-            peer_nat_info,
-        }
-    }
-    pub fn new_by_oneself(punch_model: PunchModelBoxes, peer_nat_info: NatInfo) -> Self {
-        Self {
-            initiate_by_oneself: true,
-            punch_model,
-            peer_nat_info,
-        }
-    }
-    pub fn new_by_other(punch_model: PunchModelBoxes, peer_nat_info: NatInfo) -> Self {
-        Self {
-            initiate_by_oneself: false,
-            punch_model,
-            peer_nat_info,
-        }
-    }
-    pub(crate) fn use_ttl(&self) -> bool {
-        self.initiate_by_oneself ^ (self.peer_nat_info.seq % 2 == 0)
-    }
-}
-
-impl FromStr for PunchModel {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().trim() {
-            "ipv4-tcp" => Ok(PunchModel::IPv4Tcp),
-            "ipv4-udp" => Ok(PunchModel::IPv4Udp),
-            "ipv6-tcp" => Ok(PunchModel::IPv6Tcp),
-            "ipv6-udp" => Ok(PunchModel::IPv6Udp),
-            _ => Err(format!(
-                "not match '{}', enum: ipv4-tcp/ipv4-udp/ipv6-tcp/ipv6-udp",
-                s
-            )),
-        }
-    }
-}
+use crate::tunnel::TunnelDispatcher;
+use crate::tunnel::{tcp, udp};
+pub use config::*;
+pub mod config;
 
 #[derive(Clone)]
-pub struct Puncher<PeerID> {
-    route_table: RouteTable<PeerID>,
+pub struct Puncher {
     // 端口顺序
-    port_vec: Vec<u16>,
+    port_vec: Arc<Vec<u16>>,
     // 指定IP的打洞记录
-    sym_record: Arc<Mutex<HashMap<PeerID, usize>>>,
-    count_record: Arc<Mutex<HashMap<PeerID, (usize, usize)>>>,
-    udp_pipe_writer: Option<UdpPipeWriter>,
-    tcp_pipe_writer: Option<TcpPipeWriter>,
+    sym_record: Arc<Mutex<HashMap<SocketAddr, usize>>>,
+    #[allow(clippy::type_complexity)]
+    count_record: Arc<Mutex<HashMap<SocketAddr, (usize, usize, u64)>>>,
+    udp_socket_manager: Option<Arc<udp::UdpSocketManager>>,
+    tcp_socket_manager: Option<Arc<tcp::TcpSocketManager>>,
 }
 
-impl<PeerID> From<&Pipe<PeerID>> for Puncher<PeerID> {
-    fn from(value: &Pipe<PeerID>) -> Self {
-        let writer_ref = value.writer_ref();
-        let tcp_pipe_writer = writer_ref.tcp_pipe_writer_ref().map(|v| v.to_owned());
-        let udp_pipe_writer = writer_ref.udp_pipe_writer_ref().map(|v| v.to_owned());
-        Self::new(
-            value.route_table().clone(),
-            udp_pipe_writer,
-            tcp_pipe_writer,
-        )
+impl From<&TunnelDispatcher> for Puncher {
+    fn from(value: &TunnelDispatcher) -> Self {
+        let tcp_socket_manager = value.shared_tcp_socket_manager();
+        let udp_socket_manager = value.shared_udp_socket_manager();
+        Self::new(udp_socket_manager, tcp_socket_manager)
     }
 }
 
-impl<PeerID> Puncher<PeerID> {
+impl Puncher {
     pub fn new(
-        route_table: RouteTable<PeerID>,
-        udp_pipe_writer: Option<UdpPipeWriter>,
-        tcp_pipe_writer: Option<TcpPipeWriter>,
-    ) -> Puncher<PeerID> {
+        udp_socket_manager: Option<Arc<udp::UdpSocketManager>>,
+        tcp_socket_manager: Option<Arc<tcp::TcpSocketManager>>,
+    ) -> Puncher {
         let mut port_vec: Vec<u16> = (1..=65535).collect();
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         port_vec.shuffle(&mut rng);
         Self {
-            route_table,
-            port_vec,
+            port_vec: Arc::new(port_vec),
             sym_record: Arc::new(Mutex::new(HashMap::new())),
             count_record: Arc::new(Mutex::new(HashMap::new())),
-            udp_pipe_writer,
-            tcp_pipe_writer,
+            udp_socket_manager,
+            tcp_socket_manager,
         }
     }
 }
-
-impl<PeerID: Hash + Eq + Clone> Puncher<PeerID> {
-    pub fn reset_all(&self) {
-        self.sym_record.lock().clear();
-        self.count_record.lock().clear();
-    }
-    pub fn reset_record(&self, peer_id: &PeerID) {
-        self.sym_record.lock().remove(peer_id);
-        self.count_record.lock().remove(peer_id);
+fn now() -> u64 {
+    let now = std::time::SystemTime::now();
+    let time = now
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    time.as_secs()
+}
+impl Puncher {
+    fn clean(&self) {
+        let mut count_record = self.count_record.lock();
+        let ten_minutes_ago = now() - 1200;
+        count_record.retain(|_addr, &mut (_u1, _u2, timestamp)| timestamp >= ten_minutes_ago);
+        let valid_keys: std::collections::HashSet<_> = count_record.keys().cloned().collect();
+        let mut sym_map = self.sym_record.lock();
+        sym_map.retain(|addr, _| valid_keys.contains(addr));
     }
     /// Call `need_punch` at a certain frequency, and call [`punch_now`](Self::punch_now) after getting true.
     /// Determine whether punching is needed.
-    pub fn need_punch(&self, id: &PeerID) -> bool {
-        let need = self.route_table.need_punch(id);
-        if !need {
-            self.reset_record(id);
+    pub fn need_punch(&self, punch_info: &PunchInfo) -> bool {
+        let Some(id) = punch_info.peer_nat_info.flag() else {
             return false;
-        }
-        let (count, _) = *self
+        };
+        let (count, _, _) = *self
             .count_record
             .lock()
-            .entry(id.clone())
-            .and_modify(|(v, _)| *v += 1)
-            .or_insert((0, 0));
+            .entry(id)
+            .and_modify(|(v, _, time)| {
+                *v += 1;
+                *time = now();
+            })
+            .or_insert((0, 0, now()));
         if count > 8 {
             //降低频率
             let interval = count / 8;
@@ -267,82 +93,90 @@ impl<PeerID: Hash + Eq + Clone> Puncher<PeerID> {
     }
 
     /// Call `punch` at a certain frequency
-    pub async fn punch(
-        &self,
-        peer_id: PeerID,
-        buf: &[u8],
-        punch_info: PunchInfo,
-    ) -> anyhow::Result<()> {
-        if !self.need_punch(&peer_id) {
+    pub async fn punch(&self, buf: &[u8], punch_info: PunchInfo) -> io::Result<()> {
+        if !self.need_punch(&punch_info) {
             return Ok(());
         }
-        self.punch_now(peer_id, buf, punch_info).await
+        self.punch_now(Some(buf), buf, punch_info).await
     }
     pub async fn punch_now(
         &self,
-        peer_id: PeerID,
-        buf: &[u8],
+        tcp_buf: Option<&[u8]>,
+        udp_buf: &[u8],
         punch_info: PunchInfo,
-    ) -> anyhow::Result<()> {
-        let (_, count) = *self
+    ) -> io::Result<()> {
+        self.clean();
+        let peer = punch_info
+            .peer_nat_info
+            .flag()
+            .unwrap_or(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0)));
+        let (_, count, _) = *self
             .count_record
             .lock()
-            .entry(peer_id.clone())
-            .and_modify(|(_, v)| *v += 1)
-            .or_insert((0, 0));
-        let ttl = if punch_info.use_ttl() && count < 255 {
-            Some(count.max(2) as u32)
-        } else {
-            None
-        };
+            .entry(peer)
+            .and_modify(|(_, v, time)| {
+                *v += 1;
+                *time = now();
+            })
+            .or_insert((0, 0, now()));
+        let ttl = if count < 255 { Some(count as u8) } else { None };
         let peer_nat_info = punch_info.peer_nat_info;
         let punch_model = punch_info.punch_model;
 
-        async_scoped::TokioScope::scope_and_block(|s| {
-            if let Some(tcp_pipe_writer) = self.tcp_pipe_writer.as_ref() {
+        type Scope<'a, T> = async_scoped::TokioScope<'a, T>;
+        Scope::scope_and_block(|s| {
+            if let Some(tcp_socket_manager) = self.tcp_socket_manager.as_ref() {
                 for addr in &peer_nat_info.mapping_tcp_addr {
                     s.spawn(async move {
-                        Self::connect_tcp(tcp_pipe_writer, buf, *addr, ttl).await;
+                        Self::connect_tcp(tcp_socket_manager, tcp_buf, *addr, ttl).await;
                     })
                 }
-                if punch_model.is_match(PunchModel::IPv4Tcp) {
+                if punch_model.is_match(PunchPolicy::IPv4Tcp) {
                     if let Some(addr) = peer_nat_info.local_ipv4_tcp() {
                         s.spawn(async move {
-                            Self::connect_tcp(tcp_pipe_writer, buf, addr, ttl).await;
+                            Self::connect_tcp(tcp_socket_manager, tcp_buf, addr, ttl).await;
                         })
                     }
                     for addr in peer_nat_info.public_ipv4_tcp() {
                         s.spawn(async move {
-                            Self::connect_tcp(tcp_pipe_writer, buf, addr, ttl).await;
+                            Self::connect_tcp(tcp_socket_manager, tcp_buf, addr, ttl).await;
                         })
                     }
                 }
-                if punch_model.is_match(PunchModel::IPv6Tcp) {
+                if punch_model.is_match(PunchPolicy::IPv6Tcp) {
                     if let Some(addr) = peer_nat_info.ipv6_tcp_addr() {
                         s.spawn(async move {
-                            Self::connect_tcp(tcp_pipe_writer, buf, addr, ttl).await;
+                            Self::connect_tcp(tcp_socket_manager, tcp_buf, addr, ttl).await;
                         })
                     }
                 }
             }
         });
-        self.punch_udp(peer_id, count, buf, &peer_nat_info, &punch_model)
+        self.punch_udp(peer, count, udp_buf, &peer_nat_info, &punch_model)
             .await?;
 
         Ok(())
     }
     async fn connect_tcp(
-        tcp_pipe_writer: &TcpPipeWriter,
-        buf: &[u8],
+        tcp_socket_manager: &tcp::TcpSocketManager,
+        buf: Option<&[u8]>,
         addr: SocketAddr,
-        ttl: Option<u32>,
+        ttl: Option<u8>,
     ) {
-        match tokio::time::timeout(
-            Duration::from_secs(3),
-            tcp_pipe_writer.send_to_addr_multi0(buf.into(), addr, ttl),
-        )
-        .await
-        {
+        let rs = if let Some(buf) = buf {
+            tokio::time::timeout(
+                Duration::from_secs(3),
+                tcp_socket_manager.multi_send_to_impl(buf.into(), addr, ttl),
+            )
+            .await
+        } else {
+            tokio::time::timeout(Duration::from_secs(3), async {
+                tcp_socket_manager.connect_ttl(addr, ttl).await?;
+                Ok(())
+            })
+            .await
+        };
+        match rs {
             Ok(rs) => {
                 if let Err(e) = rs {
                     log::warn!("tcp connect {addr},{e:?}");
@@ -355,14 +189,15 @@ impl<PeerID: Hash + Eq + Clone> Puncher<PeerID> {
     }
     async fn punch_udp(
         &self,
-        peer_id: PeerID,
+        peer_id: SocketAddr,
         count: usize,
         buf: &[u8],
         peer_nat_info: &NatInfo,
-        punch_model: &PunchModelBoxes,
-    ) -> anyhow::Result<()> {
-        let udp_pipe_writer = if let Some(udp_pipe_writer) = self.udp_pipe_writer.as_ref() {
-            udp_pipe_writer
+        punch_model: &PunchModel,
+    ) -> io::Result<()> {
+        let udp_socket_manager = if let Some(udp_socket_manager) = self.udp_socket_manager.as_ref()
+        {
+            udp_socket_manager
         } else {
             return Ok(());
         };
@@ -373,7 +208,7 @@ impl<PeerID: Hash + Eq + Clone> Puncher<PeerID> {
                 .filter(|a| a.is_ipv4())
                 .copied()
                 .collect();
-            udp_pipe_writer.try_main_send_to_addr(buf, &mapping_udp_v4_addr);
+            udp_socket_manager.try_main_v4_batch_send_to(buf, &mapping_udp_v4_addr);
 
             let mapping_udp_v6_addr: Vec<SocketAddr> = peer_nat_info
                 .mapping_udp_addr
@@ -381,18 +216,18 @@ impl<PeerID: Hash + Eq + Clone> Puncher<PeerID> {
                 .filter(|a| a.is_ipv6())
                 .copied()
                 .collect();
-            udp_pipe_writer.try_main_send_to_addr(buf, &mapping_udp_v6_addr);
+            udp_socket_manager.try_main_v6_batch_send_to(buf, &mapping_udp_v6_addr);
         }
         let local_ipv4_addrs = peer_nat_info.local_ipv4_addrs();
         if !local_ipv4_addrs.is_empty() {
-            udp_pipe_writer.try_main_send_to_addr(buf, &local_ipv4_addrs);
+            udp_socket_manager.try_main_v4_batch_send_to(buf, &local_ipv4_addrs);
         }
 
-        if punch_model.is_match(PunchModel::IPv6Udp) {
-            let v6_addr = peer_nat_info.ipv6_addr();
-            udp_pipe_writer.try_main_send_to_addr(buf, &v6_addr);
+        if punch_model.is_match(PunchPolicy::IPv6Udp) {
+            let v6_addr = peer_nat_info.ipv6_udp_addr();
+            udp_socket_manager.try_main_v6_batch_send_to(buf, &v6_addr);
         }
-        if !punch_model.is_match(PunchModel::IPv4Udp) {
+        if !punch_model.is_match(PunchPolicy::IPv4Udp) {
             return Ok(());
         }
         if peer_nat_info.public_ips.is_empty() {
@@ -409,12 +244,12 @@ impl<PeerID: Hash + Eq + Clone> Puncher<PeerID> {
                 //预测范围内最多发送max_k1个包
                 let max_k1 = 60;
                 //全局最多发送max_k2个包
-                let mut max_k2: usize = rand::thread_rng().gen_range(600..800);
+                let mut max_k2: usize = rand::rng().random_range(600..800);
                 if count > 8 {
                     //递减探测规模
                     max_k2 = max_k2.mul(8).div(count).max(max_k1 as usize);
                 }
-                let port = peer_nat_info.public_ports.first().copied().unwrap_or(0);
+                let port = peer_nat_info.public_udp_ports.first().copied().unwrap_or(0);
                 if peer_nat_info.public_port_range < max_k1 * 3 {
                     //端口变化不大时，在预测的范围内随机发送
                     let min_port = if port > peer_nat_info.public_port_range {
@@ -431,9 +266,9 @@ impl<PeerID: Hash + Eq + Clone> Puncher<PeerID> {
                         (max_port - min_port + 1) as usize
                     };
                     let mut nums: Vec<u16> = (min_port..=max_port).collect();
-                    nums.shuffle(&mut rand::thread_rng());
+                    nums.shuffle(&mut rand::rng());
                     self.punch_symmetric(
-                        udp_pipe_writer,
+                        udp_socket_manager,
                         &nums[..k],
                         buf,
                         &peer_nat_info.public_ips,
@@ -454,7 +289,7 @@ impl<PeerID: Hash + Eq + Clone> Puncher<PeerID> {
                 let mut index = start
                     + self
                         .punch_symmetric(
-                            udp_pipe_writer,
+                            udp_socket_manager,
                             &self.port_vec[start..end],
                             buf,
                             &peer_nat_info.public_ips,
@@ -472,8 +307,8 @@ impl<PeerID: Hash + Eq + Clone> Puncher<PeerID> {
                 if addr.is_empty() {
                     return Ok(());
                 }
-                udp_pipe_writer.try_main_send_to_addr(buf, &addr);
-                udp_pipe_writer.try_sub_send_to_addr_v4(buf, addr[0]);
+                udp_socket_manager.try_main_v4_batch_send_to(buf, &addr);
+                udp_socket_manager.try_sub_batch_send_to(buf, addr[0]);
             }
         }
         Ok(())
@@ -481,12 +316,12 @@ impl<PeerID: Hash + Eq + Clone> Puncher<PeerID> {
 
     async fn punch_symmetric(
         &self,
-        udp_pipe_writer: &UdpPipeWriter,
+        udp_socket_manager: &udp::UdpSocketManager,
         ports: &[u16],
         buf: &[u8],
         ips: &Vec<Ipv4Addr>,
         max: usize,
-    ) -> anyhow::Result<usize> {
+    ) -> io::Result<usize> {
         let mut count = 0;
         for (index, port) in ports.iter().enumerate() {
             for pub_ip in ips {
@@ -495,7 +330,7 @@ impl<PeerID: Hash + Eq + Clone> Puncher<PeerID> {
                     return Ok(index);
                 }
                 let addr: SocketAddr = SocketAddr::V4(SocketAddrV4::new(*pub_ip, *port));
-                if let Err(e) = udp_pipe_writer.try_send_to_addr(buf, addr) {
+                if let Err(e) = udp_socket_manager.try_send_to(buf, addr) {
                     log::info!("{addr},{e:?}");
                 }
                 tokio::time::sleep(Duration::from_millis(2)).await

@@ -29,57 +29,53 @@
   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
   protocol = ProtocolType::IDRouteReply
 */
-use crate::error::*;
 use crate::protocol::node_id::{GroupCode, NodeID, ID_LEN};
 use crate::protocol::protocol_type::ProtocolType;
 use crate::protocol::{NetPacket, HEAD_LEN};
+use std::io;
 
 pub struct IDRouteReplyPacket<B> {
     buffer: B,
 }
 impl<B: AsRef<[u8]>> IDRouteReplyPacket<B> {
-    pub fn unchecked(buffer: B) -> IDRouteReplyPacket<B> {
+    #[allow(dead_code)]
+    pub(crate) fn unchecked(buffer: B) -> IDRouteReplyPacket<B> {
         Self { buffer }
     }
-    pub fn new(buffer: B) -> Result<IDRouteReplyPacket<B>> {
+    pub(crate) fn new(buffer: B) -> io::Result<IDRouteReplyPacket<B>> {
         let len = buffer.as_ref().len();
         if len < 16 + 5 {
-            return Err(Error::Overflow {
-                cap: len,
-                required: 5,
-            });
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "buf len error"));
         }
         let packet = Self { buffer };
         let calculate_size =
             packet.metric_len() as usize + packet.current_id_num() as usize * ID_LEN + 16 + 5;
         if calculate_size != len {
-            return Err(Error::Overflow {
-                cap: len,
-                required: calculate_size,
-            });
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "buf len error"));
         }
         Ok(packet)
     }
-    pub fn group_code(&self) -> &[u8] {
+    pub(crate) fn group_code(&self) -> &[u8] {
         &self.buffer.as_ref()[..16]
     }
-    pub fn current_id_num(&self) -> u8 {
+    pub(crate) fn current_id_num(&self) -> u8 {
         self.buffer.as_ref()[16]
     }
-    pub fn query_id(&self) -> u16 {
+    pub(crate) fn query_id(&self) -> u16 {
         u16::from_be_bytes(self.buffer.as_ref()[17..19].try_into().unwrap())
     }
-    pub fn all_id_num(&self) -> u16 {
+    #[allow(dead_code)]
+    pub(crate) fn all_id_num(&self) -> u16 {
         u16::from_be_bytes(self.buffer.as_ref()[19..21].try_into().unwrap())
     }
-    pub fn metric_len(&self) -> u8 {
+    pub(crate) fn metric_len(&self) -> u8 {
         let id_num = self.current_id_num();
         id_num / 2 + if id_num & 0b1 == 0b1 { 1 } else { 0 }
     }
-    pub fn buffer(&self) -> &[u8] {
+    pub(crate) fn buffer(&self) -> &[u8] {
         self.buffer.as_ref()
     }
-    pub fn iter(&self) -> IDRouteReplyIter<B> {
+    pub(crate) fn iter(&self) -> IDRouteReplyIter<B> {
         IDRouteReplyIter {
             packet: self,
             index: 0,
@@ -87,7 +83,7 @@ impl<B: AsRef<[u8]>> IDRouteReplyPacket<B> {
     }
 }
 
-pub struct IDRouteReplyIter<'a, B> {
+pub(crate) struct IDRouteReplyIter<'a, B> {
     packet: &'a IDRouteReplyPacket<B>,
     index: usize,
 }
@@ -111,11 +107,11 @@ impl<B: AsRef<[u8]>> Iterator for IDRouteReplyIter<'_, B> {
     }
 }
 
-pub struct Builder;
+pub(crate) struct Builder;
 impl Builder {
-    pub fn calculate_len(list: &[(NodeID, u8)]) -> Result<usize> {
+    pub(crate) fn calculate_len(list: &[(NodeID, u8)]) -> io::Result<usize> {
         if list.len() > 255 {
-            return Err(Error::InvalidArgument("".into()));
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "list len error"));
         }
 
         let id_num = list.len();
@@ -124,14 +120,14 @@ impl Builder {
         let len = HEAD_LEN + 16 + 5 + metric_len + ID_LEN * id_num;
         Ok(len)
     }
-    pub fn build_reply(
+    pub(crate) fn build_reply(
         group_code: &GroupCode,
         list: &[(NodeID, u8)],
         query_id: u16,
         all_id_num: u16,
-    ) -> Result<NetPacket<Vec<u8>>> {
+    ) -> io::Result<NetPacket<Vec<u8>>> {
         let len = Self::calculate_len(list)?;
-        let mut packet = NetPacket::unchecked(vec![0; len]);
+        let mut packet = unsafe { NetPacket::new_unchecked(vec![0; len]) };
 
         packet.set_protocol(ProtocolType::IDRouteReply);
         packet.set_ttl(15);

@@ -1,12 +1,12 @@
 use rust_p2p_core::nat::{NatInfo, NatType};
-use rust_p2p_core::pipe::udp_pipe::UDPIndex;
-use rust_p2p_core::punch::{PunchConsultInfo, PunchModelBox};
+use rust_p2p_core::punch::{PunchConsultInfo, PunchPolicySet};
 use rust_p2p_core::route::Index;
+use rust_p2p_core::tunnel::udp::UDPIndex;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct NodePunchInfo {
-    pub punch_model_box: PunchModelBox,
+    pub punch_model_box: PunchPolicySet,
     pub local_udp_ports: Vec<u16>,
     pub local_tcp_port: u16,
     pub public_udp_ports: Vec<u16>,
@@ -96,11 +96,11 @@ impl NodePunchInfo {
 }
 
 impl NodePunchInfo {
-    pub fn nat_info(&self, seq: u32) -> NatInfo {
+    pub fn nat_info(&self) -> NatInfo {
         NatInfo {
             nat_type: self.nat_type,
             public_ips: self.public_ips.clone(),
-            public_ports: self.public_udp_ports.clone(),
+            public_udp_ports: self.public_udp_ports.clone(),
             mapping_tcp_addr: self.mapping_tcp_addr.clone(),
             mapping_udp_addr: self.mapping_udp_addr.clone(),
             public_port_range: self.public_port_range,
@@ -109,10 +109,9 @@ impl NodePunchInfo {
             local_udp_ports: self.local_udp_ports.clone(),
             local_tcp_port: self.local_tcp_port,
             public_tcp_port: self.public_tcp_port,
-            seq,
         }
     }
-    pub fn punch_consult_info(&self, seq: u32) -> PunchConsultInfo {
-        PunchConsultInfo::new(self.punch_model_box.clone(), self.nat_info(seq))
+    pub(crate) fn punch_consult_info(&self) -> PunchConsultInfo {
+        PunchConsultInfo::new(self.punch_model_box.clone(), self.nat_info())
     }
 }

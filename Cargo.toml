@@ -1,6 +1,6 @@
 [package]
 name = "rustp2p"
-version = "0.1.10"
+version = "0.3.2"
 edition = "2021"
 license = "Apache-2.0"
 readme = "README.md"
@@ -8,8 +8,7 @@ description = "A decentralized p2p library powered by Rust, which is devoted to 
 repository = "https://github.com/rustp2p/rustp2p"
 
 [dependencies]
-rust-p2p-core = { path = "rustp2p-core", version = "0.1" }
-anyhow = { workspace = true }
+rust-p2p-core = { workspace = true }
 async-trait = { workspace = true }
 tokio = { workspace = true }
 log = { workspace = true }
@@ -18,40 +17,68 @@ bytes = { workspace = true }
 parking_lot = { workspace = true }
 dashmap = { workspace = true }
 rand = { workspace = true }
-crossbeam-utils = "0.8"
-async-shutdown = "0.2.2"
-rmp-serde = "1.3.0"
-dns-parser = "0.8.0"
-crossbeam-queue = "0.3.11"
-ring = "0.17.8"
-sha2 = "0.10.8"
+crossbeam-utils = { workspace = true }
+crossbeam-queue = { workspace = true }
+flume = { workspace = true }
+kcp = { workspace = true, optional = true }
+tokio-util = { workspace = true }
+async-shutdown = { workspace = true }
+rmp-serde = "1.3"
+dns-parser = "0.8"
+openssl = { version = "0.10", optional = true }
+ring = { version = "0.17", optional = true }
+sha2 = "0.10"
+
+futures = "0.3.31"
 
 [dev-dependencies]
 clap = { version = "=4.5.20", features = ["derive"] }
+rustp2p = { path = "../rustp2p", features = ["aes-gcm-ring"] }
 log = "0.4.22"
 env_logger = "0.11.5"
-tun-rs = { version = "1", features = ["async"] }
-mimalloc-rust = { version = "0.2.1" }
+tun-rs = { version = "2.0.9", features = ["async_tokio"] }
 pnet_packet = "0.35.0"
-ctrlc2 = { version = "3", features = ["tokio", "termination"] }
+tokio = { version = "1.42", features = ["full"] }
+tokio-util = { version = "0.7.15", features = ["full"] }
+ctrlc = "3.4.5"
 
 [[example]]
 name = "node"
 path = "examples/node.rs"
 
+[[example]]
+name = "node_kcp_stream"
+path = "examples/node_kcp_stream.rs"
+required-features = ["use-kcp"]
+
 [workspace]
 resolver = "2"
 members = [
-    "rustp2p-core"
+    "rustp2p-core", "rustp2p-reliable"
 ]
 
 [workspace.dependencies]
-anyhow = "1.0.86"
-thiserror = "1.0.63"
-tokio = { version = "1.39.2", features = ["full"] }
-async-trait = "0.1.81"
-log = "0.4.17"
+rust-p2p-core = { path = "rustp2p-core", version = "0.3" }
+tachyonix = "0.3"
+thiserror = "2"
+tokio = { version = "1.42", features = ["full"] }
+async-trait = "0.1"
+log = "0.4"
 parking_lot = "0.12"
-bytes = "1.7.1"
+bytes = "1.9"
 dashmap = "6.1"
-rand = "0.8.5"
+rand = "0.9"
+crossbeam-utils = "0.8"
+crossbeam-queue = "0.3"
+kcp = {version = "0.6.0",features = ["tokio"]}
+tokio-util = "0.7"
+flume = { version = "0.11.1", features = ["async"] }
+async-shutdown = "0.2"
+
+[features]
+default = []
+aes-gcm-openssl = ["openssl"]
+chacha20-poly1305-openssl = ["openssl"]
+aes-gcm-ring = ["ring"]
+chacha20-poly1305-ring = ["ring"]
+use-kcp = ["kcp"]

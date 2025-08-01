@@ -13,7 +13,7 @@ use tokio::net::UdpSocket;
 pub async fn stun_test_nat(
     stun_servers: Vec<String>,
     default_interface: Option<&LocalInterface>,
-) -> anyhow::Result<(NatType, Vec<Ipv4Addr>, u16)> {
+) -> io::Result<(NatType, Vec<Ipv4Addr>, u16)> {
     let mut nat_type = NatType::Cone;
     let mut port_range = 0;
     let mut hash_set = HashSet::new();
@@ -32,7 +32,7 @@ pub async fn stun_test_nat(
                 }
             }
             Err(e) => {
-                log::warn!("{:?}", e);
+                log::warn!("{e:?}");
             }
         }
     }
@@ -42,7 +42,7 @@ pub async fn stun_test_nat(
 pub(crate) async fn stun_test_nat0(
     stun_servers: Vec<String>,
     default_interface: Option<&LocalInterface>,
-) -> anyhow::Result<(NatType, Vec<Ipv4Addr>, u16)> {
+) -> io::Result<(NatType, Vec<Ipv4Addr>, u16)> {
     let udp = bind_udp("0.0.0.0:0".parse().unwrap(), default_interface)?;
     let udp = UdpSocket::from_std(udp.into())?;
     let mut nat_type = NatType::Cone;
@@ -56,7 +56,7 @@ pub(crate) async fn stun_test_nat0(
                 pub_addrs.extend(addr);
             }
             Err(e) => {
-                log::warn!("stun {} error {:?} ", x, e);
+                log::warn!("stun {x} error {e:?} ");
             }
         }
     }
@@ -87,7 +87,7 @@ pub(crate) async fn stun_test_nat0(
 
 async fn test_nat(udp: &UdpSocket, stun_server: &String) -> io::Result<HashSet<SocketAddr>> {
     udp.connect(stun_server).await?;
-    let tid = rand::thread_rng().next_u64() as u128;
+    let tid = rand::rng().next_u64() as u128;
     let mut addr = HashSet::new();
     let (mapped_addr1, changed_addr1) = test_nat_(udp, stun_server, true, true, tid).await?;
     if mapped_addr1.is_ipv4() {
@@ -102,17 +102,12 @@ async fn test_nat(udp: &UdpSocket, stun_server: &String) -> io::Result<HashSet<S
                     }
                 }
                 Err(e) => {
-                    log::warn!("stun {} error {:?} ", stun_server, e);
+                    log::warn!("stun {stun_server} error {e:?} ");
                 }
             }
         }
     }
-    log::info!(
-        "stun {} mapped_addr {:?}  changed_addr {:?}",
-        stun_server,
-        addr,
-        changed_addr1,
-    );
+    log::info!("stun {stun_server} mapped_addr {addr:?}  changed_addr {changed_addr1:?}",);
 
     Ok(addr)
 }
@@ -139,7 +134,7 @@ async fn test_nat_(
             match tokio::time::timeout(Duration::from_secs(3), udp.recv_from(&mut buf)).await {
                 Ok(rs) => rs?,
                 Err(e) => {
-                    log::warn!("stun {} error {:?}", stun_server, e);
+                    log::warn!("stun {stun_server} error {e:?}");
                     continue;
                 }
             };
@@ -175,7 +170,7 @@ async fn test_nat_(
             return Ok((addr, changed_addr));
         }
     }
-    Err(io::Error::new(io::ErrorKind::Other, "stun response err"))
+    Err(io::Error::other("stun response err"))
 }
 
 fn stun_addr(addr: stun_format::SocketAddr) -> SocketAddr {
@@ -195,7 +190,7 @@ pub fn send_stun_request() -> Vec<u8> {
     let mut buf = [0u8; 28];
     let mut msg = stun_format::MsgBuilder::from(buf.as_mut_slice());
     msg.typ(stun_format::MsgType::BindingRequest);
-    let id = rand::thread_rng().next_u64() as u128;
+    let id = rand::rng().next_u64() as u128;
     msg.tid(id | TAG);
     msg.add_attr(Attr::ChangeRequest {
         change_ip: false,

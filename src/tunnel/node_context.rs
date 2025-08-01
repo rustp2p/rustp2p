@@ -1,26 +1,32 @@
 #![allow(clippy::type_complexity)]
+
+#[cfg(any(
+    feature = "aes-gcm-openssl",
+    feature = "aes-gcm-ring",
+    feature = "chacha20-poly1305-openssl",
+    feature = "chacha20-poly1305-ring"
+))]
+use crate::cipher::Cipher;
+use crate::config::punch_info::NodePunchInfo;
+use crate::extend::dns_query::{dns_query_all, dns_query_txt};
+use crate::protocol::node_id::{GroupCode, NodeID};
+use crossbeam_utils::atomic::AtomicCell;
+use dashmap::DashMap;
+use parking_lot::RwLock;
+use rand::seq::SliceRandom;
+use rust_p2p_core::punch::{PunchConsultInfo, PunchPolicySet};
+use rust_p2p_core::route::route_table::RouteTable;
+use rust_p2p_core::route::Index;
+use rust_p2p_core::socket::LocalInterface;
+use std::fmt::Display;
+use std::io;
 use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::cipher::aes_gcm::AesGcmCipher;
-use crate::config::punch_info::NodePunchInfo;
-use crate::error::Error;
-use crate::extend::dns_query::{dns_query_all, dns_query_txt};
-use crate::protocol::node_id::{GroupCode, NodeID};
-use anyhow::Context;
-use crossbeam_utils::atomic::AtomicCell;
-use dashmap::DashMap;
-use parking_lot::RwLock;
-use rand::seq::SliceRandom;
-use rust_p2p_core::punch::{PunchConsultInfo, PunchModelBox};
-use rust_p2p_core::route::route_table::RouteTable;
-use rust_p2p_core::route::Index;
-use rust_p2p_core::socket::LocalInterface;
-
 #[derive(Clone)]
-pub struct PipeContext {
+pub struct NodeContext {
     self_node_id: Arc<AtomicCell<Option<NodeID>>>,
     group_code: Arc<AtomicCell<GroupCode>>,
     direct_node_address_list: Arc<RwLock<Vec<(PeerNodeAddress, u16, Vec<NodeAddress>)>>>,
@@ -31,19 +37,34 @@ pub struct PipeContext {
     default_interface: Option<LocalInterface>,
     dns: Vec<String>,
     pub(crate) other_route_table: Arc<DashMap<GroupCode, RouteTable<NodeID>>>,
-    pub(crate) aes_gcm_cipher: Option<AesGcmCipher>,
+    #[cfg(any(
+        feature = "aes-gcm-openssl",
+        feature = "aes-gcm-ring",
+        feature = "chacha20-poly1305-openssl",
+        feature = "chacha20-poly1305-ring"
+    ))]
+    pub(crate) cipher: Option<Cipher>,
+    pub(crate) major_tunnel_count: usize,
 }
 pub type DirectNodes = Vec<(NodeAddress, u16, Option<(GroupCode, NodeID)>)>;
-impl PipeContext {
+impl NodeContext {
     pub(crate) fn new(
+        major_tunnel_count: usize,
         local_udp_ports: Vec<u16>,
         local_tcp_port: u16,
         default_interface: Option<LocalInterface>,
         dns: Option<Vec<String>>,
-        aes_gcm_cipher: Option<AesGcmCipher>,
+        #[cfg(any(
+            feature = "aes-gcm-openssl",
+            feature = "aes-gcm-ring",
+            feature = "chacha20-poly1305-openssl",
+            feature = "chacha20-poly1305-ring"
+        ))]
+        cipher: Option<Cipher>,
     ) -> Self {
         let punch_info = NodePunchInfo::new(local_udp_ports, local_tcp_port);
         Self {
+            major_tunnel_count,
             self_node_id: Arc::new(Default::default()),
             group_code: Arc::new(Default::default()),
             direct_node_address_list: Arc::new(Default::default()),
@@ -53,19 +74,34 @@ impl PipeContext {
             default_interface,
             dns: dns.unwrap_or_default(),
             other_route_table: Arc::new(Default::default()),
-            aes_gcm_cipher,
+            #[cfg(any(
+                feature = "aes-gcm-openssl",
+                feature = "aes-gcm-ring",
+                feature = "chacha20-poly1305-openssl",
+                feature = "chacha20-poly1305-ring"
+            ))]
+            cipher,
         }
     }
-    pub fn store_self_id(&self, node_id: NodeID) -> crate::error::Result<()> {
+    pub fn load_punch_info(&self) -> NodePunchInfo {
+        self.punch_info.read().clone()
+    }
+    pub fn store_self_id(&self, node_id: NodeID) -> io::Result<()> {
         if node_id.is_unspecified() || node_id.is_broadcast() {
-            return Err(Error::InvalidArgument("invalid node id".into()));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "invalid node id",
+            ));
         }
         self.self_node_id.store(Some(node_id));
         Ok(())
     }
-    pub fn store_group_code(&self, group_code: GroupCode) -> crate::error::Result<()> {
+    pub fn store_group_code(&self, group_code: GroupCode) -> io::Result<()> {
         if group_code.is_unspecified() {
-            return Err(Error::InvalidArgument("invalid group code".into()));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "invalid group code",
+            ));
         }
         self.group_code.store(group_code);
         Ok(())
@@ -76,25 +112,28 @@ impl PipeContext {
     pub fn load_id(&self) -> Option<NodeID> {
         self.self_node_id.load()
     }
-    pub fn set_direct_nodes(&self, direct_node: Vec<PeerNodeAddress>) {
+    pub async fn update_direct_nodes(&self, direct_node: Vec<PeerNodeAddress>) -> io::Result<()> {
         let mut addrs = Vec::new();
         let mut ids: Vec<u16> = (10..u16::MAX).collect();
-        ids.shuffle(&mut rand::thread_rng());
-        let mut guard = self.direct_node_address_list.write();
-        self.direct_node_id_map.clear();
+        ids.shuffle(&mut rand::rng());
+
         for (index, addr) in direct_node.into_iter().enumerate() {
             let id = ids[index];
-            addrs.push((addr, id, vec![]))
+            let node_addrs = addr.to_addr(&self.dns, &self.default_interface).await?;
+            addrs.push((addr, id, node_addrs))
         }
+        let mut guard = self.direct_node_address_list.write();
+        self.direct_node_id_map.clear();
         *guard = addrs;
+        Ok(())
     }
-    pub fn set_direct_nodes_and_id(
+    pub(crate) fn set_direct_nodes_and_id(
         &self,
         direct_node: Vec<(PeerNodeAddress, u16, Vec<NodeAddress>)>,
     ) {
         *self.direct_node_address_list.write() = direct_node;
     }
-    pub fn get_direct_nodes(&self) -> Vec<(NodeAddress, Option<(GroupCode, NodeID)>)> {
+    pub(crate) fn get_direct_nodes(&self) -> Vec<(NodeAddress, Option<(GroupCode, NodeID)>)> {
         let guard = self.direct_node_address_list.read();
         let mut addrs = Vec::new();
         for (_, id, v) in guard.iter() {
@@ -105,7 +144,7 @@ impl PipeContext {
         }
         addrs
     }
-    pub fn get_direct_nodes_and_id(&self) -> DirectNodes {
+    pub(crate) fn get_direct_nodes_and_id(&self) -> DirectNodes {
         let guard = self.direct_node_address_list.read();
         let mut addrs = Vec::new();
         for (_, id, v) in guard.iter() {
@@ -116,12 +155,12 @@ impl PipeContext {
         }
         addrs
     }
-    pub fn get_direct_node_id(&self, id: &u16) -> Option<(GroupCode, NodeID)> {
+    pub(crate) fn get_direct_node_id(&self, id: &u16) -> Option<(GroupCode, NodeID)> {
         self.direct_node_id_map
             .get(id)
             .map(|v| (v.value().0, v.value().1))
     }
-    pub async fn update_direct_nodes(&self) -> crate::error::Result<()> {
+    pub(crate) async fn update_direct_nodes0(&self) -> io::Result<()> {
         let mut addrs = self.direct_node_address_list.read().clone();
         for (peer_addr, _id, addr) in &mut addrs {
             *addr = peer_addr
@@ -131,7 +170,7 @@ impl PipeContext {
         self.set_direct_nodes_and_id(addrs);
         Ok(())
     }
-    pub fn update_direct_node_id(&self, id: u16, group_code: GroupCode, node_id: NodeID) {
+    pub(crate) fn update_direct_node_id(&self, id: u16, group_code: GroupCode, node_id: NodeID) {
         self.direct_node_id_map
             .insert(id, (group_code, node_id, Instant::now()));
     }
@@ -149,7 +188,7 @@ impl PipeContext {
         }
     }
 
-    pub fn update_reachable_nodes(
+    pub(crate) fn update_reachable_nodes(
         &self,
         reachable_group_code: GroupCode,
         reachable_id: NodeID,
@@ -184,24 +223,16 @@ impl PipeContext {
             None
         }
     }
-    pub fn default_route(&self) -> Option<NodeAddress> {
-        let guard = self.direct_node_address_list.read();
-        if let Some((_, _, v)) = guard.first() {
-            v.first().cloned()
-        } else {
-            None
-        }
-    }
     pub(crate) fn exists_nat_info(&self) -> bool {
         self.punch_info.read().exists_nat_info()
     }
-    pub fn punch_info(&self) -> &Arc<RwLock<NodePunchInfo>> {
+    pub(crate) fn punch_info(&self) -> &Arc<RwLock<NodePunchInfo>> {
         &self.punch_info
     }
-    pub(crate) fn gen_punch_info(&self, seq: u32) -> PunchConsultInfo {
-        self.punch_info.read().punch_consult_info(seq)
+    pub(crate) fn gen_punch_info(&self) -> PunchConsultInfo {
+        self.punch_info.read().punch_consult_info()
     }
-    pub fn punch_model_box(&self) -> PunchModelBox {
+    pub(crate) fn punch_model_box(&self) -> PunchPolicySet {
         self.punch_info.read().punch_model_box.clone()
     }
     pub fn set_mapping_addrs(&self, mapping_addrs: Vec<NodeAddress>) {
@@ -219,10 +250,10 @@ impl PipeContext {
         guard.mapping_tcp_addr = tcp_addr;
         guard.mapping_udp_addr = udp_addr;
     }
-    pub fn update_public_addr(&self, index: Index, addr: SocketAddr) {
+    pub(crate) fn update_public_addr(&self, index: Index, addr: SocketAddr) {
         self.punch_info.write().update_public_addr(index, addr);
     }
-    pub fn update_tcp_public_addr(&self, addr: SocketAddr) {
+    pub(crate) fn update_tcp_public_addr(&self, addr: SocketAddr) {
         self.punch_info.write().update_tcp_public_port(addr);
     }
 }
@@ -261,7 +292,7 @@ impl PeerNodeAddress {
         &self,
         name_servers: &Vec<String>,
         default_interface: &Option<LocalInterface>,
-    ) -> crate::error::Result<Vec<NodeAddress>> {
+    ) -> io::Result<Vec<NodeAddress>> {
         let addrs = match self {
             PeerNodeAddress::Tcp(addr) => vec![NodeAddress::Tcp(*addr)],
             PeerNodeAddress::Udp(addr) => vec![NodeAddress::Udp(*addr)],
@@ -278,20 +309,20 @@ impl PeerNodeAddress {
                 let mut addrs = Vec::with_capacity(txt.len());
                 for x in txt {
                     let x = x.to_lowercase();
-                    let addr = if let Some(v) = x.strip_prefix("udp://") {
-                        NodeAddress::Udp(
-                            SocketAddr::from_str(v).context("record type txt is not SocketAddr")?,
-                        )
-                    } else if let Some(v) = x.strip_prefix("tcp://") {
-                        NodeAddress::Tcp(
-                            SocketAddr::from_str(v).context("record type txt is not SocketAddr")?,
-                        )
-                    } else {
-                        NodeAddress::Tcp(
-                            SocketAddr::from_str(&x)
-                                .context("record type txt is not SocketAddr")?,
-                        )
-                    };
+                    let addr =
+                        if let Some(v) = x.strip_prefix("udp://") {
+                            NodeAddress::Udp(SocketAddr::from_str(v).map_err(|_| {
+                                io::Error::other("record type txt is not SocketAddr")
+                            })?)
+                        } else if let Some(v) = x.strip_prefix("tcp://") {
+                            NodeAddress::Tcp(SocketAddr::from_str(v).map_err(|_| {
+                                io::Error::other("record type txt is not SocketAddr")
+                            })?)
+                        } else {
+                            NodeAddress::Tcp(SocketAddr::from_str(&x).map_err(|_| {
+                                io::Error::other("record type txt is not SocketAddr")
+                            })?)
+                        };
                     addrs.push(addr);
                 }
                 addrs
@@ -301,7 +332,7 @@ impl PeerNodeAddress {
     }
 }
 impl FromStr for PeerNodeAddress {
-    type Err = crate::error::Error;
+    type Err = io::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let domain = s.to_lowercase();
@@ -324,5 +355,27 @@ impl FromStr for PeerNodeAddress {
             }
         };
         Ok(addr)
+    }
+}
+impl Display for PeerNodeAddress {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let str = match self {
+            PeerNodeAddress::Tcp(addr) => {
+                format!("tcp://{addr}")
+            }
+            PeerNodeAddress::Udp(addr) => {
+                format!("udp://{addr}")
+            }
+            PeerNodeAddress::TcpDomain(addr) => {
+                format!("tcp://{addr}")
+            }
+            PeerNodeAddress::UdpDomain(addr) => {
+                format!("udp://{addr}")
+            }
+            PeerNodeAddress::TxtDomain(addr) => {
+                format!("txt://{addr}")
+            }
+        };
+        write!(f, "{str}")
     }
 }

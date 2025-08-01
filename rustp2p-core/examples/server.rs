@@ -1,10 +1,10 @@
 use bytes::{BufMut, BytesMut};
 use env_logger::Env;
 
-use rust_p2p_core::pipe::config::{PipeConfig, TcpPipeConfig, UdpPipeConfig};
-use rust_p2p_core::pipe::tcp_pipe::LengthPrefixedInitCodec;
-use rust_p2p_core::pipe::{pipe, PipeLine, PipeWriter};
 use rust_p2p_core::route::route_table::RouteTable;
+use rust_p2p_core::tunnel::config::{TcpTunnelConfig, TunnelConfig, UdpTunnelConfig};
+use rust_p2p_core::tunnel::tcp::LengthPrefixedInitCodec;
+use rust_p2p_core::tunnel::{new_tunnel_component, SocketManager, Tunnel};
 
 /*Demo Protocol
    0                                            15                                              31
@@ -35,32 +35,34 @@ pub const MY_SERVER_ID: u32 = 0;
 #[tokio::main]
 async fn main() {
     env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
-    let udp_config = UdpPipeConfig::default().set_simple_udp_port(3000);
-    let tcp_config = TcpPipeConfig::new(Box::new(LengthPrefixedInitCodec)).set_tcp_port(3000);
-    let config = PipeConfig::empty()
-        .set_main_pipeline_num(1)
-        .set_tcp_pipe_config(tcp_config)
-        .set_udp_pipe_config(udp_config);
-    let (mut pipe, _puncher, _idle_route_manager) = pipe::<u32>(config).unwrap();
-    let writer = pipe.writer_ref().to_owned();
+    let udp_config = UdpTunnelConfig::default().set_simple_udp_port(3000);
+    let tcp_config = TcpTunnelConfig::new(Box::new(LengthPrefixedInitCodec)).set_tcp_port(3000);
+    let config = TunnelConfig::empty()
+        .set_tcp_multi_count(1)
+        .set_tcp_tunnel_config(tcp_config)
+        .set_udp_tunnel_config(udp_config);
+    let (mut tunnel_factory, _puncher) = new_tunnel_component(config).unwrap();
+    let writer = tunnel_factory.socket_manager();
+    let route_table = RouteTable::default();
+
     log::info!("listen 3000");
     loop {
-        let line = pipe.accept().await.unwrap();
-        let table = pipe.route_table().clone();
+        let tunnel = tunnel_factory.dispatch().await.unwrap();
+        let table = route_table.clone();
         let writer = writer.clone();
         tokio::spawn(async move {
-            handler(table, line, writer).await;
+            handler(table, tunnel, writer).await;
         });
     }
 }
-async fn handler(route_table: RouteTable<u32>, mut line: PipeLine, writer: PipeWriter<u32>) {
+async fn handler(route_table: RouteTable<u32>, mut tunnel: Tunnel, writer: SocketManager) {
     let mut buf = [0; 65536];
-    while let Some(rs) = line.recv_from(&mut buf).await {
+    while let Some(rs) = tunnel.recv_from(&mut buf).await {
         let (len, route_key) = match rs {
             Ok(rs) => rs,
             Err(e) => {
                 log::error!("err {e:?}");
-                if line.protocol().is_udp() {
+                if tunnel.protocol().is_udp() {
                     continue;
                 }
                 break;
@@ -103,14 +105,25 @@ async fn handler(route_table: RouteTable<u32>, mut line: PipeLine, writer: PipeW
                         .unwrap();
                 }
             }
-            PUNCH_START_1 | PUNCH_START_2 => {
-                if let Err(e) = writer.send_to_id((&buf[..len]).into(), &dest_id).await {
+            PUNCH_START_1 | PUNCH_START_2 => match route_table.get_route_by_id(&dest_id) {
+                Ok(route) => {
+                    if let Err(e) = writer
+                        .send_to((&buf[..len]).into(), &route.route_key())
+                        .await
+                    {
+                        log::warn!(
+                            "{:?},src_id={src_id},peer_id={dest_id},addr={route_key:?},{e:?}",
+                            &buf[..len]
+                        );
+                    }
+                }
+                Err(e) => {
                     log::warn!(
                         "{:?},src_id={src_id},peer_id={dest_id},addr={route_key:?},{e:?}",
                         &buf[..len]
                     );
                 }
-            }
+            },
             PUBLIC_ADDR_REQ => {
                 let mut response = BytesMut::new();
                 response.put_u32(PUBLIC_ADDR_RES);

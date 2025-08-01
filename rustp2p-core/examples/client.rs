@@ -20,14 +20,14 @@ use bytes::{BufMut, BytesMut};
 use clap::Parser;
 use env_logger::Env;
 use parking_lot::Mutex;
-
+use rust_p2p_core::idle::IdleRouteManager;
 use rust_p2p_core::nat::NatInfo;
-use rust_p2p_core::pipe::config::{PipeConfig, TcpPipeConfig, UdpPipeConfig};
-use rust_p2p_core::pipe::tcp_pipe::LengthPrefixedInitCodec;
-use rust_p2p_core::pipe::{pipe, PipeLine, PipeWriter};
-use rust_p2p_core::punch::{PunchInfo, PunchModelBoxes, Puncher};
+use rust_p2p_core::punch::{PunchInfo, PunchModel, Puncher};
 use rust_p2p_core::route::route_table::RouteTable;
 use rust_p2p_core::route::ConnectProtocol;
+use rust_p2p_core::tunnel::config::{TcpTunnelConfig, TunnelConfig, UdpTunnelConfig};
+use rust_p2p_core::tunnel::tcp::LengthPrefixedInitCodec;
+use rust_p2p_core::tunnel::{new_tunnel_component, SocketManager, Tunnel};
 
 pub const HEAD_LEN: usize = 12;
 //
@@ -68,29 +68,30 @@ async fn main() {
         ConnectProtocol::UDP
     };
     log::info!("my_id:{my_id},server:{server}");
-    let udp_config = UdpPipeConfig::default();
-    let tcp_config = TcpPipeConfig::new(Box::new(LengthPrefixedInitCodec));
-    let config = PipeConfig::empty()
-        .set_udp_pipe_config(udp_config)
-        .set_tcp_pipe_config(tcp_config)
-        .set_main_pipeline_num(2);
-    let (mut pipe, puncher, idle_route_manager) = pipe(config).unwrap();
-    let pipe_writer = pipe.writer_ref().to_owned();
-    let nat_info = my_nat_info(&pipe_writer).await;
+    let udp_config = UdpTunnelConfig::default();
+    let tcp_config = TcpTunnelConfig::new(Box::new(LengthPrefixedInitCodec));
+    let config = TunnelConfig::empty()
+        .set_udp_tunnel_config(udp_config)
+        .set_tcp_tunnel_config(tcp_config)
+        .set_tcp_multi_count(2);
+    let (mut tunnel_factory, puncher) = new_tunnel_component(config).unwrap();
+    let route_table = RouteTable::<u32>::default();
+    let idle_route_manager = IdleRouteManager::new(Duration::from_secs(12), route_table.clone());
+    let socket_manager = tunnel_factory.socket_manager();
+    let nat_info = my_nat_info(&socket_manager).await;
     {
         let mut request = BytesMut::new();
         request.put_u32(UP);
         request.put_u32(my_id);
         request.put_u32(MY_SERVER_ID);
-        pipe_writer
+        socket_manager
             .send_to_addr(connect_protocol, request, server)
             .await
             .unwrap();
     }
     let peer_list = Arc::new(Mutex::new(Vec::<u32>::new()));
     let peer_list1 = peer_list.clone();
-    let puncher1 = puncher.clone();
-    let pipe_writer1 = pipe_writer.clone();
+    let socket_manager1 = socket_manager.clone();
     let nat_info1 = nat_info.clone();
     tokio::spawn(async move {
         loop {
@@ -102,6 +103,7 @@ async fn main() {
             idle_route_manager.remove_route(&peer_id, &route.route_key());
         }
     });
+    let route_table1 = route_table.clone();
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(Duration::from_secs(5)).await;
@@ -111,26 +113,27 @@ async fn main() {
                     if peer_id <= my_id {
                         continue;
                     }
-                    if puncher1.need_punch(&peer_id) {
-                        // Initiate NAT penetration
-                        let mut request = BytesMut::new();
-                        request.put_u32(PUNCH_START_1);
-                        request.put_u32(my_id);
-                        request.put_u32(peer_id);
-                        let mut nat_info = nat_info1.lock().clone();
-                        nat_info.seq = rand::random();
-                        let data = serde_json::to_string(&nat_info).unwrap();
-                        request.extend_from_slice(data.as_bytes());
-                        pipe_writer1
-                            .send_to_addr(connect_protocol, request, server)
-                            .await
-                            .unwrap();
+                    if !route_table1.need_punch(&peer_id) {
+                        continue;
                     }
+
+                    // Initiate NAT penetration
+                    let mut request = BytesMut::new();
+                    request.put_u32(PUNCH_START_1);
+                    request.put_u32(my_id);
+                    request.put_u32(peer_id);
+                    let nat_info = nat_info1.lock().clone();
+                    let data = serde_json::to_string(&nat_info).unwrap();
+                    request.extend_from_slice(data.as_bytes());
+                    socket_manager1
+                        .send_to_addr(connect_protocol, request, server)
+                        .await
+                        .unwrap();
                 }
             }
         }
     });
-    let pipe_writer2 = pipe_writer.clone();
+    let socket_manager2 = socket_manager.clone();
     tokio::spawn(async move {
         // Obtain public network address
         loop {
@@ -139,7 +142,7 @@ async fn main() {
             request.put_u32(PUBLIC_ADDR_REQ);
             request.put_u32(my_id);
             request.put_u32(MY_SERVER_ID);
-            pipe_writer2
+            socket_manager2
                 .send_to_addr(connect_protocol, request, server)
                 .await
                 .unwrap();
@@ -150,15 +153,15 @@ async fn main() {
         peer_list,
         puncher,
         nat_info,
-        route_table: pipe.route_table().clone(),
+        route_table: route_table.clone(),
         server,
-        pipe_writer,
+        socket_manager,
     };
     loop {
-        let pipe_line = pipe.accept().await.unwrap();
+        let tunnel = tunnel_factory.dispatch().await.unwrap();
         let context_handler = context_handler.clone();
         tokio::spawn(async move {
-            let _ = context_handler.handle(pipe_line).await;
+            let _ = context_handler.handle(tunnel).await;
         });
     }
 }
@@ -167,23 +170,23 @@ async fn main() {
 struct ContextHandler {
     my_id: u32,
     peer_list: Arc<Mutex<Vec<u32>>>,
-    puncher: Puncher<u32>,
+    puncher: Puncher,
     nat_info: Arc<Mutex<NatInfo>>,
     route_table: RouteTable<u32>,
     #[allow(dead_code)]
     server: SocketAddr,
-    pipe_writer: PipeWriter<u32>,
+    socket_manager: SocketManager,
 }
 
 impl ContextHandler {
-    async fn handle(&self, mut pipe_line: PipeLine) -> anyhow::Result<()> {
+    async fn handle(&self, mut tunnel: Tunnel) -> std::io::Result<()> {
         let mut buf = [0; 65536];
-        while let Some(rs) = pipe_line.recv_from(&mut buf).await {
+        while let Some(rs) = tunnel.recv_from(&mut buf).await {
             let (len, route_key) = match rs {
                 Ok(rs) => rs,
                 Err(e) => {
                     log::warn!("{e:?}");
-                    if pipe_line.protocol().is_udp() {
+                    if tunnel.protocol().is_udp() {
                         continue;
                     }
                     break;
@@ -201,8 +204,7 @@ impl ContextHandler {
                 PUSH_PEER_LIST => {
                     let mut guard = self.peer_list.lock();
                     *guard =
-                        serde_json::from_str(&String::from_utf8(buf[12..len].to_vec()).unwrap())
-                            .unwrap();
+                        serde_json::from_str(core::str::from_utf8(&buf[12..len]).unwrap()).unwrap();
                     log::info!("peer_list={guard:?}");
                 }
                 PUNCH_START_1 => {
@@ -211,14 +213,15 @@ impl ContextHandler {
                     request.put_u32(self.my_id);
                     request.put_u32(src_id);
                     let peer_nat_info: NatInfo =
-                        serde_json::from_str(&String::from_utf8(buf[12..len].to_vec()).unwrap())
-                            .unwrap();
+                        serde_json::from_str(core::str::from_utf8(&buf[12..len]).unwrap()).unwrap();
                     log::info!("peer_id={src_id},peer_nat_info={peer_nat_info:?}");
-                    let mut nat_info = self.nat_info.lock().clone();
-                    nat_info.seq = peer_nat_info.seq;
+                    let nat_info = self.nat_info.lock().clone();
                     let data = serde_json::to_string(&nat_info).unwrap();
                     request.extend_from_slice(data.as_bytes());
-                    self.pipe_writer.send_to(request, &route_key).await.unwrap();
+                    self.socket_manager
+                        .send_to(request, &route_key)
+                        .await
+                        .unwrap();
 
                     {
                         let mut request = BytesMut::new();
@@ -228,11 +231,7 @@ impl ContextHandler {
                         let puncher = self.puncher.clone();
                         tokio::spawn(async move {
                             let rs = puncher
-                                .punch(
-                                    src_id,
-                                    &request,
-                                    PunchInfo::new_by_other(PunchModelBoxes::all(), peer_nat_info),
-                                )
+                                .punch(&request, PunchInfo::new(PunchModel::all(), peer_nat_info))
                                 .await;
                             log::info!("punch peer_id={src_id},{rs:?}")
                         });
@@ -240,8 +239,7 @@ impl ContextHandler {
                 }
                 PUNCH_START_2 => {
                     let peer_nat_info: NatInfo =
-                        serde_json::from_str(&String::from_utf8(buf[12..len].to_vec()).unwrap())
-                            .unwrap();
+                        serde_json::from_str(core::str::from_utf8(&buf[12..len]).unwrap()).unwrap();
                     log::info!("peer_id={src_id},peer_nat_info={peer_nat_info:?}");
                     let mut request = BytesMut::new();
                     request.put_u32(PUNCH_REQ);
@@ -250,11 +248,7 @@ impl ContextHandler {
                     let puncher = self.puncher.clone();
                     tokio::spawn(async move {
                         let rs = puncher
-                            .punch(
-                                src_id,
-                                &request,
-                                PunchInfo::new_by_oneself(PunchModelBoxes::all(), peer_nat_info),
-                            )
+                            .punch(&request, PunchInfo::new(PunchModel::all(), peer_nat_info))
                             .await;
                         log::info!("punch peer_id={src_id},{rs:?}")
                     });
@@ -268,7 +262,10 @@ impl ContextHandler {
                     request.put_u32(PUNCH_RES);
                     request.put_u32(self.my_id);
                     request.put_u32(src_id);
-                    self.pipe_writer.send_to(request, &route_key).await.unwrap();
+                    self.socket_manager
+                        .send_to(request, &route_key)
+                        .await
+                        .unwrap();
                     self.route_table.add_route(src_id, (route_key, 1));
                 }
                 PUNCH_RES => {
@@ -280,11 +277,10 @@ impl ContextHandler {
                 }
                 PUBLIC_ADDR_RES => {
                     let public_addr =
-                        SocketAddr::from_str(&String::from_utf8(buf[12..len].to_vec()).unwrap())
-                            .unwrap();
+                        SocketAddr::from_str(core::str::from_utf8(&buf[12..len]).unwrap()).unwrap();
                     log::info!("public_addr={public_addr}");
                     let mut guard = self.nat_info.lock();
-                    if let Some(port) = guard.public_ports.get_mut(route_key.index_usize()) {
+                    if let Some(port) = guard.public_udp_ports.get_mut(route_key.index_usize()) {
                         *port = public_addr.port();
                     }
                 }
@@ -296,12 +292,12 @@ impl ContextHandler {
                 }
             }
         }
-        log::info!("pipe_line done");
+        log::info!("tunnel done");
         Ok(())
     }
 }
 
-async fn my_nat_info(pipe_writer: &PipeWriter<u32>) -> Arc<Mutex<NatInfo>> {
+async fn my_nat_info(socket_manager: &SocketManager) -> Arc<Mutex<NatInfo>> {
     let stun_server = vec![
         "stun.miwifi.com:3478".to_string(),
         "stun.chat.bilibili.com:3478".to_string(),
@@ -312,18 +308,22 @@ async fn my_nat_info(pipe_writer: &PipeWriter<u32>) -> Arc<Mutex<NatInfo>> {
         .unwrap();
     log::info!("nat_type:{nat_type:?},public_ips:{public_ips:?},port_range={port_range}");
     let local_ipv4 = rust_p2p_core::extend::addr::local_ipv4().await.unwrap();
-    let local_udp_ports = pipe_writer
-        .udp_pipe_writer()
+    let local_udp_ports = socket_manager
+        .udp_socket_manager_as_ref()
         .unwrap()
         .local_ports()
         .unwrap();
-    let local_tcp_port = pipe_writer.tcp_pipe_writer().unwrap().local_addr().port();
+    let local_tcp_port = socket_manager
+        .tcp_socket_manager_as_ref()
+        .unwrap()
+        .local_addr()
+        .port();
     let mut public_ports = local_udp_ports.clone();
     public_ports.fill(0);
     let nat_info = NatInfo {
         nat_type,
         public_ips,
-        public_ports,
+        public_udp_ports: public_ports,
         mapping_tcp_addr: vec![],
         mapping_udp_addr: vec![],
         public_port_range: port_range,
@@ -332,7 +332,6 @@ async fn my_nat_info(pipe_writer: &PipeWriter<u32>) -> Arc<Mutex<NatInfo>> {
         local_udp_ports,
         local_tcp_port,
         public_tcp_port: 0,
-        seq: 0,
     };
     Arc::new(Mutex::new(nat_info))
 }

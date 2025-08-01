@@ -2,7 +2,7 @@ use std::net::Ipv4Addr;
 
 #[repr(transparent)]
 #[derive(Hash, Eq, PartialEq, Ord, PartialOrd, Copy, Clone, Debug)]
-pub struct NodeID([u8; 4]);
+pub struct NodeID([u8; ID_LEN]);
 pub const ID_LEN: usize = 4;
 
 impl AsRef<[u8]> for NodeID {
@@ -13,10 +13,10 @@ impl AsRef<[u8]> for NodeID {
 
 impl NodeID {
     pub fn broadcast() -> NodeID {
-        NodeID([255u8; 4])
+        NodeID([255u8; ID_LEN])
     }
     pub fn unspecified() -> NodeID {
-        NodeID([0u8; 4])
+        NodeID([0u8; ID_LEN])
     }
     pub fn is_unspecified(&self) -> bool {
         let buf = self.as_ref();
@@ -28,8 +28,29 @@ impl NodeID {
     }
 }
 
-impl From<[u8; 4]> for NodeID {
-    fn from(value: [u8; 4]) -> Self {
+impl From<NodeID> for [u8; ID_LEN] {
+    fn from(value: NodeID) -> Self {
+        value.0
+    }
+}
+impl From<NodeID> for u32 {
+    fn from(value: NodeID) -> Self {
+        u32::from_be_bytes(value.0)
+    }
+}
+impl From<NodeID> for i32 {
+    fn from(value: NodeID) -> Self {
+        i32::from_be_bytes(value.0)
+    }
+}
+impl From<NodeID> for Ipv4Addr {
+    fn from(value: NodeID) -> Self {
+        Ipv4Addr::from(value.0)
+    }
+}
+
+impl From<[u8; ID_LEN]> for NodeID {
+    fn from(value: [u8; ID_LEN]) -> Self {
         NodeID(value)
     }
 }
@@ -54,7 +75,7 @@ impl TryFrom<&[u8]> for NodeID {
 
     fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
         match value.len() {
-            4 => Ok(NodeID(value.try_into().unwrap())),
+            ID_LEN => Ok(NodeID(value.try_into().unwrap())),
             _ => Err(std::io::Error::from(std::io::ErrorKind::InvalidData)),
         }
     }
@@ -62,7 +83,7 @@ impl TryFrom<&[u8]> for NodeID {
 
 #[repr(transparent)]
 #[derive(Hash, Eq, PartialEq, Ord, PartialOrd, Copy, Clone, Debug)]
-pub struct GroupCode([u8; 16]);
+pub struct GroupCode([u8; GROUP_CODE_LEN]);
 
 impl Default for GroupCode {
     fn default() -> Self {
@@ -72,7 +93,7 @@ impl Default for GroupCode {
 pub const GROUP_CODE_LEN: usize = 16;
 impl GroupCode {
     pub fn unspecified() -> GroupCode {
-        GroupCode([0u8; 16])
+        GroupCode([0u8; GROUP_CODE_LEN])
     }
     pub fn is_unspecified(&self) -> bool {
         let buf = self.as_ref();
@@ -91,11 +112,41 @@ impl TryFrom<&[u8]> for GroupCode {
 
     fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
         match value.len() {
-            16 => Ok(GroupCode(value.try_into().unwrap())),
+            GROUP_CODE_LEN => Ok(GroupCode(value.try_into().unwrap())),
             _ => Err(std::io::Error::from(std::io::ErrorKind::InvalidData)),
         }
     }
 }
+
+impl TryFrom<&str> for GroupCode {
+    type Error = std::io::Error;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        if value.len() > GROUP_CODE_LEN {
+            return Err(std::io::Error::other(format!("The number of bytes in the string exceeds the limit of group code len {GROUP_CODE_LEN}")));
+        }
+        let mut array = [0u8; 16];
+        let bytes = value.as_bytes();
+        let len = bytes.len().min(16);
+        array[..len].copy_from_slice(&bytes[..len]);
+        Ok(array.into())
+    }
+}
+
+impl TryFrom<String> for GroupCode {
+    type Error = std::io::Error;
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::try_from(value.as_str())
+    }
+}
+
+impl TryFrom<&String> for GroupCode {
+    type Error = std::io::Error;
+    fn try_from(value: &String) -> Result<Self, Self::Error> {
+        Self::try_from(value.as_str())
+    }
+}
+
 impl From<u128> for GroupCode {
     fn from(value: u128) -> Self {
         GroupCode(value.to_be_bytes())
@@ -106,8 +157,8 @@ impl From<i128> for GroupCode {
         GroupCode(value.to_be_bytes())
     }
 }
-impl From<[u8; 16]> for GroupCode {
-    fn from(value: [u8; 16]) -> Self {
+impl From<[u8; GROUP_CODE_LEN]> for GroupCode {
+    fn from(value: [u8; GROUP_CODE_LEN]) -> Self {
         GroupCode(value)
     }
 }
