@@ -212,6 +212,9 @@ impl Builder {
         if let Some(interface) = self.interface {
             config = config.set_default_interface(interface);
         }
+        if let Some(punching_policy) = self.punching_policy {
+            config = config.set_punching_policy_arc(punching_policy);
+        }
         if let Some(group_code) = self.group_code {
             config = config.set_group_code(group_code);
         }

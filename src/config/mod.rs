@@ -214,6 +214,13 @@ impl Config {
         self.punching_policy = Some(Arc::new(punching_policy));
         self
     }
+    pub fn set_punching_policy_arc(
+        mut self,
+        punching_policy: Arc<dyn PunchingPolicy + 'static>,
+    ) -> Self {
+        self.punching_policy = Some(punching_policy);
+        self
+    }
 }
 
 pub struct TcpTunnelConfig {
