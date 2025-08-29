@@ -14,6 +14,7 @@ pub use tunnel::{NodeAddress, PeerNodeAddress, RecvUserData};
 #[cfg(feature = "use-kcp")]
 pub use reliable::*;
 
+use crate::config::PunchingPolicy;
 pub use crate::config::{DataInterceptor, DefaultInterceptor};
 use crate::protocol::protocol_type::ProtocolType;
 pub use crate::tunnel::{RecvMetadata, RecvResult};
@@ -120,6 +121,7 @@ pub struct Builder {
     encryption: Option<Algorithm>,
     node_id: Option<NodeID>,
     interceptor: Option<Interceptor>,
+    punching_policy: Option<Arc<dyn PunchingPolicy>>,
     interface: Option<LocalInterface>,
     config: Option<Config>,
 }
@@ -133,6 +135,7 @@ impl Builder {
             encryption: None,
             node_id: None,
             interceptor: None,
+            punching_policy: None,
             interface: None,
             config: None,
         }
@@ -146,6 +149,7 @@ impl Builder {
             encryption: None,
             node_id: None,
             interceptor: None,
+            punching_policy: None,
             interface: None,
             config: Some(config),
         }
@@ -178,6 +182,10 @@ impl Builder {
         self.interceptor = Some(Interceptor {
             inner: Arc::new(interceptor),
         });
+        self
+    }
+    pub fn punching_policy<I: PunchingPolicy + 'static>(mut self, punching_policy: I) -> Self {
+        self.punching_policy = Some(Arc::new(punching_policy));
         self
     }
     pub fn bind_interface(mut self, interface: LocalInterface) -> Self {

@@ -1,6 +1,7 @@
 use std::io;
 use std::io::IoSlice;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -15,6 +16,7 @@ use crate::protocol::{NetPacket, HEAD_LEN};
 use crate::tunnel::{NodeAddress, PeerNodeAddress, RecvResult};
 pub use rust_p2p_core::nat::*;
 pub use rust_p2p_core::punch::config::{PunchModel, PunchPolicy, PunchPolicySet};
+use rust_p2p_core::punch::PunchRole;
 pub use rust_p2p_core::socket::LocalInterface;
 pub use rust_p2p_core::tunnel::config::LoadBalance;
 use rust_p2p_core::tunnel::recycle::RecycleBuf;
@@ -53,6 +55,7 @@ pub struct Config {
     pub encryption: Option<crate::cipher::Algorithm>,
     pub default_interface: Option<LocalInterface>,
     pub use_v6: bool,
+    pub punching_policy: Option<Arc<dyn PunchingPolicy>>,
 }
 
 impl Default for Config {
@@ -99,6 +102,7 @@ impl Default for Config {
                 .set_use_v6(true)
                 .check()
                 .is_ok(),
+            punching_policy: None,
         }
     }
 }
@@ -204,6 +208,10 @@ impl Config {
     /// Whether to use IPv6
     pub fn set_use_v6(mut self, use_v6: bool) -> Self {
         self.use_v6 = use_v6;
+        self
+    }
+    pub fn set_punching_policy<T: PunchingPolicy + 'static>(mut self, punching_policy: T) -> Self {
+        self.punching_policy = Some(Arc::new(punching_policy));
         self
     }
 }
@@ -543,5 +551,15 @@ pub struct DefaultInterceptor;
 impl DataInterceptor for DefaultInterceptor {
     async fn pre_handle(&self, _data: &mut RecvResult) -> bool {
         false
+    }
+}
+
+pub trait PunchingPolicy: Send + Sync {
+    fn should_punch(&self, punch_role: PunchRole, node_id: &NodeID) -> bool;
+}
+pub struct DefaultPunchingPolicy;
+impl PunchingPolicy for DefaultPunchingPolicy {
+    fn should_punch(&self, _punch_role: PunchRole, _node_id: &NodeID) -> bool {
+        true
     }
 }

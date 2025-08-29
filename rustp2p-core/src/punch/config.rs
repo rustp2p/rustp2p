@@ -4,6 +4,14 @@ use std::collections::HashSet;
 use std::ops;
 use std::str::FromStr;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PunchRole {
+    /// Actively initiates the hole punching process
+    Initiator,
+    /// Assists the peer in hole punching (responding side)
+    Responder,
+}
+
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
 pub enum PunchPolicy {
     IPv4Tcp,

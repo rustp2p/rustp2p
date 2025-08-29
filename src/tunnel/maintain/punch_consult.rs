@@ -1,12 +1,17 @@
+use crate::config::PunchingPolicy;
 use crate::protocol::node_id::NodeID;
 use crate::protocol::protocol_type::ProtocolType;
 use crate::tunnel::TunnelRouter;
 use rand::seq::SliceRandom;
-use rust_p2p_core::punch::{PunchConsultInfo, PunchInfo, Puncher};
+use rust_p2p_core::punch::{PunchConsultInfo, PunchInfo, PunchRole, Puncher};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc::Receiver;
 
-pub async fn punch_consult_loop(tunnel_tx: TunnelRouter) {
+pub async fn punch_consult_loop(
+    tunnel_tx: TunnelRouter,
+    punching_policy: Option<Arc<dyn PunchingPolicy>>,
+) {
     tokio::time::sleep(Duration::from_secs(1)).await;
     let route_table = &tunnel_tx.route_table;
     loop {
@@ -45,6 +50,12 @@ pub async fn punch_consult_loop(tunnel_tx: TunnelRouter) {
             if !route_table.need_punch(&node_id) {
                 continue;
             }
+            if let Some(punching_policy) = &punching_policy {
+                if !punching_policy.should_punch(PunchRole::Initiator, &node_id) {
+                    continue;
+                }
+            }
+
             if tunnel_tx
                 .send_packet_to(send_packet.clone(), &node_id)
                 .await

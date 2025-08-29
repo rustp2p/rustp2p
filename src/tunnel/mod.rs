@@ -1,4 +1,4 @@
-use crate::config::Config;
+use crate::config::{Config, PunchingPolicy};
 use crate::extend::byte_pool::{Block, BufferPool};
 use crate::protocol::broadcast::RangeBroadcastPacket;
 use crate::protocol::id_route::IDRouteReplyPacket;
@@ -14,7 +14,7 @@ pub use node_context::NodeAddress;
 pub use node_context::PeerNodeAddress;
 use rust_p2p_core::idle::IdleRouteManager;
 use rust_p2p_core::nat::NatType;
-use rust_p2p_core::punch::PunchConsultInfo;
+use rust_p2p_core::punch::{PunchConsultInfo, PunchRole};
 use rust_p2p_core::route::route_table::{Route, RouteTable};
 use rust_p2p_core::route::{ConnectProtocol, RouteKey};
 use rust_p2p_core::tunnel::config::LoadBalance;
@@ -44,6 +44,7 @@ pub(crate) struct TunnelDispatcher {
     passive_punch_sender: Sender<(NodeID, PunchConsultInfo)>,
     buffer_pool: Option<BufferPool<BytesMut>>,
     recycle_buf: Option<RecycleBuf>,
+    punching_policy: Option<Arc<dyn PunchingPolicy>>,
 }
 
 impl TunnelDispatcher {
@@ -65,6 +66,7 @@ impl TunnelDispatcher {
         let mapping_addrs = config.mapping_addrs.take();
         let dns = config.dns.take();
         let default_interface = config.default_interface.clone();
+        let punching_policy = config.punching_policy.take();
 
         let buffer_pool = if config.recycle_buf_cap > 0 {
             Some(BufferPool::new(
@@ -166,6 +168,7 @@ impl TunnelDispatcher {
             default_interface,
             active_punch_receiver,
             passive_punch_receiver,
+            punching_policy.clone(),
         );
         let mut join_set = join_set;
         let fut = shutdown_manager
@@ -186,6 +189,7 @@ impl TunnelDispatcher {
             passive_punch_sender,
             buffer_pool,
             recycle_buf,
+            punching_policy,
         })
     }
     pub(crate) fn tunnel_router(&self) -> TunnelRouter {
@@ -240,6 +244,7 @@ impl TunnelDispatcher {
             recv_buff,
             recv_sizes,
             recv_addrs,
+            punching_policy: self.punching_policy.clone(),
         })
     }
 }
@@ -692,6 +697,7 @@ pub(crate) struct Tunnel {
     recv_buff: Vec<Data>,
     recv_sizes: Vec<usize>,
     recv_addrs: Vec<RouteKey>,
+    punching_policy: Option<Arc<dyn PunchingPolicy>>,
 }
 
 const BUF_SIZE: usize = 16;
@@ -1206,6 +1212,11 @@ impl Tunnel {
             ProtocolType::PunchConsultRequest => {
                 let punch_info = rmp_serde::from_slice::<PunchConsultInfo>(packet.payload())
                     .map_err(|e| io::Error::other(format!("RmpDecodeError: {e:?}")))?;
+                if let Some(punching_policy) = &self.punching_policy {
+                    if !punching_policy.should_punch(PunchRole::Responder, &src_id) {
+                        return Ok(None);
+                    }
+                }
                 log::debug!("PunchConsultRequest {punch_info:?}");
                 let consult_info = self.node_context.gen_punch_info();
                 let data = rmp_serde::to_vec(&consult_info)
