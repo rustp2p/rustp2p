@@ -370,8 +370,8 @@ impl<PeerID: Hash + Eq + Clone> RouteTable<PeerID> {
             .entry(id)
             .or_insert_with(|| (AtomicUsize::new(0), Vec::with_capacity(4)));
         let (peer_id, (_, list)) = route_table.pair_mut();
-        let mut exist = false;
-        for (x, time) in list.iter_mut() {
+        let mut exist_index = None;
+        for (index, (x, time)) in list.iter_mut().enumerate() {
             if x.metric < route.metric && self.load_balance != LoadBalance::LowestLatency {
                 //非优先延迟的情况下 不能比当前的路径更长
                 return false;
@@ -383,13 +383,15 @@ impl<PeerID: Hash + Eq + Clone> RouteTable<PeerID> {
                 }
                 x.metric = route.metric;
                 x.rtt = route.rtt;
-                exist = true;
+                exist_index = Some(index);
                 break;
             }
         }
-        if exist {
+        if let Some(index) = exist_index {
             if self.load_balance != LoadBalance::MostRecent {
                 list.sort_by_key(|(k, _)| k.rtt);
+            } else {
+                list.swap(0, index);
             }
         } else {
             if self.load_balance != LoadBalance::LowestLatency && route.is_direct() {
