@@ -30,6 +30,7 @@ use std::io;
 use std::ops::Deref;
 use std::sync::Arc;
 use tokio::task::JoinHandle;
+use rust_p2p_core::tunnel::config::LoadBalance;
 use tunnel::{Tunnel, TunnelDispatcher, TunnelRouter};
 
 pub struct EndPoint {
@@ -122,6 +123,7 @@ pub struct Builder {
     node_id: Option<NodeID>,
     interceptor: Option<Interceptor>,
     punching_policy: Option<Arc<dyn PunchingPolicy>>,
+    load_balance: Option<LoadBalance>,
     interface: Option<LocalInterface>,
     config: Option<Config>,
 }
@@ -136,6 +138,7 @@ impl Builder {
             node_id: None,
             interceptor: None,
             punching_policy: None,
+            load_balance: None,
             interface: None,
             config: None,
         }
@@ -150,6 +153,7 @@ impl Builder {
             node_id: None,
             interceptor: None,
             punching_policy: None,
+            load_balance: None,
             interface: None,
             config: Some(config),
         }
@@ -188,6 +192,10 @@ impl Builder {
         self.punching_policy = Some(Arc::new(punching_policy));
         self
     }
+    pub fn load_balance(mut self, load_balance: LoadBalance) -> Self {
+        self.load_balance = Some(load_balance);
+        self
+    }
     pub fn bind_interface(mut self, interface: LocalInterface) -> Self {
         self.interface = Some(interface);
         self
@@ -214,6 +222,9 @@ impl Builder {
         }
         if let Some(punching_policy) = self.punching_policy {
             config = config.set_punching_policy_arc(punching_policy);
+        }
+        if let Some(load_balance) = self.load_balance {
+            config = config.set_load_balance(load_balance);
         }
         if let Some(group_code) = self.group_code {
             config = config.set_group_code(group_code);
