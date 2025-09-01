@@ -699,6 +699,15 @@ pub(crate) struct Tunnel {
     recv_addrs: Vec<RouteKey>,
     punching_policy: Option<Arc<dyn PunchingPolicy>>,
 }
+impl Drop for Tunnel {
+    fn drop(&mut self) {
+        if let rust_p2p_core::tunnel::Tunnel::Tcp(tcp) = &self.tunnel {
+            if let Some(id) = self.route_table.get_id_by_route_key(&tcp.route_key()) {
+                self.route_table.remove_route(&id, &tcp.route_key());
+            }
+        }
+    }
+}
 
 const BUF_SIZE: usize = 16;
 
