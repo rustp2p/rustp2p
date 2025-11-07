@@ -21,12 +21,12 @@ impl<PeerID: Hash + Eq + Clone> IdleRouteManager<PeerID> {
         loop {
             let time = if let Some((peer_id, route, instant)) = self.route_table.oldest_route() {
                 let time = Instant::now().saturating_duration_since(instant);
-                if time > self.read_idle {
+                if time >= self.read_idle {
                     return (peer_id, route, instant);
                 }
                 time
             } else {
-                self.read_idle
+                self.read_idle / 3
             };
             tokio::time::sleep(time.max(Duration::from_millis(1))).await;
         }
