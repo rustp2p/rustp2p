@@ -75,15 +75,7 @@ impl Puncher {
         let Some(id) = punch_info.peer_nat_info.flag() else {
             return false;
         };
-        let (count, _, _) = *self
-            .count_record
-            .lock()
-            .entry(id)
-            .and_modify(|(v, _, time)| {
-                *v += 1;
-                *time = now();
-            })
-            .or_insert((0, 0, now()));
+        let (count, _, _) = *self.count_record.lock().entry(id).or_insert((0, 0, now()));
         if count > 8 {
             //降低频率
             let interval = count / 8;
@@ -122,7 +114,8 @@ impl Puncher {
         let ttl = if count < 255 { Some(count as u8) } else { None };
         let peer_nat_info = punch_info.peer_nat_info;
         let punch_model = punch_info.punch_model;
-
+        self.punch_udp(peer, count, udp_buf, &peer_nat_info, &punch_model)
+            .await?;
         type Scope<'a, T> = async_scoped::TokioScope<'a, T>;
         Scope::scope_and_block(|s| {
             if let Some(tcp_socket_manager) = self.tcp_socket_manager.as_ref() {
@@ -152,8 +145,6 @@ impl Puncher {
                 }
             }
         });
-        self.punch_udp(peer, count, udp_buf, &peer_nat_info, &punch_model)
-            .await?;
 
         Ok(())
     }
