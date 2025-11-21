@@ -36,6 +36,8 @@ pub struct NatInfo {
     pub public_port_range: u16,
     /// local IP address
     pub local_ipv4: Ipv4Addr,
+    #[serde(default)]
+    pub local_ipv4s: Vec<Ipv4Addr>,
     /// The public IPv6 address
     pub ipv6: Option<Ipv6Addr>,
     /// The local ports where the `UDP` services bind
@@ -100,6 +102,18 @@ impl NatInfo {
             .collect()
     }
     pub fn local_ipv4_addrs(&self) -> Vec<SocketAddr> {
+        if   self.local_udp_ports.is_empty(){
+            return vec![];
+        }
+        if !self.local_ipv4s.is_empty() {
+            let mut rs = Vec::with_capacity(self.local_ipv4s.len()*self.local_udp_ports.len());
+            for ip in self.local_ipv4s.iter() {
+                for port in self.local_udp_ports.iter() {
+                    rs.push(SocketAddrV4::new(*ip, *port).into());
+                }
+            }
+            return rs;
+        }
         if self.local_ipv4.is_unspecified()
             || self.local_ipv4.is_multicast()
             || self.local_ipv4.is_broadcast()
