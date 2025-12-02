@@ -121,25 +121,53 @@ impl Puncher {
             if let Some(tcp_socket_manager) = self.tcp_socket_manager.as_ref() {
                 for addr in &peer_nat_info.mapping_tcp_addr {
                     s.spawn(async move {
-                        Self::connect_tcp(tcp_socket_manager, tcp_buf, *addr, ttl).await;
+                        Self::connect_tcp(
+                            tcp_socket_manager,
+                            tcp_buf,
+                            *addr,
+                            ttl,
+                            Duration::from_secs(3),
+                        )
+                        .await;
                     })
                 }
                 if punch_model.is_match(PunchPolicy::IPv4Tcp) {
                     if let Some(addr) = peer_nat_info.local_ipv4_tcp() {
                         s.spawn(async move {
-                            Self::connect_tcp(tcp_socket_manager, tcp_buf, addr, ttl).await;
+                            Self::connect_tcp(
+                                tcp_socket_manager,
+                                tcp_buf,
+                                addr,
+                                ttl,
+                                Duration::from_millis(100),
+                            )
+                            .await;
                         })
                     }
                     for addr in peer_nat_info.public_ipv4_tcp() {
                         s.spawn(async move {
-                            Self::connect_tcp(tcp_socket_manager, tcp_buf, addr, ttl).await;
+                            Self::connect_tcp(
+                                tcp_socket_manager,
+                                tcp_buf,
+                                addr,
+                                ttl,
+                                Duration::from_secs(3),
+                            )
+                            .await;
                         })
                     }
                 }
                 if punch_model.is_match(PunchPolicy::IPv6Tcp) {
                     if let Some(addr) = peer_nat_info.ipv6_tcp_addr() {
                         s.spawn(async move {
-                            Self::connect_tcp(tcp_socket_manager, tcp_buf, addr, ttl).await;
+                            Self::connect_tcp(
+                                tcp_socket_manager,
+                                tcp_buf,
+                                addr,
+                                ttl,
+                                Duration::from_secs(3),
+                            )
+                            .await;
                         })
                     }
                 }
@@ -153,15 +181,16 @@ impl Puncher {
         buf: Option<&[u8]>,
         addr: SocketAddr,
         ttl: Option<u8>,
+        timeout: Duration,
     ) {
         let rs = if let Some(buf) = buf {
             tokio::time::timeout(
-                Duration::from_secs(3),
+                timeout,
                 tcp_socket_manager.multi_send_to_impl(buf.into(), addr, ttl),
             )
             .await
         } else {
-            tokio::time::timeout(Duration::from_secs(3), async {
+            tokio::time::timeout(timeout, async {
                 tcp_socket_manager.connect_ttl(addr, ttl).await?;
                 Ok(())
             })
