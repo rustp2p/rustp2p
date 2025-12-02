@@ -102,12 +102,18 @@ impl NatInfo {
             .collect()
     }
     pub fn local_ipv4_addrs(&self) -> Vec<SocketAddr> {
-        if   self.local_udp_ports.is_empty(){
+        if self.local_udp_ports.is_empty() {
             return vec![];
         }
         if !self.local_ipv4s.is_empty() {
-            let mut rs = Vec::with_capacity(self.local_ipv4s.len()*self.local_udp_ports.len());
+            let mut rs = Vec::with_capacity(self.local_ipv4s.len() * self.local_udp_ports.len());
             for ip in self.local_ipv4s.iter() {
+                if ip.is_unspecified()
+                    || ip.is_multicast()
+                    || ip.is_broadcast()
+                {
+                    continue;
+                }
                 for port in self.local_udp_ports.iter() {
                     rs.push(SocketAddrV4::new(*ip, *port).into());
                 }

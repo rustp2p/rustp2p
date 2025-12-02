@@ -328,6 +328,7 @@ async fn my_nat_info(socket_manager: &SocketManager) -> Arc<Mutex<NatInfo>> {
         mapping_udp_addr: vec![],
         public_port_range: port_range,
         local_ipv4,
+        local_ipv4s: vec![],
         ipv6: None,
         local_udp_ports,
         local_tcp_port,
