@@ -1,3 +1,4 @@
+use std::fmt;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 
 pub mod route_table;
@@ -78,5 +79,21 @@ impl ConnectProtocol {
     #[inline]
     pub fn is_udp(&self) -> bool {
         self == &ConnectProtocol::UDP
+    }
+}
+
+impl fmt::Display for RouteKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let protocol = self.protocol();
+        write!(f, "{}://{}", protocol, self.addr())
+    }
+}
+
+impl fmt::Display for ConnectProtocol {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ConnectProtocol::UDP => write!(f, "udp"),
+            ConnectProtocol::TCP => write!(f, "tcp"),
+        }
     }
 }
