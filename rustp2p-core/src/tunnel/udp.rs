@@ -488,11 +488,14 @@ impl UdpTunnelDispatcher {
             let udp = udp_tunnel.udp.clone();
             let recycle_buf = self.recycle_buf.clone();
             tokio::spawn(async move {
-                #[cfg(any(target_os = "linux", target_os = "android"))]
+                #[cfg(all(feature = "sendmmsg", any(target_os = "linux", target_os = "android")))]
                 let mut vec_buf = Vec::with_capacity(16);
 
                 while let Ok((buf, addr)) = r.recv().await {
-                    #[cfg(any(target_os = "linux", target_os = "android"))]
+                    #[cfg(all(
+                        feature = "sendmmsg",
+                        any(target_os = "linux", target_os = "android")
+                    ))]
                     {
                         vec_buf.push((buf, addr));
                         while let Ok(tup) = r.try_recv() {
@@ -537,7 +540,10 @@ impl UdpTunnelDispatcher {
                             vec_buf.clear();
                         }
                     }
-                    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+                    #[cfg(any(
+                        not(any(target_os = "linux", target_os = "android")),
+                        not(feature = "sendmmsg")
+                    ))]
                     {
                         let rs = udp.send_to(&buf, addr).await;
                         if let Some(recycle_buf) = recycle_buf.as_ref() {
@@ -566,7 +572,7 @@ impl UdpTunnelDispatcher {
     }
 }
 
-#[cfg(any(target_os = "linux", target_os = "android"))]
+#[cfg(all(feature = "sendmmsg", any(target_os = "linux", target_os = "android")))]
 fn sendmmsg(fd: std::os::fd::RawFd, bufs: &mut [(BytesMut, SocketAddr)]) -> io::Result<usize> {
     assert!(bufs.len() <= MAX_MESSAGES);
     let mut iov: [iovec; MAX_MESSAGES] = unsafe { std::mem::zeroed() };

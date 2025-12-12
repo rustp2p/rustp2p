@@ -26,11 +26,11 @@ pub use config::{
 use flume::{Receiver, Sender, TryRecvError};
 pub use rust_p2p_core::route::RouteKey;
 pub use rust_p2p_core::socket::LocalInterface;
+use rust_p2p_core::tunnel::config::LoadBalance;
 use std::io;
 use std::ops::Deref;
 use std::sync::Arc;
 use tokio::task::JoinHandle;
-use rust_p2p_core::tunnel::config::LoadBalance;
 use tunnel::{Tunnel, TunnelDispatcher, TunnelRouter};
 
 pub struct EndPoint {
