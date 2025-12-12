@@ -564,6 +564,7 @@ impl DataInterceptor for DefaultInterceptor {
 pub trait PunchingPolicy: Send + Sync {
     fn should_punch(&self, punch_role: PunchRole, node_id: &NodeID) -> bool;
 }
+#[allow(dead_code)]
 pub struct DefaultPunchingPolicy;
 impl PunchingPolicy for DefaultPunchingPolicy {
     fn should_punch(&self, _punch_role: PunchRole, _node_id: &NodeID) -> bool {

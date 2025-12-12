@@ -75,7 +75,7 @@ impl<B: AsRef<[u8]>> IDRouteReplyPacket<B> {
     pub(crate) fn buffer(&self) -> &[u8] {
         self.buffer.as_ref()
     }
-    pub(crate) fn iter(&self) -> IDRouteReplyIter<B> {
+    pub(crate) fn iter(&self) -> IDRouteReplyIter<'_, B> {
         IDRouteReplyIter {
             packet: self,
             index: 0,
