@@ -109,6 +109,7 @@ impl NodePunchInfo {
             local_udp_ports: self.local_udp_ports.clone(),
             local_tcp_port: self.local_tcp_port,
             public_tcp_port: self.public_tcp_port,
+            local_ipv4s: vec![],
         }
     }
     pub(crate) fn punch_consult_info(&self) -> PunchConsultInfo {
