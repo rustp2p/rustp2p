@@ -603,7 +603,7 @@ fn sendmmsg(fd: std::os::fd::RawFd, bufs: &mut [(BytesMut, SocketAddr)]) -> io::
     }
 }
 
-#[cfg(any(target_os = "linux", target_os = "android"))]
+#[cfg(all(feature = "sendmmsg", any(target_os = "linux", target_os = "android")))]
 fn socket_addr_to_sockaddr(addr: &SocketAddr) -> sockaddr_storage {
     let mut storage: sockaddr_storage = unsafe { std::mem::zeroed() };
 
