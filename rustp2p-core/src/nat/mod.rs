@@ -108,10 +108,7 @@ impl NatInfo {
         if !self.local_ipv4s.is_empty() {
             let mut rs = Vec::with_capacity(self.local_ipv4s.len() * self.local_udp_ports.len());
             for ip in self.local_ipv4s.iter() {
-                if ip.is_unspecified()
-                    || ip.is_multicast()
-                    || ip.is_broadcast()
-                {
+                if ip.is_unspecified() || ip.is_multicast() || ip.is_broadcast() {
                     continue;
                 }
                 for port in self.local_udp_ports.iter() {

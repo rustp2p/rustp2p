@@ -58,7 +58,7 @@ impl<B: AsRef<[u8]>> RangeBroadcastPacket<B> {
     pub(crate) fn buffer(&self) -> &[u8] {
         self.buffer.as_ref()
     }
-    pub(crate) fn iter(&self) -> RangeBroadcastIter<B> {
+    pub(crate) fn iter(&self) -> RangeBroadcastIter<'_, B> {
         RangeBroadcastIter {
             packet: self,
             index: 0,
