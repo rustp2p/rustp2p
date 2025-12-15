@@ -85,7 +85,7 @@ async fn main() {
         request.put_u32(my_id);
         request.put_u32(MY_SERVER_ID);
         socket_manager
-            .send_to_addr(connect_protocol, request, server)
+            .send_to_addr(connect_protocol, request.freeze(), server)
             .await
             .unwrap();
     }
@@ -126,7 +126,7 @@ async fn main() {
                     let data = serde_json::to_string(&nat_info).unwrap();
                     request.extend_from_slice(data.as_bytes());
                     socket_manager1
-                        .send_to_addr(connect_protocol, request, server)
+                        .send_to_addr(connect_protocol, request.freeze(), server)
                         .await
                         .unwrap();
                 }
@@ -143,7 +143,7 @@ async fn main() {
             request.put_u32(my_id);
             request.put_u32(MY_SERVER_ID);
             socket_manager2
-                .send_to_addr(connect_protocol, request, server)
+                .send_to_addr(connect_protocol, request.freeze(), server)
                 .await
                 .unwrap();
         }
@@ -219,7 +219,7 @@ impl ContextHandler {
                     let data = serde_json::to_string(&nat_info).unwrap();
                     request.extend_from_slice(data.as_bytes());
                     self.socket_manager
-                        .send_to(request, &route_key)
+                        .send_to(request.freeze(), &route_key)
                         .await
                         .unwrap();
 
@@ -263,7 +263,7 @@ impl ContextHandler {
                     request.put_u32(self.my_id);
                     request.put_u32(src_id);
                     self.socket_manager
-                        .send_to(request, &route_key)
+                        .send_to(request.freeze(), &route_key)
                         .await
                         .unwrap();
                     self.route_table.add_route(src_id, (route_key, 1));
