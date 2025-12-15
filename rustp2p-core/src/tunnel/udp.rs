@@ -15,7 +15,7 @@ pub async fn write_with<R>(udp: &UdpSocket, op: impl FnMut() -> io::Result<R>) -
     udp.async_io(Interest::WRITABLE, op).await
 }
 
-use bytes::BytesMut;
+use bytes::Bytes;
 use dashmap::DashMap;
 use parking_lot::{Mutex, RwLock};
 use tachyonix::{Receiver, Sender, TrySendError};
@@ -165,7 +165,7 @@ pub struct UdpSocketManager {
     tunnel_dispatcher: Sender<InactiveUdpTunnel>,
     sub_udp_num: usize,
     default_interface: Option<LocalInterface>,
-    sender_map: DashMap<Index, Sender<(BytesMut, SocketAddr)>>,
+    sender_map: DashMap<Index, Sender<(Bytes, SocketAddr)>>,
 }
 
 impl UdpSocketManager {
@@ -368,7 +368,7 @@ impl UdpSocketManager {
 
         Ok(())
     }
-    fn get_sender(&self, route_key: &RouteKey) -> io::Result<Sender<(BytesMut, SocketAddr)>> {
+    fn get_sender(&self, route_key: &RouteKey) -> io::Result<Sender<(Bytes, SocketAddr)>> {
         if let Some(sender) = self.sender_map.get(&route_key.index()) {
             Ok(sender.value().clone())
         } else {
@@ -377,7 +377,7 @@ impl UdpSocketManager {
     }
     pub async fn send_bytes_to<T, D: ToRouteKeyForUdp<T>>(
         &self,
-        buf: BytesMut,
+        buf: Bytes,
         dest: D,
     ) -> io::Result<()> {
         let route_key = ToRouteKeyForUdp::route_key(self, dest)?;
@@ -390,7 +390,7 @@ impl UdpSocketManager {
     }
     pub fn try_send_bytes_to<T, D: ToRouteKeyForUdp<T>>(
         &self,
-        buf: BytesMut,
+        buf: Bytes,
         dest: D,
     ) -> io::Result<()> {
         let route_key = ToRouteKeyForUdp::route_key(self, dest)?;
@@ -560,7 +560,7 @@ impl UdpTunnelDispatcher {
 }
 
 #[cfg(all(feature = "sendmmsg", any(target_os = "linux", target_os = "android")))]
-fn sendmmsg(fd: std::os::fd::RawFd, bufs: &mut [(BytesMut, SocketAddr)]) -> io::Result<usize> {
+fn sendmmsg(fd: std::os::fd::RawFd, bufs: &mut [(Bytes, SocketAddr)]) -> io::Result<usize> {
     assert!(bufs.len() <= MAX_MESSAGES);
     let mut iov: [iovec; MAX_MESSAGES] = unsafe { std::mem::zeroed() };
     let mut msgs: [mmsghdr; MAX_MESSAGES] = unsafe { std::mem::zeroed() };
@@ -649,11 +649,11 @@ pub struct UdpTunnel {
     sender: Option<OwnedUdpTunnelSender>,
 }
 struct OwnedUdpTunnelSender {
-    sender: Sender<(BytesMut, SocketAddr)>,
+    sender: Sender<(Bytes, SocketAddr)>,
 }
 #[derive(Clone)]
 pub struct WeakUdpTunnelSender {
-    sender: Sender<(BytesMut, SocketAddr)>,
+    sender: Sender<(Bytes, SocketAddr)>,
 }
 struct InactiveUdpTunnel {
     reusable: bool,
@@ -688,7 +688,7 @@ impl InactiveUdpTunnel {
     }
 }
 impl OwnedUdpTunnelSender {
-    async fn send_to<A: Into<SocketAddr>>(&self, buf: BytesMut, dest: A) -> io::Result<()> {
+    async fn send_to<A: Into<SocketAddr>>(&self, buf: Bytes, dest: A) -> io::Result<()> {
         if buf.is_empty() {
             return Ok(());
         }
@@ -702,7 +702,7 @@ impl OwnedUdpTunnelSender {
     }
 }
 impl WeakUdpTunnelSender {
-    pub async fn send_to<A: Into<SocketAddr>>(&self, buf: BytesMut, dest: A) -> io::Result<()> {
+    pub async fn send_to<A: Into<SocketAddr>>(&self, buf: Bytes, dest: A) -> io::Result<()> {
         if buf.is_empty() {
             return Ok(());
         }
@@ -711,7 +711,7 @@ impl WeakUdpTunnelSender {
             .await
             .map_err(|_| io::Error::from(io::ErrorKind::WriteZero))
     }
-    pub fn try_send_to<A: Into<SocketAddr>>(&self, buf: BytesMut, dest: A) -> io::Result<()> {
+    pub fn try_send_to<A: Into<SocketAddr>>(&self, buf: Bytes, dest: A) -> io::Result<()> {
         if buf.is_empty() {
             return Ok(());
         }
@@ -815,11 +815,7 @@ impl UdpTunnel {
             Err(io::Error::other("closed"))
         }
     }
-    pub async fn send_bytes_to<A: Into<SocketAddr>>(
-        &self,
-        buf: BytesMut,
-        addr: A,
-    ) -> io::Result<()> {
+    pub async fn send_bytes_to<A: Into<SocketAddr>>(&self, buf: Bytes, addr: A) -> io::Result<()> {
         if let Some(sender) = &self.sender {
             sender.send_to(buf, addr).await
         } else {

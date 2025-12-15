@@ -1,13 +1,13 @@
+use bytes::Bytes;
+use parking_lot::Mutex;
+use rand::seq::SliceRandom;
+use rand::Rng;
 use std::collections::HashMap;
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::ops::{Div, Mul};
 use std::sync::Arc;
 use std::time::Duration;
-
-use parking_lot::Mutex;
-use rand::seq::SliceRandom;
-use rand::Rng;
 
 use crate::nat::{NatInfo, NatType};
 
@@ -186,7 +186,7 @@ impl Puncher {
         let rs = if let Some(buf) = buf {
             tokio::time::timeout(
                 timeout,
-                tcp_socket_manager.multi_send_to_impl(buf.into(), addr, ttl),
+                tcp_socket_manager.multi_send_to_impl(Bytes::copy_from_slice(buf), addr, ttl),
             )
             .await
         } else {
