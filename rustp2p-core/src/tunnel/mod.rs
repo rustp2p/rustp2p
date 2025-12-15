@@ -10,7 +10,6 @@ use std::sync::Arc;
 
 pub mod config;
 
-pub mod recycle;
 pub mod tcp;
 pub mod udp;
 pub const DEFAULT_ADDRESS_V4: SocketAddr =

@@ -24,7 +24,6 @@ use tokio::net::UdpSocket;
 use crate::route::{Index, RouteKey};
 use crate::socket::{bind_udp, LocalInterface};
 use crate::tunnel::config::UdpTunnelConfig;
-use crate::tunnel::recycle::RecycleBuf;
 use crate::tunnel::{DEFAULT_ADDRESS_V4, DEFAULT_ADDRESS_V6};
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -152,7 +151,6 @@ pub(crate) fn create_tunnel_dispatcher(config: UdpTunnelConfig) -> io::Result<Ud
     let tunnel_factory = UdpTunnelDispatcher {
         tunnel_receiver,
         socket_manager,
-        recycle_buf: config.recycle_buf,
     };
     tunnel_factory.init()?;
     tunnel_factory.socket_manager.switch_model(config.model)?;
@@ -424,7 +422,6 @@ impl UdpSocketManager {
 pub struct UdpTunnelDispatcher {
     tunnel_receiver: Receiver<InactiveUdpTunnel>,
     pub(crate) socket_manager: Arc<UdpSocketManager>,
-    recycle_buf: Option<RecycleBuf>,
 }
 
 impl UdpTunnelDispatcher {
@@ -486,7 +483,6 @@ impl UdpTunnelDispatcher {
 
             let socket_manager = self.socket_manager.clone();
             let udp = udp_tunnel.udp.clone();
-            let recycle_buf = self.recycle_buf.clone();
             tokio::spawn(async move {
                 #[cfg(all(feature = "sendmmsg", any(target_os = "linux", target_os = "android")))]
                 let mut vec_buf = Vec::with_capacity(16);
@@ -532,13 +528,7 @@ impl UdpTunnelDispatcher {
                                 }
                             }
                         }
-                        if let Some(recycle_buf) = recycle_buf.as_ref() {
-                            while let Some((buf, _)) = vec_buf.pop() {
-                                recycle_buf.push(buf);
-                            }
-                        } else {
-                            vec_buf.clear();
-                        }
+                        vec_buf.clear();
                     }
                     #[cfg(any(
                         not(any(target_os = "linux", target_os = "android")),
@@ -546,9 +536,6 @@ impl UdpTunnelDispatcher {
                     ))]
                     {
                         let rs = udp.send_to(&buf, addr).await;
-                        if let Some(recycle_buf) = recycle_buf.as_ref() {
-                            recycle_buf.push(buf);
-                        }
                         if let Err(e) = rs {
                             log::debug!("{addr:?},{e:?}")
                         }

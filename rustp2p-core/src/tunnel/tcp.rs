@@ -1,7 +1,6 @@
 use crate::route::{Index, RouteKey};
 use crate::socket::{connect_tcp, create_tcp_listener, LocalInterface};
 use crate::tunnel::config::TcpTunnelConfig;
-use crate::tunnel::recycle::RecycleBuf;
 use async_lock::Mutex;
 use async_trait::async_trait;
 use bytes::BytesMut;
@@ -42,8 +41,7 @@ impl TcpTunnelDispatcher {
         let local_addr = tcp_listener.local_addr()?;
         let tcp_listener = TcpListener::from_std(tcp_listener)?;
         let (connect_sender, connect_receiver) = tachyonix::channel(128);
-        let write_half_collect =
-            WriteHalfCollect::new(config.tcp_multiplexing_limit, config.recycle_buf);
+        let write_half_collect = WriteHalfCollect::new(config.tcp_multiplexing_limit);
         let init_codec = Arc::new(config.init_codec);
         let socket_manager = Arc::new(TcpSocketManager::new(
             local_addr,
@@ -244,16 +242,14 @@ pub struct WriteHalfCollect {
     tcp_multiplexing_limit: usize,
     addr_mapping: Arc<DashMap<SocketAddr, Vec<usize>>>,
     write_half_map: Arc<DashMap<usize, Sender<BytesMut>>>,
-    recycle_buf: Option<RecycleBuf>,
 }
 
 impl WriteHalfCollect {
-    fn new(tcp_multiplexing_limit: usize, recycle_buf: Option<RecycleBuf>) -> Self {
+    fn new(tcp_multiplexing_limit: usize) -> Self {
         Self {
             tcp_multiplexing_limit,
             addr_mapping: Default::default(),
             write_half_map: Default::default(),
-            recycle_buf,
         }
     }
 }
@@ -295,7 +291,6 @@ impl WriteHalfCollect {
         let sender = s.clone();
         self.write_half_map.insert(index, s);
         let collect = self.clone();
-        let recycle_buf = self.recycle_buf.clone();
         tokio::spawn(async move {
             let mut vec_buf = Vec::with_capacity(16);
             const IO_SLICE_CAPACITY: usize = 16;
@@ -328,23 +323,13 @@ impl WriteHalfCollect {
                         std::mem::forget(vec);
                         rs
                     };
-
-                    if let Some(recycle_buf) = recycle_buf.as_ref() {
-                        while let Some(buf) = vec_buf.pop() {
-                            recycle_buf.push(buf);
-                        }
-                    } else {
-                        vec_buf.clear()
-                    }
+                    vec_buf.clear();
                     if let Err(e) = rs {
                         log::debug!("{route_key:?},{e:?}");
                         break;
                     }
                 } else {
                     let rs = decoder.encode(&mut writer, &v).await;
-                    if let Some(recycle_buf) = recycle_buf.as_ref() {
-                        recycle_buf.push(v);
-                    }
                     if let Err(e) = rs {
                         log::debug!("{route_key:?},{e:?}");
                         break;
