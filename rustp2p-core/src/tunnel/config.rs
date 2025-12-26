@@ -66,7 +66,7 @@ impl TunnelConfig {
         }
     }
 
-    pub fn set_tcp_multi_count(mut self, count: usize) -> Self {
+    pub fn major_socket_count(mut self, count: usize) -> Self {
         self.major_socket_count = count;
         self
     }
