@@ -54,7 +54,7 @@ async fn main() {
     let config = TunnelConfig::empty()
         .set_udp_tunnel_config(udp_config)
         .set_tcp_tunnel_config(tcp_config)
-        .set_tcp_multi_count(2);
+        .major_socket_count(2);
     let config = Config::new(config);
     let (mut listener, puncher) = rustp2p_reliable::from_config(config).await.unwrap();
     tokio::spawn(async move {

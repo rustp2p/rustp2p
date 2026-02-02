@@ -73,7 +73,7 @@ async fn main() {
     let config = TunnelConfig::empty()
         .set_udp_tunnel_config(udp_config)
         .set_tcp_tunnel_config(tcp_config)
-        .set_tcp_multi_count(2);
+        .major_socket_count(2);
     let (mut tunnel_factory, puncher) = new_tunnel_component(config).unwrap();
     let route_table = RouteTable::<u32>::default();
     let idle_route_manager = IdleRouteManager::new(Duration::from_secs(12), route_table.clone());

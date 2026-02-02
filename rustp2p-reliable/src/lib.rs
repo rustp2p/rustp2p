@@ -100,6 +100,7 @@ impl PunchContext {
             mapping_udp_addr: vec![],
             public_port_range: 0,
             local_ipv4: Ipv4Addr::UNSPECIFIED,
+            local_ipv4s: vec![],
             ipv6: None,
             local_udp_ports,
             local_tcp_port,
@@ -376,7 +377,7 @@ impl TcpMessageHub {
         }
     }
     pub async fn send(&self, buf: BytesMut) -> io::Result<()> {
-        self.input.send(buf).await
+        self.input.send(buf.into()).await
     }
     pub async fn next(&self) -> io::Result<BytesMut> {
         self.output

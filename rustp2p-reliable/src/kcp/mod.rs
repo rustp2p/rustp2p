@@ -1,5 +1,5 @@
 use crate::KcpMessageHub;
-use bytes::{Buf, BufMut, BytesMut};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 use kcp::Kcp;
 use rust_p2p_core::route::RouteKey;
 use rust_p2p_core::tunnel::udp::WeakUdpTunnelSender;
@@ -134,7 +134,7 @@ async fn kcp_run(
                     let mut new_buf = BytesMut::with_capacity(buf.len() + 1);
                     new_buf.put_u8(0x03);
                     new_buf.extend_from_slice(&buf[..]);
-                    tunnel_sender.send_to(new_buf, remote_addr).await?;
+                    tunnel_sender.send_to(new_buf.into(), remote_addr).await?;
                 }
                 DataType::Kcp(buf) => {
                     kcp.send(&buf).map_err(|e| Error::other(e))?;
@@ -215,7 +215,7 @@ struct KcpOutput {
 }
 impl Write for KcpOutput {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        match self.sender.try_send_to(buf.into(), self.addr) {
+        match self.sender.try_send_to(Bytes::copy_from_slice(buf), self.addr) {
             Ok(_) => {}
             Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {}
             Err(e) => Err(e)?,

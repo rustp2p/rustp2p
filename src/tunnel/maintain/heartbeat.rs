@@ -3,6 +3,7 @@ use crate::protocol::protocol_type::ProtocolType;
 use crate::protocol::NetPacket;
 use crate::tunnel::node_context::NodeAddress;
 use crate::tunnel::TunnelRouter;
+use bytes::Bytes;
 use std::collections::HashSet;
 use std::io;
 use std::time::Duration;
@@ -68,6 +69,7 @@ async fn direct_heartbeat_request(
     buf: &[u8],
 ) {
     let self_group_code = tunnel_tx.node_context().load_group_code();
+    let buf_bytes = Bytes::copy_from_slice(buf);
     for (addr, node_id) in direct_nodes {
         if let Some((group_code, node_id)) = node_id {
             if self_group_code == group_code && sent_ids.contains(&node_id) {
@@ -78,7 +80,7 @@ async fn direct_heartbeat_request(
             NodeAddress::Tcp(addr) => match tunnel_tx.socket_manager.tcp_socket_manager_as_ref() {
                 None => {}
                 Some(tcp) => {
-                    if let Err(e) = tcp.send_to_addr(buf.into(), addr).await {
+                    if let Err(e) = tcp.send_to_addr(buf_bytes.clone(), addr).await {
                         log::warn!("direct_heartbeat_request tcp, e={e:?},addr={addr:?}");
                     }
                 }
@@ -86,7 +88,7 @@ async fn direct_heartbeat_request(
             NodeAddress::Udp(addr) => match tunnel_tx.socket_manager.udp_socket_manager_as_ref() {
                 None => {}
                 Some(udp) => {
-                    if let Err(e) = udp.send_to(buf, addr).await {
+                    if let Err(e) = udp.send_to(&buf_bytes, addr).await {
                         log::warn!("direct_heartbeat_request udp, e={e:?},addr={addr:?}");
                     }
                 }

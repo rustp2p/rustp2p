@@ -19,7 +19,6 @@ pub use rust_p2p_core::punch::config::{PunchModel, PunchPolicy, PunchPolicySet};
 use rust_p2p_core::punch::PunchRole;
 pub use rust_p2p_core::socket::LocalInterface;
 pub use rust_p2p_core::tunnel::config::LoadBalance;
-use rust_p2p_core::tunnel::recycle::RecycleBuf;
 use rust_p2p_core::tunnel::tcp::{Decoder, Encoder, InitCodec};
 pub use rust_p2p_core::tunnel::udp::Model;
 
@@ -299,17 +298,8 @@ impl UdpTunnelConfig {
 
 impl From<Config> for rust_p2p_core::tunnel::config::TunnelConfig {
     fn from(value: Config) -> Self {
-        let recycle_buf = if value.recycle_buf_cap > 0 {
-            Some(RecycleBuf::new(
-                value.recycle_buf_cap,
-                value.send_buffer_size..usize::MAX,
-            ))
-        } else {
-            None
-        };
         let udp_tunnel_config = value.udp_tunnel_config.map(|v| {
             let mut config: rust_p2p_core::tunnel::config::UdpTunnelConfig = v.into();
-            config.recycle_buf.clone_from(&recycle_buf);
             config.use_v6 = value.use_v6;
             config
                 .default_interface
@@ -318,7 +308,6 @@ impl From<Config> for rust_p2p_core::tunnel::config::TunnelConfig {
         });
         let tcp_tunnel_config = value.tcp_tunnel_config.map(|v| {
             let mut config: rust_p2p_core::tunnel::config::TcpTunnelConfig = v.into();
-            config.recycle_buf = recycle_buf;
             config.use_v6 = value.use_v6;
             config
                 .default_interface
@@ -342,7 +331,6 @@ impl From<UdpTunnelConfig> for rust_p2p_core::tunnel::config::UdpTunnelConfig {
             default_interface: None,
             udp_ports: value.udp_ports,
             use_v6: false,
-            recycle_buf: None,
         }
     }
 }
@@ -356,7 +344,6 @@ impl From<TcpTunnelConfig> for rust_p2p_core::tunnel::config::TcpTunnelConfig {
             tcp_port: value.tcp_port,
             use_v6: false,
             init_codec: Box::new(LengthPrefixedInitCodec),
-            recycle_buf: None,
         }
     }
 }
