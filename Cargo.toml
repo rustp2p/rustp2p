@@ -58,7 +58,7 @@ members = [
 ]
 
 [workspace.dependencies]
-rust-p2p-core = { path = "rustp2p-core", version = "0.3" }
+rust-p2p-core = { path = "rustp2p-core", version = "0.4" }
 tachyonix = "0.3"
 thiserror = "2"
 tokio = { version = "1.42", features = ["full"] }
