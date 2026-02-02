@@ -359,12 +359,17 @@ impl TunnelRouter {
     ) -> io::Result<()> {
         let route = self.route_table.get_route_by_id(peer_id)?;
         self.socket_manager
-            .send_to(bytes::Bytes::copy_from_slice(buf.buffer()), &route.route_key())
+            .send_to(
+                bytes::Bytes::copy_from_slice(buf.buffer()),
+                &route.route_key(),
+            )
             .await?;
         Ok(())
     }
     pub(crate) async fn send_to_route(&self, buf: &[u8], route_key: &RouteKey) -> io::Result<()> {
-        self.socket_manager.send_to(bytes::Bytes::copy_from_slice(buf), route_key).await?;
+        self.socket_manager
+            .send_to(bytes::Bytes::copy_from_slice(buf), route_key)
+            .await?;
         Ok(())
     }
     async fn send_to_impl(
@@ -375,7 +380,8 @@ impl TunnelRouter {
         dest_id: &NodeID,
     ) -> io::Result<()> {
         if dest_id.is_broadcast() {
-            self.send_broadcast_impl(buf.as_ref(), group_code, src_id).await;
+            self.send_broadcast_impl(buf.as_ref(), group_code, src_id)
+                .await;
             return Ok(());
         }
 
@@ -486,7 +492,10 @@ impl TunnelRouter {
                         packet.set_group_code(group_code);
                         if let Err(e) = self
                             .socket_manager
-                            .send_to(bytes::Bytes::copy_from_slice(packet.buffer()), &route.route_key())
+                            .send_to(
+                                bytes::Bytes::copy_from_slice(packet.buffer()),
+                                &route.route_key(),
+                            )
                             .await
                         {
                             log::debug!("send_range_broadcast {e:?} {owner_id:?}");

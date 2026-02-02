@@ -215,7 +215,10 @@ struct KcpOutput {
 }
 impl Write for KcpOutput {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        match self.sender.try_send_to(Bytes::copy_from_slice(buf), self.addr) {
+        match self
+            .sender
+            .try_send_to(Bytes::copy_from_slice(buf), self.addr)
+        {
             Ok(_) => {}
             Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {}
             Err(e) => Err(e)?,
