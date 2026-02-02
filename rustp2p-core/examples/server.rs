@@ -1,4 +1,4 @@
-use bytes::{BufMut, BytesMut};
+use bytes::{BufMut, Bytes, BytesMut};
 use env_logger::Env;
 
 use rust_p2p_core::route::route_table::RouteTable;
@@ -38,7 +38,7 @@ async fn main() {
     let udp_config = UdpTunnelConfig::default().set_simple_udp_port(3000);
     let tcp_config = TcpTunnelConfig::new(Box::new(LengthPrefixedInitCodec)).set_tcp_port(3000);
     let config = TunnelConfig::empty()
-        .set_tcp_multi_count(1)
+        .major_socket_count(1)
         .set_tcp_tunnel_config(tcp_config)
         .set_udp_tunnel_config(udp_config);
     let (mut tunnel_factory, _puncher) = new_tunnel_component(config).unwrap();
@@ -100,7 +100,7 @@ async fn handler(route_table: RouteTable<u32>, mut tunnel: Tunnel, writer: Socke
                     .unwrap();
                     response.extend_from_slice(json.as_bytes());
                     writer
-                        .send_to(response, &peer_route.route_key())
+                        .send_to(response.freeze(), &peer_route.route_key())
                         .await
                         .unwrap();
                 }
@@ -108,7 +108,7 @@ async fn handler(route_table: RouteTable<u32>, mut tunnel: Tunnel, writer: Socke
             PUNCH_START_1 | PUNCH_START_2 => match route_table.get_route_by_id(&dest_id) {
                 Ok(route) => {
                     if let Err(e) = writer
-                        .send_to((&buf[..len]).into(), &route.route_key())
+                        .send_to(Bytes::copy_from_slice(&buf[..len]), &route.route_key())
                         .await
                     {
                         log::warn!(
@@ -130,7 +130,7 @@ async fn handler(route_table: RouteTable<u32>, mut tunnel: Tunnel, writer: Socke
                 response.put_u32(MY_SERVER_ID);
                 response.put_u32(src_id);
                 response.extend_from_slice(route_key.addr().to_string().as_bytes());
-                if let Err(e) = writer.send_to(response, &route_key).await {
+                if let Err(e) = writer.send_to(response.freeze(), &route_key).await {
                     log::warn!(
                         "{:?},src_id={src_id},peer_id={dest_id},addr={route_key:?},{e:?}",
                         &buf[..len]

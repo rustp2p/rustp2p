@@ -2,7 +2,6 @@ use std::io;
 use std::time::Duration;
 
 use crate::socket::LocalInterface;
-use crate::tunnel::recycle::RecycleBuf;
 use crate::tunnel::tcp::{BytesInitCodec, InitCodec};
 use crate::tunnel::udp::Model;
 
@@ -67,7 +66,7 @@ impl TunnelConfig {
         }
     }
 
-    pub fn set_tcp_multi_count(mut self, count: usize) -> Self {
+    pub fn major_socket_count(mut self, count: usize) -> Self {
         self.major_socket_count = count;
         self
     }
@@ -99,7 +98,6 @@ pub struct TcpTunnelConfig {
     pub tcp_port: u16,
     pub use_v6: bool,
     pub init_codec: Box<dyn InitCodec>,
-    pub recycle_buf: Option<RecycleBuf>,
 }
 
 impl Default for TcpTunnelConfig {
@@ -111,7 +109,6 @@ impl Default for TcpTunnelConfig {
             tcp_port: 0,
             use_v6: true,
             init_codec: Box::new(BytesInitCodec),
-            recycle_buf: None,
         }
     }
 }
@@ -125,7 +122,6 @@ impl TcpTunnelConfig {
             tcp_port: 0,
             use_v6: true,
             init_codec,
-            recycle_buf: None,
         }
     }
     pub fn check(&self) -> io::Result<()> {
@@ -170,7 +166,6 @@ pub struct UdpTunnelConfig {
     pub default_interface: Option<LocalInterface>,
     pub udp_ports: Vec<u16>,
     pub use_v6: bool,
-    pub recycle_buf: Option<RecycleBuf>,
 }
 
 impl Default for UdpTunnelConfig {
@@ -182,7 +177,6 @@ impl Default for UdpTunnelConfig {
             default_interface: None,
             udp_ports: vec![0, 0],
             use_v6: true,
-            recycle_buf: None,
         }
     }
 }

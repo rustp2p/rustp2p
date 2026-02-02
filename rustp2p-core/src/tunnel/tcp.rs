@@ -1,10 +1,9 @@
 use crate::route::{Index, RouteKey};
 use crate::socket::{connect_tcp, create_tcp_listener, LocalInterface};
 use crate::tunnel::config::TcpTunnelConfig;
-use crate::tunnel::recycle::RecycleBuf;
 use async_lock::Mutex;
 use async_trait::async_trait;
-use bytes::BytesMut;
+use bytes::Bytes;
 use dashmap::DashMap;
 use dyn_clone::DynClone;
 use rand::Rng;
@@ -21,7 +20,7 @@ use tokio::net::{TcpListener, TcpStream};
 pub struct TcpTunnelDispatcher {
     route_idle_time: Duration,
     tcp_listener: TcpListener,
-    connect_receiver: Receiver<(RouteKey, ReadHalfBox, Sender<BytesMut>)>,
+    connect_receiver: Receiver<(RouteKey, ReadHalfBox, Sender<Bytes>)>,
     #[allow(dead_code)]
     pub(crate) socket_manager: Arc<TcpSocketManager>,
     write_half_collect: WriteHalfCollect,
@@ -42,8 +41,7 @@ impl TcpTunnelDispatcher {
         let local_addr = tcp_listener.local_addr()?;
         let tcp_listener = TcpListener::from_std(tcp_listener)?;
         let (connect_sender, connect_receiver) = tachyonix::channel(128);
-        let write_half_collect =
-            WriteHalfCollect::new(config.tcp_multiplexing_limit, config.recycle_buf);
+        let write_half_collect = WriteHalfCollect::new(config.tcp_multiplexing_limit);
         let init_codec = Arc::new(config.init_codec);
         let socket_manager = Arc::new(TcpSocketManager::new(
             local_addr,
@@ -98,7 +96,7 @@ pub struct TcpTunnel {
     route_idle_time: Duration,
     tcp_read: OwnedReadHalf,
     decoder: Box<dyn Decoder>,
-    sender: Sender<BytesMut>,
+    sender: Sender<Bytes>,
 }
 
 impl TcpTunnel {
@@ -107,7 +105,7 @@ impl TcpTunnel {
         route_idle_time: Duration,
         route_key: RouteKey,
         read: ReadHalfBox,
-        sender: Sender<BytesMut>,
+        sender: Sender<Bytes>,
     ) -> Self {
         let decoder = read.decoder;
         let tcp_read = read.read_half;
@@ -136,13 +134,13 @@ impl TcpTunnel {
 }
 #[derive(Clone)]
 pub struct WeakTcpTunnelSender {
-    sender: Sender<BytesMut>,
+    sender: Sender<Bytes>,
 }
 impl WeakTcpTunnelSender {
-    fn new(sender: Sender<BytesMut>) -> Self {
+    fn new(sender: Sender<Bytes>) -> Self {
         Self { sender }
     }
-    pub async fn send(&self, buf: BytesMut) -> io::Result<()> {
+    pub async fn send(&self, buf: Bytes) -> io::Result<()> {
         if buf.is_empty() {
             return Ok(());
         }
@@ -161,7 +159,7 @@ impl Drop for TcpTunnel {
 
 impl TcpTunnel {
     /// Writing `buf` to the target denoted by `route_key` via this tunnel
-    pub async fn send(&self, buf: BytesMut) -> io::Result<()> {
+    pub async fn send(&self, buf: Bytes) -> io::Result<()> {
         if buf.is_empty() {
             return Ok(());
         }
@@ -243,17 +241,15 @@ impl TcpTunnel {
 pub struct WriteHalfCollect {
     tcp_multiplexing_limit: usize,
     addr_mapping: Arc<DashMap<SocketAddr, Vec<usize>>>,
-    write_half_map: Arc<DashMap<usize, Sender<BytesMut>>>,
-    recycle_buf: Option<RecycleBuf>,
+    write_half_map: Arc<DashMap<usize, Sender<Bytes>>>,
 }
 
 impl WriteHalfCollect {
-    fn new(tcp_multiplexing_limit: usize, recycle_buf: Option<RecycleBuf>) -> Self {
+    fn new(tcp_multiplexing_limit: usize) -> Self {
         Self {
             tcp_multiplexing_limit,
             addr_mapping: Default::default(),
             write_half_map: Default::default(),
-            recycle_buf,
         }
     }
 }
@@ -276,7 +272,7 @@ impl WriteHalfCollect {
         index_offset: usize,
         mut writer: OwnedWriteHalf,
         mut decoder: Box<dyn Encoder>,
-    ) -> Sender<BytesMut> {
+    ) -> Sender<Bytes> {
         assert!(index_offset < self.tcp_multiplexing_limit);
 
         let index = route_key.index_usize();
@@ -295,7 +291,6 @@ impl WriteHalfCollect {
         let sender = s.clone();
         self.write_half_map.insert(index, s);
         let collect = self.clone();
-        let recycle_buf = self.recycle_buf.clone();
         tokio::spawn(async move {
             let mut vec_buf = Vec::with_capacity(16);
             const IO_SLICE_CAPACITY: usize = 16;
@@ -328,23 +323,13 @@ impl WriteHalfCollect {
                         std::mem::forget(vec);
                         rs
                     };
-
-                    if let Some(recycle_buf) = recycle_buf.as_ref() {
-                        while let Some(buf) = vec_buf.pop() {
-                            recycle_buf.push(buf);
-                        }
-                    } else {
-                        vec_buf.clear()
-                    }
+                    vec_buf.clear();
                     if let Err(e) = rs {
                         log::debug!("{route_key:?},{e:?}");
                         break;
                     }
                 } else {
                     let rs = decoder.encode(&mut writer, &v).await;
-                    if let Some(recycle_buf) = recycle_buf.as_ref() {
-                        recycle_buf.push(v);
-                    }
                     if let Err(e) = rs {
                         log::debug!("{route_key:?},{e:?}");
                         break;
@@ -373,13 +358,10 @@ impl WriteHalfCollect {
 
         self.write_half_map.remove(&index_usize);
     }
-    pub(crate) fn get_write_half(&self, index: &usize) -> Option<Sender<BytesMut>> {
+    pub(crate) fn get_write_half(&self, index: &usize) -> Option<Sender<Bytes>> {
         self.write_half_map.get(index).map(|v| v.value().clone())
     }
-    pub(crate) fn get_write_half_by_key(
-        &self,
-        route_key: &RouteKey,
-    ) -> io::Result<Sender<BytesMut>> {
+    pub(crate) fn get_write_half_by_key(&self, route_key: &RouteKey) -> io::Result<Sender<Bytes>> {
         match route_key.index() {
             Index::Tcp(index) => {
                 let sender = self
@@ -412,7 +394,7 @@ impl WriteHalfCollect {
         }
         None
     }
-    pub async fn send_to(&self, buf: BytesMut, route_key: &RouteKey) -> io::Result<()> {
+    pub async fn send_to(&self, buf: Bytes, route_key: &RouteKey) -> io::Result<()> {
         let write_half = self.get_write_half_by_key(route_key)?;
         if buf.is_empty() {
             return Ok(());
@@ -423,7 +405,7 @@ impl WriteHalfCollect {
             Ok(())
         }
     }
-    pub fn try_send_to(&self, buf: BytesMut, route_key: &RouteKey) -> io::Result<()> {
+    pub fn try_send_to(&self, buf: Bytes, route_key: &RouteKey) -> io::Result<()> {
         let write_half = self.get_write_half_by_key(route_key)?;
         if buf.is_empty() {
             return Ok(());
@@ -444,7 +426,7 @@ pub struct TcpSocketManager {
     local_addr: SocketAddr,
     tcp_multiplexing_limit: usize,
     write_half_collect: WriteHalfCollect,
-    connect_sender: Sender<(RouteKey, ReadHalfBox, Sender<BytesMut>)>,
+    connect_sender: Sender<(RouteKey, ReadHalfBox, Sender<Bytes>)>,
     default_interface: Option<LocalInterface>,
     init_codec: Arc<Box<dyn InitCodec>>,
 }
@@ -454,7 +436,7 @@ impl TcpSocketManager {
         local_addr: SocketAddr,
         tcp_multiplexing_limit: usize,
         write_half_collect: WriteHalfCollect,
-        connect_sender: Sender<(RouteKey, ReadHalfBox, Sender<BytesMut>)>,
+        connect_sender: Sender<(RouteKey, ReadHalfBox, Sender<Bytes>)>,
         default_interface: Option<LocalInterface>,
         init_codec: Arc<Box<dyn InitCodec>>,
     ) -> Self {
@@ -592,16 +574,12 @@ impl TcpSocketManager {
 }
 
 impl TcpSocketManager {
-    pub async fn multi_send_to<A: Into<SocketAddr>>(
-        &self,
-        buf: BytesMut,
-        addr: A,
-    ) -> io::Result<()> {
+    pub async fn multi_send_to<A: Into<SocketAddr>>(&self, buf: Bytes, addr: A) -> io::Result<()> {
         self.multi_send_to_impl(buf, addr, None).await
     }
     pub(crate) async fn multi_send_to_impl<A: Into<SocketAddr>>(
         &self,
-        buf: BytesMut,
+        buf: Bytes,
         addr: A,
         ttl: Option<u8>,
     ) -> io::Result<()> {
@@ -614,7 +592,7 @@ impl TcpSocketManager {
     /// Reuse the bound port to initiate a connection, which can be used to penetrate NAT1 network type.
     pub async fn reuse_port_send_to<A: Into<SocketAddr>>(
         &self,
-        buf: BytesMut,
+        buf: Bytes,
         addr: A,
     ) -> io::Result<()> {
         let route_key = self.connect_reuse_port(addr.into()).await?;
@@ -622,19 +600,15 @@ impl TcpSocketManager {
     }
 
     /// Writing `buf` to the target denoted by `route_key`
-    pub async fn send_to<D: ToRouteKeyForTcp<()>>(&self, buf: BytesMut, dest: D) -> io::Result<()> {
+    pub async fn send_to<D: ToRouteKeyForTcp<()>>(&self, buf: Bytes, dest: D) -> io::Result<()> {
         let route_key = ToRouteKeyForTcp::route_key(self, dest)?;
         self.write_half_collect.send_to(buf, &route_key).await
     }
-    pub async fn send_to_addr<D: Into<SocketAddr>>(
-        &self,
-        buf: BytesMut,
-        dest: D,
-    ) -> io::Result<()> {
+    pub async fn send_to_addr<D: Into<SocketAddr>>(&self, buf: Bytes, dest: D) -> io::Result<()> {
         let route_key = self.connect(dest.into()).await?;
         self.write_half_collect.send_to(buf, &route_key).await
     }
-    pub fn try_send_to<D: ToRouteKeyForTcp<()>>(&self, buf: BytesMut, dest: D) -> io::Result<()> {
+    pub fn try_send_to<D: ToRouteKeyForTcp<()>>(&self, buf: Bytes, dest: D) -> io::Result<()> {
         let route_key = ToRouteKeyForTcp::route_key(self, dest)?;
         self.write_half_collect.try_send_to(buf, &route_key)
     }

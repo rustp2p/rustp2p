@@ -1,4 +1,4 @@
-use bytes::BytesMut;
+use bytes::Bytes;
 use std::io;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 
@@ -10,7 +10,6 @@ use std::sync::Arc;
 
 pub mod config;
 
-pub mod recycle;
 pub mod tcp;
 pub mod udp;
 pub const DEFAULT_ADDRESS_V4: SocketAddr =
@@ -134,7 +133,7 @@ impl SocketManager {
 
 impl SocketManager {
     /// Writing `buf` to the target denoted by `route_key`
-    pub async fn send_to(&self, buf: BytesMut, route_key: &RouteKey) -> io::Result<()> {
+    pub async fn send_to(&self, buf: Bytes, route_key: &RouteKey) -> io::Result<()> {
         match route_key.protocol() {
             ConnectProtocol::UDP => {
                 if let Some(w) = self.udp_socket_manager.as_ref() {
@@ -149,7 +148,7 @@ impl SocketManager {
         }
         Err(io::Error::from(io::ErrorKind::InvalidInput))
     }
-    pub fn try_send_to(&self, buf: BytesMut, route_key: &RouteKey) -> io::Result<()> {
+    pub fn try_send_to(&self, buf: Bytes, route_key: &RouteKey) -> io::Result<()> {
         match route_key.protocol() {
             ConnectProtocol::UDP => {
                 if let Some(w) = self.udp_socket_manager.as_ref() {
@@ -169,7 +168,7 @@ impl SocketManager {
     pub async fn send_to_addr<A: Into<SocketAddr>>(
         &self,
         connect_protocol: ConnectProtocol,
-        buf: BytesMut,
+        buf: Bytes,
         addr: A,
     ) -> io::Result<()> {
         match connect_protocol {
@@ -189,14 +188,14 @@ impl SocketManager {
 }
 // impl<PeerID: Hash + Eq> UnifiedSocketManager<PeerID> {
 //     /// Writing `buf` to the target named by `peer_id`
-//     pub async fn send_to_id(&self, buf: BytesMut, peer_id: &PeerID) -> io::Result<()> {
+//     pub async fn send_to_id(&self, buf: Bytes, peer_id: &PeerID) -> io::Result<()> {
 //         let route = self.route_table.get_route_by_id(peer_id)?;
 //         self.send_to(buf, &route.route_key()).await
 //     }
 //     /// Writing `buf` to the target named by `peer_id`
 //     pub async fn avoid_loop_send_to_id(
 //         &self,
-//         buf: BytesMut,
+//         buf: Bytes,
 //         src_id: &PeerID,
 //         peer_id: &PeerID,
 //     ) -> io::Result<()> {
@@ -243,7 +242,7 @@ impl Tunnel {
             }
         }
     }
-    pub async fn send_to<A: Into<SocketAddr>>(&self, buf: BytesMut, addr: A) -> io::Result<()> {
+    pub async fn send_to<A: Into<SocketAddr>>(&self, buf: Bytes, addr: A) -> io::Result<()> {
         match self {
             Tunnel::Udp(tunnel) => tunnel.send_bytes_to(buf, addr).await,
             Tunnel::Tcp(tunnel) => tunnel.send(buf).await,

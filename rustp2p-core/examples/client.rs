@@ -73,7 +73,7 @@ async fn main() {
     let config = TunnelConfig::empty()
         .set_udp_tunnel_config(udp_config)
         .set_tcp_tunnel_config(tcp_config)
-        .set_tcp_multi_count(2);
+        .major_socket_count(2);
     let (mut tunnel_factory, puncher) = new_tunnel_component(config).unwrap();
     let route_table = RouteTable::<u32>::default();
     let idle_route_manager = IdleRouteManager::new(Duration::from_secs(12), route_table.clone());
@@ -85,7 +85,7 @@ async fn main() {
         request.put_u32(my_id);
         request.put_u32(MY_SERVER_ID);
         socket_manager
-            .send_to_addr(connect_protocol, request, server)
+            .send_to_addr(connect_protocol, request.freeze(), server)
             .await
             .unwrap();
     }
@@ -126,7 +126,7 @@ async fn main() {
                     let data = serde_json::to_string(&nat_info).unwrap();
                     request.extend_from_slice(data.as_bytes());
                     socket_manager1
-                        .send_to_addr(connect_protocol, request, server)
+                        .send_to_addr(connect_protocol, request.freeze(), server)
                         .await
                         .unwrap();
                 }
@@ -143,7 +143,7 @@ async fn main() {
             request.put_u32(my_id);
             request.put_u32(MY_SERVER_ID);
             socket_manager2
-                .send_to_addr(connect_protocol, request, server)
+                .send_to_addr(connect_protocol, request.freeze(), server)
                 .await
                 .unwrap();
         }
@@ -219,7 +219,7 @@ impl ContextHandler {
                     let data = serde_json::to_string(&nat_info).unwrap();
                     request.extend_from_slice(data.as_bytes());
                     self.socket_manager
-                        .send_to(request, &route_key)
+                        .send_to(request.freeze(), &route_key)
                         .await
                         .unwrap();
 
@@ -263,7 +263,7 @@ impl ContextHandler {
                     request.put_u32(self.my_id);
                     request.put_u32(src_id);
                     self.socket_manager
-                        .send_to(request, &route_key)
+                        .send_to(request.freeze(), &route_key)
                         .await
                         .unwrap();
                     self.route_table.add_route(src_id, (route_key, 1));

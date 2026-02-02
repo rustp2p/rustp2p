@@ -128,6 +128,9 @@ impl<PeerID: Hash + Eq> RouteTable<PeerID> {
         }
         Err(io::Error::new(io::ErrorKind::NotFound, "route not found"))
     }
+    pub fn exists(&self, id: &PeerID) -> bool {
+        self.route_table.get(id).is_some()
+    }
 }
 impl<PeerID: Hash + Eq + Clone> RouteTable<PeerID> {
     pub fn add_route_if_absent(&self, id: PeerID, route: Route) -> bool {

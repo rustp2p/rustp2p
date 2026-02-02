@@ -65,8 +65,8 @@ pub(crate) fn create_tcp0(
             Some(Protocol::TCP),
         )?
     };
-    if v4 && default_interface.is_some() {
-        socket.set_ip_unicast_if(default_interface.unwrap())?;
+    if let (true, Some(interface)) = (v4, default_interface) {
+        socket.set_ip_unicast_if(interface)?;
     }
     if bind_port != 0 {
         _ = socket.set_reuse_address(true);
