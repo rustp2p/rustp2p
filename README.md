@@ -8,6 +8,7 @@ A decentralized p2p library powered by Rust, which is devoted to simple use.
 2. TCP hole punching for NAT1 
 3. Enables reliable transport over KCP
 4. Enables secure encryption with AesGcm or ChaCha20Poly1305.
+5. **C FFI bindings** for integration with C/C++ and JavaScript/TypeScript (see [rustp2p-c-ffi](rustp2p-c-ffi/))
 
 
 ### Description
