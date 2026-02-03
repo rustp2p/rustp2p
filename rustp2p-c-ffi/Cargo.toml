@@ -1,0 +1,14 @@
+[package]
+name = "rustp2p-c-ffi"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "C FFI bindings for rustp2p"
+
+[lib]
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+rustp2p = { path = "..", features = ["aes-gcm-ring"] }
+tokio = { workspace = true }
+libc = "0.2"

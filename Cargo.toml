@@ -53,7 +53,7 @@ required-features = ["use-kcp"]
 
 [workspace]
 resolver = "2"
-members = [
+members = ["rustp2p-c-ffi",
     "rustp2p-core", "rustp2p-reliable"
 ]
 
