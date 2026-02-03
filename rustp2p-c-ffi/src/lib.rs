@@ -57,10 +57,7 @@ pub extern "C" fn rustp2p_builder_new() -> *mut Rustp2pBuilder {
 
 /// Set UDP port
 #[no_mangle]
-pub extern "C" fn rustp2p_builder_udp_port(
-    builder: *mut Rustp2pBuilder,
-    port: c_ushort,
-) -> c_int {
+pub extern "C" fn rustp2p_builder_udp_port(builder: *mut Rustp2pBuilder, port: c_ushort) -> c_int {
     if builder.is_null() {
         return RUSTP2P_ERROR_NULL_PTR;
     }
@@ -71,10 +68,7 @@ pub extern "C" fn rustp2p_builder_udp_port(
 
 /// Set TCP port
 #[no_mangle]
-pub extern "C" fn rustp2p_builder_tcp_port(
-    builder: *mut Rustp2pBuilder,
-    port: c_ushort,
-) -> c_int {
+pub extern "C" fn rustp2p_builder_tcp_port(builder: *mut Rustp2pBuilder, port: c_ushort) -> c_int {
     if builder.is_null() {
         return RUSTP2P_ERROR_NULL_PTR;
     }
@@ -232,7 +226,7 @@ pub extern "C" fn rustp2p_builder_build(builder: *mut Rustp2pBuilder) -> *mut Ru
     let builder = unsafe { Box::from_raw(builder) };
     let runtime = builder.runtime.clone();
     let mut builder_inner = builder.builder;
-    
+
     // Add peers if any were configured
     if !builder.peers.is_empty() {
         builder_inner = builder_inner.peers(builder.peers);
@@ -286,7 +280,10 @@ pub extern "C" fn rustp2p_endpoint_send_to(
 
     let buf = unsafe { std::slice::from_raw_parts(data, len) };
 
-    match endpoint.runtime.block_on(endpoint.endpoint.send_to(buf, ipv4)) {
+    match endpoint
+        .runtime
+        .block_on(endpoint.endpoint.send_to(buf, ipv4))
+    {
         Ok(_) => RUSTP2P_OK,
         Err(_) => RUSTP2P_ERROR,
     }
