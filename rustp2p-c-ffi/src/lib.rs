@@ -14,6 +14,7 @@ use tokio::runtime::Runtime;
 pub struct Rustp2pBuilder {
     builder: Builder,
     runtime: Arc<Runtime>,
+    peers: Vec<PeerNodeAddress>,
 }
 
 pub struct Rustp2pEndpoint {
@@ -46,7 +47,11 @@ pub extern "C" fn rustp2p_builder_new() -> *mut Rustp2pBuilder {
     };
 
     let builder = Builder::new();
-    let rust_builder = Rustp2pBuilder { builder, runtime };
+    let rust_builder = Rustp2pBuilder {
+        builder,
+        runtime,
+        peers: Vec::new(),
+    };
     Box::into_raw(Box::new(rust_builder))
 }
 
@@ -141,15 +146,12 @@ pub extern "C" fn rustp2p_builder_add_peer(
     };
 
     let builder = unsafe { &mut *builder };
-    // We need to collect existing peers and add the new one
-    // Since Builder doesn't expose peers, we'll need to rebuild
-    // For now, we'll use a simplified approach
-    builder.builder = std::mem::replace(&mut builder.builder, Builder::new()).peers(vec![peer]);
+    builder.peers.push(peer);
     RUSTP2P_OK
 }
 
 /// Set encryption algorithm
-/// algorithm: 0 = AesGcm
+/// algorithm: 0 = AesGcm, 1 = ChaCha20Poly1305 (if available)
 /// password: the encryption password
 #[no_mangle]
 pub extern "C" fn rustp2p_builder_encryption(
@@ -167,28 +169,44 @@ pub extern "C" fn rustp2p_builder_encryption(
         Err(_) => return RUSTP2P_ERROR_INVALID_STR,
     };
 
-    #[cfg(any(feature = "aes-gcm-openssl", feature = "aes-gcm-ring"))]
+    // Try to create the algorithm based on what's available
     let algo = match algorithm {
-        0 => Algorithm::AesGcm(pwd),
-        #[cfg(any(
-            feature = "chacha20-poly1305-openssl",
-            feature = "chacha20-poly1305-ring"
-        ))]
-        1 => Algorithm::ChaCha20Poly1305(pwd),
+        0 => {
+            // AesGcm is available if either openssl or ring feature is enabled in rustp2p
+            #[cfg(any(feature = "aes-gcm-openssl", feature = "aes-gcm-ring"))]
+            {
+                Algorithm::AesGcm(pwd)
+            }
+            #[cfg(not(any(feature = "aes-gcm-openssl", feature = "aes-gcm-ring")))]
+            {
+                let _ = pwd;
+                return RUSTP2P_ERROR;
+            }
+        }
+        1 => {
+            // ChaCha20Poly1305 is available if either openssl or ring feature is enabled in rustp2p
+            #[cfg(any(
+                feature = "chacha20-poly1305-openssl",
+                feature = "chacha20-poly1305-ring"
+            ))]
+            {
+                Algorithm::ChaCha20Poly1305(pwd)
+            }
+            #[cfg(not(any(
+                feature = "chacha20-poly1305-openssl",
+                feature = "chacha20-poly1305-ring"
+            )))]
+            {
+                let _ = pwd;
+                return RUSTP2P_ERROR;
+            }
+        }
         _ => return RUSTP2P_ERROR,
     };
 
-    #[cfg(not(any(feature = "aes-gcm-openssl", feature = "aes-gcm-ring")))]
-    let _ = (algorithm, pwd);
-    #[cfg(not(any(feature = "aes-gcm-openssl", feature = "aes-gcm-ring")))]
-    return RUSTP2P_ERROR;
-
-    #[cfg(any(feature = "aes-gcm-openssl", feature = "aes-gcm-ring"))]
-    {
-        let builder = unsafe { &mut *builder };
-        builder.builder = std::mem::replace(&mut builder.builder, Builder::new()).encryption(algo);
-        RUSTP2P_OK
-    }
+    let builder = unsafe { &mut *builder };
+    builder.builder = std::mem::replace(&mut builder.builder, Builder::new()).encryption(algo);
+    RUSTP2P_OK
 }
 
 /// Build the endpoint
@@ -201,7 +219,12 @@ pub extern "C" fn rustp2p_builder_build(builder: *mut Rustp2pBuilder) -> *mut Ru
 
     let builder = unsafe { Box::from_raw(builder) };
     let runtime = builder.runtime.clone();
-    let builder_inner = builder.builder;
+    let mut builder_inner = builder.builder;
+    
+    // Add peers if any were configured
+    if !builder.peers.is_empty() {
+        builder_inner = builder_inner.peers(builder.peers);
+    }
 
     let endpoint = match runtime.block_on(builder_inner.build()) {
         Ok(ep) => Arc::new(ep),
