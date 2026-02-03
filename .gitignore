@@ -3,3 +3,4 @@ Cargo.lock
 .idea
 /src/protocol/proto
 wintun.dll
+_codeql_detected_source_root
