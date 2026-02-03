@@ -59,12 +59,13 @@ int rustp2p_builder_tcp_port(Rustp2pBuilder* builder, uint16_t port);
 int rustp2p_builder_node_id(Rustp2pBuilder* builder, const char* node_id_str);
 
 /**
- * Set group code
+ * Set group code from string
  * @param builder Pointer to builder
- * @param group_code Group code (peers with same code can connect)
+ * @param group_code Group code as string (e.g., "mygroup" or "12345"). 
+ *                   Nodes with same code can connect. Max 16 bytes.
  * @return RUSTP2P_OK on success, error code on failure
  */
-int rustp2p_builder_group_code(Rustp2pBuilder* builder, uint32_t group_code);
+int rustp2p_builder_group_code(Rustp2pBuilder* builder, const char* group_code);
 
 /**
  * Add a peer address

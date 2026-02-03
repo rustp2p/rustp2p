@@ -1,6 +1,6 @@
 use std::ffi::{CStr, CString};
 use std::net::Ipv4Addr;
-use std::os::raw::{c_char, c_int, c_uint, c_ushort};
+use std::os::raw::{c_char, c_int, c_ushort};
 use std::ptr;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -109,18 +109,30 @@ pub extern "C" fn rustp2p_builder_node_id(
     RUSTP2P_OK
 }
 
-/// Set group code
+/// Set group code from string (e.g., "mygroup" or "12345")
+/// The string will be converted to a 16-byte array (padded with zeros if shorter)
 #[no_mangle]
 pub extern "C" fn rustp2p_builder_group_code(
     builder: *mut Rustp2pBuilder,
-    group_code: c_uint,
+    group_code: *const c_char,
 ) -> c_int {
-    if builder.is_null() {
+    if builder.is_null() || group_code.is_null() {
         return RUSTP2P_ERROR_NULL_PTR;
     }
+
+    let c_str = unsafe { CStr::from_ptr(group_code) };
+    let code_str = match c_str.to_str() {
+        Ok(s) => s,
+        Err(_) => return RUSTP2P_ERROR_INVALID_STR,
+    };
+
+    let group_code = match GroupCode::try_from(code_str) {
+        Ok(gc) => gc,
+        Err(_) => return RUSTP2P_ERROR,
+    };
+
     let builder = unsafe { &mut *builder };
-    builder.builder =
-        std::mem::take(&mut builder.builder).group_code(GroupCode::from(group_code as u128));
+    builder.builder = std::mem::take(&mut builder.builder).group_code(group_code);
     RUSTP2P_OK
 }
 

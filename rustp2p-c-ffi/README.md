@@ -32,7 +32,7 @@ The C header file `rustp2p.h` is included in this directory and provides the API
    rustp2p_builder_node_id(builder, "10.0.0.1");
    rustp2p_builder_udp_port(builder, 8080);
    rustp2p_builder_tcp_port(builder, 8080);
-   rustp2p_builder_group_code(builder, 12345);
+   rustp2p_builder_group_code(builder, "mygroup");
    rustp2p_builder_add_peer(builder, "udp://127.0.0.1:9090");
    rustp2p_builder_encryption(builder, RUSTP2P_ALGO_AES_GCM, "password");
    ```

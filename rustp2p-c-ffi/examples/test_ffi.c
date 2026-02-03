@@ -31,7 +31,7 @@ void test_builder_configuration() {
     assert(ret == RUSTP2P_OK);
     
     printf("  Setting group_code...\n");
-    ret = rustp2p_builder_group_code(builder, 12345);
+    ret = rustp2p_builder_group_code(builder, "mygroup");
     assert(ret == RUSTP2P_OK);
     
     printf("  Setting encryption...\n");
@@ -83,7 +83,7 @@ void test_endpoint_build() {
     ret = rustp2p_builder_tcp_port(builder, 0);
     assert(ret == RUSTP2P_OK);
     
-    ret = rustp2p_builder_group_code(builder, 12345);
+    ret = rustp2p_builder_group_code(builder, "testgroup");
     assert(ret == RUSTP2P_OK);
     
     ret = rustp2p_builder_encryption(builder, RUSTP2P_ALGO_AES_GCM, "password");

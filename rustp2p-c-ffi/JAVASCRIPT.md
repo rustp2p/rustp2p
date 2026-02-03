@@ -42,7 +42,7 @@ const lib = dlopen(`../target/release/librustp2p_c_ffi.${suffix}`, {
   },
   rustp2p_builder_group_code: {
     returns: FFIType.i32,
-    args: [FFIType.ptr, FFIType.u32],
+    args: [FFIType.ptr, FFIType.cstring],
   },
   rustp2p_builder_encryption: {
     returns: FFIType.i32,
@@ -99,7 +99,7 @@ if (ret !== 0) throw new Error(`Failed to set udp_port: ${ret}`);
 ret = symbols.rustp2p_builder_tcp_port(builder, 8080);
 if (ret !== 0) throw new Error(`Failed to set tcp_port: ${ret}`);
 
-ret = symbols.rustp2p_builder_group_code(builder, 12345);
+ret = symbols.rustp2p_builder_group_code(builder, ptr(new CString("mygroup")));
 if (ret !== 0) throw new Error(`Failed to set group_code: ${ret}`);
 
 ret = symbols.rustp2p_builder_encryption(builder, 0, ptr(new CString("password")));
@@ -169,7 +169,7 @@ const lib = ffi.Library('../target/release/librustp2p_c_ffi', {
   'rustp2p_builder_node_id': ['int', [voidPtr, 'string']],
   'rustp2p_builder_udp_port': ['int', [voidPtr, 'uint16']],
   'rustp2p_builder_tcp_port': ['int', [voidPtr, 'uint16']],
-  'rustp2p_builder_group_code': ['int', [voidPtr, 'uint32']],
+  'rustp2p_builder_group_code': ['int', [voidPtr, 'string']],
   'rustp2p_builder_encryption': ['int', [voidPtr, 'int', 'string']],
   'rustp2p_builder_add_peer': ['int', [voidPtr, 'string']],
   'rustp2p_builder_build': [voidPtr, [voidPtr]],
@@ -193,7 +193,7 @@ if (ret !== 0) throw new Error(`Failed to set udp_port: ${ret}`);
 ret = lib.rustp2p_builder_tcp_port(builder, 8080);
 if (ret !== 0) throw new Error(`Failed to set tcp_port: ${ret}`);
 
-ret = lib.rustp2p_builder_group_code(builder, 12345);
+ret = lib.rustp2p_builder_group_code(builder, 'mygroup');
 if (ret !== 0) throw new Error(`Failed to set group_code: ${ret}`);
 
 ret = lib.rustp2p_builder_encryption(builder, 0, 'password');

@@ -56,7 +56,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    ret = rustp2p_builder_group_code(builder, 12345);
+    ret = rustp2p_builder_group_code(builder, "mygroup");
     if (ret != RUSTP2P_OK) {
         print_error("Failed to set group code", ret);
         rustp2p_builder_free(builder);
