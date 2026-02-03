@@ -65,7 +65,7 @@ pub extern "C" fn rustp2p_builder_udp_port(
         return RUSTP2P_ERROR_NULL_PTR;
     }
     let builder = unsafe { &mut *builder };
-    builder.builder = std::mem::replace(&mut builder.builder, Builder::new()).udp_port(port);
+    builder.builder = std::mem::take(&mut builder.builder).udp_port(port);
     RUSTP2P_OK
 }
 
@@ -79,7 +79,7 @@ pub extern "C" fn rustp2p_builder_tcp_port(
         return RUSTP2P_ERROR_NULL_PTR;
     }
     let builder = unsafe { &mut *builder };
-    builder.builder = std::mem::replace(&mut builder.builder, Builder::new()).tcp_port(port);
+    builder.builder = std::mem::take(&mut builder.builder).tcp_port(port);
     RUSTP2P_OK
 }
 
@@ -105,7 +105,7 @@ pub extern "C" fn rustp2p_builder_node_id(
     };
 
     let builder = unsafe { &mut *builder };
-    builder.builder = std::mem::replace(&mut builder.builder, Builder::new()).node_id(ipv4.into());
+    builder.builder = std::mem::take(&mut builder.builder).node_id(ipv4.into());
     RUSTP2P_OK
 }
 
@@ -120,7 +120,7 @@ pub extern "C" fn rustp2p_builder_group_code(
     }
     let builder = unsafe { &mut *builder };
     builder.builder =
-        std::mem::replace(&mut builder.builder, Builder::new()).group_code(GroupCode::from(group_code as u128));
+        std::mem::take(&mut builder.builder).group_code(GroupCode::from(group_code as u128));
     RUSTP2P_OK
 }
 
@@ -205,7 +205,7 @@ pub extern "C" fn rustp2p_builder_encryption(
     };
 
     let builder = unsafe { &mut *builder };
-    builder.builder = std::mem::replace(&mut builder.builder, Builder::new()).encryption(algo);
+    builder.builder = std::mem::take(&mut builder.builder).encryption(algo);
     RUSTP2P_OK
 }
 
