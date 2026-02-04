@@ -9,7 +9,7 @@ description = "C FFI bindings for rustp2p"
 crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
-rustp2p = { path = "..", features = ["aes-gcm-ring"] }
+rustp2p = { path = "..", version="0.4.0", features = ["aes-gcm-ring"] }
 tokio = { workspace = true }
 libc = "0.2"
 
