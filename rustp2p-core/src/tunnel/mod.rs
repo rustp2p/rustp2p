@@ -1,3 +1,28 @@
+//! Tunnel management for UDP and TCP connections.
+//!
+//! This module provides unified management of UDP and TCP tunnels, handling
+//! connection dispatch, socket management, and tunnel lifecycle.
+//!
+//! # Examples
+//!
+//! ```rust,no_run
+//! use rust_p2p_core::tunnel::{TunnelConfig, new_tunnel_component};
+//!
+//! # #[tokio::main]
+//! # async fn main() -> std::io::Result<()> {
+//! let config = TunnelConfig::default();
+//! let (mut dispatcher, puncher) = new_tunnel_component(config)?;
+//!
+//! // Accept incoming tunnels
+//! while let Ok(tunnel) = dispatcher.dispatch().await {
+//!     tokio::spawn(async move {
+//!         // Handle tunnel
+//!     });
+//! }
+//! # Ok(())
+//! # }
+//! ```
+
 use bytes::Bytes;
 use std::io;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
@@ -17,7 +42,31 @@ pub const DEFAULT_ADDRESS_V4: SocketAddr =
 pub const DEFAULT_ADDRESS_V6: SocketAddr =
     SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, 0));
 
-/// Construct the needed components for p2p communication with the given tunnel configuration
+/// Creates tunnel dispatcher and puncher from configuration.
+///
+/// This is the main entry point for setting up the tunnel infrastructure.
+///
+/// # Arguments
+///
+/// * `config` - Tunnel configuration specifying UDP/TCP settings
+///
+/// # Returns
+///
+/// A tuple containing:
+/// - `TunnelDispatcher` - For accepting incoming connections
+/// - `Puncher` - For NAT traversal
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// use rust_p2p_core::tunnel::{TunnelConfig, new_tunnel_component};
+///
+/// # fn main() -> std::io::Result<()> {
+/// let config = TunnelConfig::default();
+/// let (dispatcher, puncher) = new_tunnel_component(config)?;
+/// # Ok(())
+/// # }
+/// ```
 pub fn new_tunnel_component(config: TunnelConfig) -> io::Result<(TunnelDispatcher, Puncher)> {
     let udp_tunnel_dispatcher = if let Some(mut udp_tunnel_config) = config.udp_tunnel_config {
         udp_tunnel_config.main_udp_count = config.major_socket_count;
@@ -40,16 +89,35 @@ pub fn new_tunnel_component(config: TunnelConfig) -> io::Result<(TunnelDispatche
     Ok((tunnel_dispatcher, puncher))
 }
 
+/// Dispatcher for accepting incoming tunnel connections.
+///
+/// `TunnelDispatcher` manages both UDP and TCP tunnel dispatchers and
+/// provides a unified interface for accepting connections.
 pub struct TunnelDispatcher {
     udp_tunnel_dispatcher: Option<udp::UdpTunnelDispatcher>,
     tcp_tunnel_dispatcher: Option<tcp::TcpTunnelDispatcher>,
 }
 
+/// Unified tunnel type for UDP or TCP connections.
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// use rust_p2p_core::tunnel::Tunnel;
+///
+/// # async fn example(tunnel: Tunnel) {
+/// match tunnel {
+///     Tunnel::Udp(udp) => println!("UDP tunnel"),
+///     Tunnel::Tcp(tcp) => println!("TCP tunnel"),
+/// }
+/// # }
+/// ```
 pub enum Tunnel {
     Udp(udp::UdpTunnel),
     Tcp(tcp::TcpTunnel),
 }
 
+/// Manager for UDP and TCP sockets.
 #[derive(Clone)]
 pub struct SocketManager {
     udp_socket_manager: Option<Arc<udp::UdpSocketManager>>,
@@ -57,7 +125,28 @@ pub struct SocketManager {
 }
 
 impl TunnelDispatcher {
-    /// Accept tunnels from a given `factory`
+    /// Accepts the next incoming tunnel connection.
+    ///
+    /// This method blocks until a connection is available from either
+    /// UDP or TCP dispatcher.
+    ///
+    /// # Returns
+    ///
+    /// The next available tunnel connection.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # use rust_p2p_core::tunnel::TunnelDispatcher;
+    /// # async fn example(mut dispatcher: TunnelDispatcher) -> std::io::Result<()> {
+    /// loop {
+    ///     let tunnel = dispatcher.dispatch().await?;
+    ///     tokio::spawn(async move {
+    ///         // Handle tunnel
+    ///     });
+    /// }
+    /// # }
+    /// ```
     pub async fn dispatch(&mut self) -> io::Result<Tunnel> {
         tokio::select! {
             rs=dispatch_udp_tunnel(self.udp_tunnel_dispatcher.as_mut())=>{
