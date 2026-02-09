@@ -1,3 +1,29 @@
+//! STUN (Session Traversal Utilities for NAT) protocol implementation.
+//!
+//! This module provides STUN client functionality for NAT type detection and
+//! public address discovery. STUN is used to determine how the local network
+//! appears from the public internet.
+//!
+//! # Examples
+//!
+//! ```rust,no_run
+//! use rust_p2p_core::stun::stun_test_nat;
+//!
+//! # #[tokio::main]
+//! # async fn main() -> std::io::Result<()> {
+//! let stun_servers = vec![
+//!     "stun.l.google.com:19302".to_string(),
+//!     "stun1.l.google.com:19302".to_string(),
+//! ];
+//!
+//! let (nat_type, public_ips, port_range) = stun_test_nat(stun_servers, None).await?;
+//! println!("NAT Type: {:?}", nat_type);
+//! println!("Public IPs: {:?}", public_ips);
+//! println!("Port Range: {}", port_range);
+//! # Ok(())
+//! # }
+//! ```
+
 use std::collections::HashSet;
 use std::io;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
@@ -9,7 +35,35 @@ use rand::RngCore;
 use stun_format::Attr;
 use tokio::net::UdpSocket;
 
-/// Obtain nat information with the option specified interface from the stun servers
+/// Tests NAT type and discovers public addresses using STUN servers.
+///
+/// This function queries multiple STUN servers to determine the NAT type,
+/// discover public IP addresses, and measure port allocation patterns.
+///
+/// # Arguments
+///
+/// * `stun_servers` - List of STUN server addresses (e.g., "stun.example.com:3478")
+/// * `default_interface` - Optional network interface to bind to
+///
+/// # Returns
+///
+/// A tuple containing:
+/// - `NatType` - Detected NAT type (Cone or Symmetric)
+/// - `Vec<Ipv4Addr>` - List of discovered public IPv4 addresses
+/// - `u16` - Port allocation range (for symmetric NAT prediction)
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// use rust_p2p_core::stun::stun_test_nat;
+///
+/// # #[tokio::main]
+/// # async fn main() -> std::io::Result<()> {
+/// let stun_servers = vec!["stun.l.google.com:19302".to_string()];
+/// let (nat_type, ips, port_range) = stun_test_nat(stun_servers, None).await?;
+/// # Ok(())
+/// # }
+/// ```
 pub async fn stun_test_nat(
     stun_servers: Vec<String>,
     default_interface: Option<&LocalInterface>,

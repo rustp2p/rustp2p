@@ -1,7 +1,55 @@
+//! NAT (Network Address Translation) detection and information.
+//!
+//! This module provides types and functions for detecting and working with NAT.
+//! It helps identify the NAT type (Cone vs Symmetric) and tracks public/private
+//! address mappings.
+//!
+//! # Examples
+//!
+//! ```rust,no_run
+//! use rust_p2p_core::nat::{NatType, NatInfo};
+//!
+//! let nat_info = NatInfo {
+//!     nat_type: NatType::Cone,
+//!     public_ips: vec![],
+//!     // ... other fields
+//! #   public_udp_ports: vec![],
+//! #   mapping_tcp_addr: vec![],
+//! #   mapping_udp_addr: vec![],
+//! #   public_port_range: 0,
+//! #   local_ipv4: std::net::Ipv4Addr::UNSPECIFIED,
+//! #   local_ipv4s: vec![],
+//! #   ipv6: None,
+//! #   local_udp_ports: vec![],
+//! #   local_tcp_port: 0,
+//! #   public_tcp_port: 0,
+//! };
+//!
+//! if nat_info.nat_type.is_cone() {
+//!     println!("Cone NAT - easier to traverse");
+//! }
+//! ```
+
 use crate::extend::addr::is_ipv6_global;
 use serde::{Deserialize, Serialize};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 
+/// Type of NAT (Network Address Translation).
+///
+/// # Variants
+///
+/// - `Cone` - Port mapping is consistent, easier for hole punching
+/// - `Symmetric` - Port mapping changes per destination, harder to traverse
+///
+/// # Examples
+///
+/// ```rust
+/// use rust_p2p_core::nat::NatType;
+///
+/// let nat = NatType::Cone;
+/// assert!(nat.is_cone());
+/// assert!(!nat.is_symmetric());
+/// ```
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize, Default)]
 pub enum NatType {
     #[default]
@@ -10,16 +58,31 @@ pub enum NatType {
 }
 
 impl NatType {
+    /// Returns true if this is a Cone NAT.
     #[inline]
     pub fn is_cone(&self) -> bool {
         self == &NatType::Cone
     }
+    
+    /// Returns true if this is a Symmetric NAT.
     #[inline]
     pub fn is_symmetric(&self) -> bool {
         self == &NatType::Symmetric
     }
 }
 
+/// Comprehensive NAT information about the local network.
+///
+/// Contains details about NAT type, public/private addresses, and port mappings
+/// discovered through STUN and other NAT traversal techniques.
+///
+/// # Fields
+///
+/// - `nat_type` - The detected NAT type (Cone or Symmetric)
+/// - `public_ips` - List of public IPv4 addresses
+/// - `public_udp_ports` - Public ports mapped for UDP
+/// - `local_ipv4` - Primary local IPv4 address
+/// - `ipv6` - Public IPv6 address if available
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct NatInfo {
     /// nat type of the network

@@ -1,3 +1,26 @@
+//! NAT hole punching for establishing direct peer-to-peer connections.
+//!
+//! This module implements UDP and TCP hole punching techniques to traverse NAT
+//! and establish direct connections between peers. It handles both Cone and
+//! Symmetric NAT types.
+//!
+//! # Examples
+//!
+//! ```rust,no_run
+//! use rust_p2p_core::punch::{Puncher, PunchInfo};
+//!
+//! # async fn example(puncher: Puncher) -> std::io::Result<()> {
+//! let punch_info = PunchInfo::default();
+//!
+//! // Check if punching is needed
+//! if puncher.need_punch(&punch_info) {
+//!     // Perform hole punching
+//!     puncher.punch_now(None, b"punch", punch_info).await?;
+//! }
+//! # Ok(())
+//! # }
+//! ```
+
 use bytes::Bytes;
 use parking_lot::Mutex;
 use rand::seq::SliceRandom;
@@ -16,6 +39,18 @@ use crate::tunnel::{tcp, udp};
 pub use config::*;
 pub mod config;
 
+/// NAT hole punching coordinator.
+///
+/// `Puncher` manages the hole punching process, tracking attempts and
+/// adapting strategies based on NAT type and previous results.
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// use rust_p2p_core::punch::Puncher;
+///
+/// let puncher = Puncher::new(None, None);
+/// ```
 #[derive(Clone)]
 pub struct Puncher {
     // 端口顺序
@@ -37,6 +72,12 @@ impl From<&TunnelDispatcher> for Puncher {
 }
 
 impl Puncher {
+    /// Creates a new Puncher with the given socket managers.
+    ///
+    /// # Arguments
+    ///
+    /// * `udp_socket_manager` - Optional UDP socket manager for UDP punching
+    /// * `tcp_socket_manager` - Optional TCP socket manager for TCP punching
     pub fn new(
         udp_socket_manager: Option<Arc<udp::UdpSocketManager>>,
         tcp_socket_manager: Option<Arc<tcp::TcpSocketManager>>,
@@ -69,8 +110,29 @@ impl Puncher {
         let mut sym_map = self.sym_record.lock();
         sym_map.retain(|addr, _| valid_keys.contains(addr));
     }
-    /// Call `need_punch` at a certain frequency, and call [`punch_now`](Self::punch_now) after getting true.
-    /// Determine whether punching is needed.
+    /// Determines whether hole punching is needed for a peer.
+    ///
+    /// Call this method periodically. It uses adaptive frequency based on
+    /// previous attempts to avoid excessive punching.
+    ///
+    /// # Arguments
+    ///
+    /// * `punch_info` - Information about the peer to punch
+    ///
+    /// # Returns
+    ///
+    /// `true` if punching should be attempted, `false` otherwise.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # use rust_p2p_core::punch::{Puncher, PunchInfo};
+    /// # async fn example(puncher: Puncher, punch_info: PunchInfo) {
+    /// if puncher.need_punch(&punch_info) {
+    ///     // Perform punching
+    /// }
+    /// # }
+    /// ```
     pub fn need_punch(&self, punch_info: &PunchInfo) -> bool {
         let Some(id) = punch_info.peer_nat_info.flag() else {
             return false;
@@ -84,13 +146,53 @@ impl Puncher {
         true
     }
 
-    /// Call `punch` at a certain frequency
+    /// Attempts hole punching if needed (convenience method).
+    ///
+    /// This combines `need_punch` and `punch_now` into a single call.
+    ///
+    /// # Arguments
+    ///
+    /// * `buf` - The data to send during punching
+    /// * `punch_info` - Information about the peer to punch
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # use rust_p2p_core::punch::{Puncher, PunchInfo};
+    /// # async fn example(puncher: Puncher) -> std::io::Result<()> {
+    /// let punch_info = PunchInfo::default();
+    /// puncher.punch(b"punch_data", punch_info).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn punch(&self, buf: &[u8], punch_info: PunchInfo) -> io::Result<()> {
         if !self.need_punch(&punch_info) {
             return Ok(());
         }
         self.punch_now(Some(buf), buf, punch_info).await
     }
+    
+    /// Performs hole punching immediately without checking if it's needed.
+    ///
+    /// Attempts both TCP and UDP hole punching based on available socket managers
+    /// and the peer's NAT information.
+    ///
+    /// # Arguments
+    ///
+    /// * `tcp_buf` - Optional TCP punch data
+    /// * `udp_buf` - UDP punch data
+    /// * `punch_info` - Information about the peer to punch
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # use rust_p2p_core::punch::{Puncher, PunchInfo};
+    /// # async fn example(puncher: Puncher) -> std::io::Result<()> {
+    /// let punch_info = PunchInfo::default();
+    /// puncher.punch_now(Some(b"tcp"), b"udp", punch_info).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn punch_now(
         &self,
         tcp_buf: Option<&[u8]>,
