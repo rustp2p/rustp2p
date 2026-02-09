@@ -26,6 +26,20 @@ pub(crate) mod punch_info;
 
 pub(crate) const ROUTE_IDLE_TIME: Duration = Duration::from_secs(10);
 
+/// Configuration for creating a P2P endpoint.
+///
+/// `Config` contains all the parameters needed to configure a P2P node,
+/// including network settings, encryption, NAT traversal, and routing options.
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// use rustp2p::Config;
+/// use std::net::Ipv4Addr;
+///
+/// let config = Config::empty()
+///     .set_node_id(Ipv4Addr::new(10, 0, 0, 1).into());
+/// ```
 pub struct Config {
     pub load_balance: LoadBalance,
     pub major_socket_count: usize,
@@ -222,6 +236,20 @@ impl Config {
     }
 }
 
+/// TCP tunnel configuration.
+///
+/// Controls TCP connection behavior including multiplexing and idle timeouts.
+///
+/// # Examples
+///
+/// ```rust
+/// use rustp2p::TcpTunnelConfig;
+/// use std::time::Duration;
+///
+/// let config = TcpTunnelConfig::default()
+///     .set_tcp_port(8080)
+///     .set_tcp_multiplexing_limit(4);
+/// ```
 pub struct TcpTunnelConfig {
     pub route_idle_time: Duration,
     pub tcp_multiplexing_limit: usize,
@@ -239,20 +267,37 @@ impl Default for TcpTunnelConfig {
 }
 
 impl TcpTunnelConfig {
+    /// Sets the maximum number of TCP connections per peer.
     pub fn set_tcp_multiplexing_limit(mut self, tcp_multiplexing_limit: usize) -> Self {
         self.tcp_multiplexing_limit = tcp_multiplexing_limit;
         self
     }
+
+    /// Sets the idle timeout for TCP routes.
     pub fn set_route_idle_time(mut self, route_idle_time: Duration) -> Self {
         self.route_idle_time = route_idle_time;
         self
     }
+
+    /// Sets the TCP port to listen on (0 for random).
     pub fn set_tcp_port(mut self, tcp_port: u16) -> Self {
         self.tcp_port = tcp_port;
         self
     }
 }
 
+/// UDP tunnel configuration.
+///
+/// Controls UDP socket behavior including port allocation and socket model.
+///
+/// # Examples
+///
+/// ```rust
+/// use rustp2p::UdpTunnelConfig;
+///
+/// let config = UdpTunnelConfig::default()
+///     .set_simple_udp_port(8080);
+/// ```
 #[derive(Clone)]
 pub struct UdpTunnelConfig {
     pub main_socket_count: usize,
@@ -535,9 +580,35 @@ impl InitCodec for LengthPrefixedInitCodec {
     }
 }
 #[async_trait]
+/// Trait for intercepting and preprocessing received data.
+///
+/// Implement this trait to inspect or modify data before it's delivered
+/// to the application. Useful for logging, filtering, or custom protocol handling.
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// use rustp2p::RecvResult;
+/// use async_trait::async_trait;
+///
+/// // Note: DataInterceptor is not directly exported, use through Builder
+/// // struct MyInterceptor;
+/// // impl DataInterceptor for MyInterceptor { ... }
+/// ```
 pub trait DataInterceptor: Send + Sync {
+    /// Preprocesses received data before delivery.
+    ///
+    /// # Arguments
+    ///
+    /// * `data` - The received data to process
+    ///
+    /// # Returns
+    ///
+    /// `true` to drop the packet, `false` to continue processing.
     async fn pre_handle(&self, data: &mut RecvResult) -> bool;
 }
+
+/// Default data interceptor that performs no interception.
 #[derive(Clone)]
 pub struct DefaultInterceptor;
 
@@ -548,9 +619,33 @@ impl DataInterceptor for DefaultInterceptor {
     }
 }
 
+/// Trait for customizing NAT hole punching behavior.
+///
+/// Implement this trait to control which peers to attempt hole punching with.
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// use rustp2p::NodeID;
+/// // Note: PunchingPolicy is not directly exported, use through Builder
+/// // struct MyPolicy;
+/// // impl PunchingPolicy for MyPolicy { ... }
+/// ```
 pub trait PunchingPolicy: Send + Sync {
+    /// Determines whether to attempt hole punching with a peer.
+    ///
+    /// # Arguments
+    ///
+    /// * `punch_role` - The role in the punching process
+    /// * `node_id` - The peer's node ID
+    ///
+    /// # Returns
+    ///
+    /// `true` to attempt punching, `false` to skip.
     fn should_punch(&self, punch_role: PunchRole, node_id: &NodeID) -> bool;
 }
+
+/// Default punching policy that always attempts hole punching.
 #[allow(dead_code)]
 pub struct DefaultPunchingPolicy;
 impl PunchingPolicy for DefaultPunchingPolicy {

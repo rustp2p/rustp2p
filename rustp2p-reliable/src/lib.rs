@@ -1,3 +1,195 @@
+//! # rustp2p-reliable - Reliable Transport over UDP
+//!
+//! `rustp2p-reliable` provides reliable, ordered transport over UDP using the KCP protocol.
+//! It combines the low latency of UDP with the reliability of TCP, making it ideal for
+//! real-time applications that require guaranteed delivery.
+//!
+//! ## Features
+//!
+//! - **KCP Protocol**: Fast and reliable UDP transport
+//! - **TCP Fallback**: Automatic fallback to TCP when needed
+//! - **NAT Traversal**: Built-in hole punching support
+//! - **Automatic Maintenance**: Connection health monitoring and recovery
+//! - **Unified Interface**: Same API for both KCP and TCP tunnels
+//!
+//! ## Quick Start
+//!
+//! ### Creating a Reliable Tunnel Listener
+//!
+//! ```rust,no_run
+//! use rustp2p_reliable::{from_config, Config};
+//!
+//! # #[tokio::main]
+//! # async fn main() -> std::io::Result<()> {
+//! let config = Config::default();
+//! let (mut listener, puncher) = from_config(config).await?;
+//!
+//! // Accept incoming connections
+//! while let Ok(tunnel) = listener.accept().await {
+//!     tokio::spawn(async move {
+//!         // Handle the reliable tunnel
+//!         while let Ok(data) = tunnel.next().await {
+//!             println!("Received: {} bytes", data.len());
+//!         }
+//!     });
+//! }
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## Basic Usage
+//!
+//! ### Sending Data
+//!
+//! ```rust,no_run
+//! use rustp2p_reliable::ReliableTunnel;
+//! use bytes::BytesMut;
+//!
+//! # async fn example(tunnel: ReliableTunnel) -> std::io::Result<()> {
+//! let data = BytesMut::from(&b"Hello, world!"[..]);
+//! tunnel.send(data).await?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ### Receiving Data
+//!
+//! ```rust,no_run
+//! use rustp2p_reliable::ReliableTunnel;
+//!
+//! # async fn example(tunnel: ReliableTunnel) -> std::io::Result<()> {
+//! loop {
+//!     match tunnel.next().await {
+//!         Ok(data) => {
+//!             println!("Received {} bytes", data.len());
+//!         }
+//!         Err(e) => {
+//!             eprintln!("Error: {}", e);
+//!             break;
+//!         }
+//!     }
+//! }
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## NAT Traversal with Puncher
+//!
+//! Use the `Puncher` to establish connections through NATs:
+//!
+//! ```rust,no_run
+//! use rustp2p_reliable::{Puncher, PunchInfo};
+//!
+//! # async fn example(puncher: Puncher) -> std::io::Result<()> {
+//! // Get your NAT information
+//! let nat_info = puncher.nat_info();
+//! println!("NAT Type: {:?}", nat_info.nat_type);
+//! println!("Public IPs: {:?}", nat_info.public_ips);
+//!
+//! // Punch through NAT to reach a peer
+//! let punch_info = PunchInfo::default();
+//! puncher.punch(punch_info).await?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## KCP vs TCP
+//!
+//! The library automatically selects between KCP and TCP based on network conditions:
+//!
+//! - **KCP**: Used for direct UDP connections (low latency, good for real-time data)
+//! - **TCP**: Used when UDP is blocked or unreliable (guaranteed delivery)
+//!
+//! You can check the tunnel type:
+//!
+//! ```rust,no_run
+//! use rustp2p_reliable::{ReliableTunnel, ReliableTunnelType};
+//!
+//! # fn example(tunnel: ReliableTunnel) {
+//! match tunnel.tunnel_type() {
+//!     ReliableTunnelType::Kcp => println!("Using KCP (fast UDP)"),
+//!     ReliableTunnelType::Tcp => println!("Using TCP (reliable)"),
+//! }
+//! # }
+//! ```
+//!
+//! ## Configuration
+//!
+//! Configure the reliable transport layer:
+//!
+//! ```rust,no_run
+//! use rustp2p_reliable::Config;
+//! use rust_p2p_core::tunnel::TunnelConfig;
+//!
+//! # fn example() {
+//! let config = Config {
+//!     tunnel_config: TunnelConfig::default(),
+//!     tcp_stun_servers: vec![
+//!         "stun.l.google.com:19302".to_string(),
+//!     ],
+//!     udp_stun_servers: vec![
+//!         "stun1.l.google.com:19302".to_string(),
+//!     ],
+//! };
+//! # }
+//! ```
+//!
+//! ## Advanced Features
+//!
+//! ### Custom KCP Conversation IDs
+//!
+//! For applications that need multiple independent KCP streams:
+//!
+//! ```rust,no_run
+//! use rustp2p_reliable::Puncher;
+//!
+//! # async fn example(puncher: Puncher) -> std::io::Result<()> {
+//! let kcp_conv = 12345;
+//! let punch_info = Default::default();
+//! puncher.punch_conv(kcp_conv, punch_info).await?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ### Raw Data Sending
+//!
+//! Send raw UDP data without KCP protocol overhead:
+//!
+//! ```rust,no_run
+//! use rustp2p_reliable::ReliableTunnel;
+//! use bytes::BytesMut;
+//!
+//! # async fn example(tunnel: ReliableTunnel) -> std::io::Result<()> {
+//! let data = BytesMut::from(&b"raw data"[..]);
+//! tunnel.send_raw(data).await?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## Connection Information
+//!
+//! Get information about the connection:
+//!
+//! ```rust,no_run
+//! use rustp2p_reliable::ReliableTunnel;
+//!
+//! # fn example(tunnel: ReliableTunnel) {
+//! println!("Local address: {}", tunnel.local_addr());
+//! println!("Remote address: {}", tunnel.remote_addr());
+//! println!("Tunnel type: {:?}", tunnel.tunnel_type());
+//! # }
+//! ```
+//!
+//! ## Thread Safety
+//!
+//! All types are designed to work with Tokio's async runtime and can be safely
+//! shared across tasks using `Arc` when needed.
+//!
+//! ## See Also
+//!
+//! - [`rustp2p`](../rustp2p/index.html) - High-level P2P library
+//! - [`rustp2p-core`](../rust_p2p_core/index.html) - Core NAT traversal functionality
+
 pub use crate::config::Config;
 use crate::kcp::{DataType, KcpHandle};
 use crate::maintain::start_task;
@@ -29,6 +221,33 @@ mod config;
 mod kcp;
 mod maintain;
 
+/// Creates a reliable tunnel system from configuration.
+///
+/// This is the main entry point for creating a reliable transport layer. It returns
+/// a listener for accepting incoming connections and a puncher for NAT traversal.
+///
+/// # Arguments
+///
+/// * `config` - Configuration for tunnels and STUN servers
+///
+/// # Returns
+///
+/// Returns a tuple containing:
+/// - `ReliableTunnelListener`: For accepting incoming connections
+/// - `Puncher`: For NAT traversal and connection establishment
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// use rustp2p_reliable::{from_config, Config};
+///
+/// # #[tokio::main]
+/// # async fn main() -> std::io::Result<()> {
+/// let config = Config::default();
+/// let (listener, puncher) = from_config(config).await?;
+/// # Ok(())
+/// # }
+/// ```
 pub async fn from_config(config: Config) -> io::Result<(ReliableTunnelListener, Puncher)> {
     let tunnel_config = config.tunnel_config;
     let tcp_stun_servers = config.tcp_stun_servers;
@@ -59,6 +278,26 @@ pub async fn from_config(config: Config) -> io::Result<(ReliableTunnelListener, 
     start_task(shutdown_manager, puncher.clone());
     Ok((listener, puncher))
 }
+/// Listener for accepting reliable tunnel connections.
+///
+/// The listener accepts both KCP (UDP-based) and TCP connections,
+/// providing a unified interface for handling incoming connections.
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// # use rustp2p_reliable::{from_config, Config, ReliableTunnelListener};
+/// # #[tokio::main]
+/// # async fn main() -> std::io::Result<()> {
+/// # let (mut listener, puncher) = from_config(Config::default()).await?;
+/// while let Ok(tunnel) = listener.accept().await {
+///     tokio::spawn(async move {
+///         // Handle the connection
+///     });
+/// }
+/// # Ok(())
+/// # }
+/// ```
 pub struct ReliableTunnelListener {
     shutdown_manager: ShutdownManager<()>,
     punch_context: Arc<PunchContext>,
@@ -66,6 +305,22 @@ pub struct ReliableTunnelListener {
     kcp_receiver: tokio::sync::mpsc::Receiver<KcpMessageHub>,
     kcp_sender: Sender<KcpMessageHub>,
 }
+/// NAT traversal puncher for establishing direct connections.
+///
+/// The `Puncher` handles NAT type detection and hole punching to establish
+/// direct peer-to-peer connections.
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// # use rustp2p_reliable::Puncher;
+/// # async fn example(puncher: Puncher) -> std::io::Result<()> {
+/// // Get NAT information
+/// let nat_info = puncher.nat_info();
+/// println!("NAT Type: {:?}", nat_info.nat_type);
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Clone)]
 pub struct Puncher {
     punch_context: Arc<PunchContext>,
@@ -238,10 +493,50 @@ impl Puncher {
         })
     }
 
+    /// Attempts to punch through NAT to reach a peer.
+    ///
+    /// This method performs UDP hole punching to establish a direct connection
+    /// with a peer behind NAT.
+    ///
+    /// # Arguments
+    ///
+    /// * `punch_info` - Information about the target peer for punching
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # use rustp2p_reliable::{Puncher, PunchInfo};
+    /// # async fn example(puncher: Puncher) -> std::io::Result<()> {
+    /// let punch_info = PunchInfo::default();
+    /// puncher.punch(punch_info).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn punch(&self, punch_info: PunchInfo) -> io::Result<()> {
         self.punch_conv(0, punch_info).await
     }
 
+    /// Attempts to punch through NAT with a custom KCP conversation ID.
+    ///
+    /// This allows you to establish multiple independent KCP connections with
+    /// different conversation IDs.
+    ///
+    /// # Arguments
+    ///
+    /// * `kcp_conv` - The KCP conversation ID to use
+    /// * `punch_info` - Information about the target peer
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # use rustp2p_reliable::{Puncher, PunchInfo};
+    /// # async fn example(puncher: Puncher) -> std::io::Result<()> {
+    /// let kcp_conv = 12345;
+    /// let punch_info = PunchInfo::default();
+    /// puncher.punch_conv(kcp_conv, punch_info).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn punch_conv(&self, kcp_conv: u32, punch_info: PunchInfo) -> io::Result<()> {
         let mut punch_udp_buf = [0; 8];
         punch_udp_buf[..4].copy_from_slice(&kcp_conv.to_le_bytes());
@@ -262,10 +557,40 @@ impl Puncher {
     }
 }
 
+/// A reliable tunnel connection (either KCP or TCP).
+///
+/// `ReliableTunnel` provides a unified interface for both KCP and TCP connections,
+/// offering reliable, ordered data transfer.
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// use rustp2p_reliable::ReliableTunnel;
+/// use bytes::BytesMut;
+///
+/// # async fn example(tunnel: ReliableTunnel) -> std::io::Result<()> {
+/// // Send data
+/// tunnel.send(BytesMut::from(&b"hello"[..])).await?;
+///
+/// // Receive data
+/// let data = tunnel.next().await?;
+/// # Ok(())
+/// # }
+/// ```
 pub enum ReliableTunnel {
     Tcp(TcpMessageHub),
     Kcp(KcpMessageHub),
 }
+/// The type of reliable tunnel (KCP or TCP).
+///
+/// # Examples
+///
+/// ```rust
+/// use rustp2p_reliable::ReliableTunnelType;
+///
+/// let tunnel_type = ReliableTunnelType::Kcp;
+/// assert_eq!(tunnel_type, ReliableTunnelType::Kcp);
+/// ```
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub enum ReliableTunnelType {
     Tcp,
@@ -287,6 +612,38 @@ impl ReliableTunnelListener {
             kcp_sender,
         }
     }
+    /// Accepts an incoming reliable tunnel connection.
+    ///
+    /// This method blocks until a connection is available. The connection
+    /// can be either KCP (UDP-based) or TCP.
+    ///
+    /// # Returns
+    ///
+    /// Returns a `ReliableTunnel` that can be used for bidirectional communication.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # use rustp2p_reliable::{from_config, Config};
+    /// # #[tokio::main]
+    /// # async fn main() -> std::io::Result<()> {
+    /// # let (mut listener, puncher) = from_config(Config::default()).await?;
+    /// loop {
+    ///     match listener.accept().await {
+    ///         Ok(tunnel) => {
+    ///             tokio::spawn(async move {
+    ///                 // Handle the tunnel
+    ///             });
+    ///         }
+    ///         Err(e) => {
+    ///             eprintln!("Accept error: {}", e);
+    ///             break;
+    ///         }
+    ///     }
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn accept(&mut self) -> io::Result<ReliableTunnel> {
         loop {
             tokio::select! {
@@ -319,36 +676,130 @@ impl ReliableTunnelListener {
 }
 
 impl ReliableTunnel {
+    /// Sends data through the reliable tunnel.
+    ///
+    /// The data will be sent using either KCP or TCP, depending on the tunnel type.
+    ///
+    /// # Arguments
+    ///
+    /// * `buf` - The data to send
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use rustp2p_reliable::ReliableTunnel;
+    /// use bytes::BytesMut;
+    ///
+    /// # async fn example(tunnel: ReliableTunnel) -> std::io::Result<()> {
+    /// let data = BytesMut::from(&b"Hello, world!"[..]);
+    /// tunnel.send(data).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn send(&self, buf: BytesMut) -> io::Result<()> {
         match &self {
             ReliableTunnel::Tcp(tcp) => tcp.send(buf).await,
             ReliableTunnel::Kcp(kcp) => kcp.send(buf).await,
         }
     }
+    /// Sends raw data without KCP protocol overhead.
+    ///
+    /// For TCP tunnels, this is the same as `send()`. For KCP tunnels, this sends
+    /// raw UDP data without the KCP protocol wrapper.
+    ///
+    /// # Arguments
+    ///
+    /// * `buf` - The raw data to send
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use rustp2p_reliable::ReliableTunnel;
+    /// use bytes::BytesMut;
+    ///
+    /// # async fn example(tunnel: ReliableTunnel) -> std::io::Result<()> {
+    /// let data = BytesMut::from(&b"raw data"[..]);
+    /// tunnel.send_raw(data).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn send_raw(&self, buf: BytesMut) -> io::Result<()> {
         match &self {
             ReliableTunnel::Tcp(tcp) => tcp.send(buf).await,
             ReliableTunnel::Kcp(kcp) => kcp.send_raw(buf).await,
         }
     }
+    /// Receives the next message from the tunnel.
+    ///
+    /// This method blocks until data is available or an error occurs.
+    ///
+    /// # Returns
+    ///
+    /// Returns the received data as `BytesMut`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use rustp2p_reliable::ReliableTunnel;
+    ///
+    /// # async fn example(tunnel: ReliableTunnel) -> std::io::Result<()> {
+    /// loop {
+    ///     let data = tunnel.next().await?;
+    ///     println!("Received {} bytes", data.len());
+    /// }
+    /// # }
+    /// ```
     pub async fn next(&self) -> io::Result<BytesMut> {
         match &self {
             ReliableTunnel::Tcp(tcp) => tcp.next().await,
             ReliableTunnel::Kcp(kcp) => kcp.next().await,
         }
     }
+    /// Returns the local socket address of this tunnel.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # use rustp2p_reliable::ReliableTunnel;
+    /// # fn example(tunnel: ReliableTunnel) {
+    /// println!("Local address: {}", tunnel.local_addr());
+    /// # }
+    /// ```
     pub fn local_addr(&self) -> SocketAddr {
         match &self {
             ReliableTunnel::Tcp(tcp) => tcp.local_addr,
             ReliableTunnel::Kcp(kcp) => kcp.local_addr,
         }
     }
+    /// Returns the remote socket address of this tunnel.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # use rustp2p_reliable::ReliableTunnel;
+    /// # fn example(tunnel: ReliableTunnel) {
+    /// println!("Remote address: {}", tunnel.remote_addr());
+    /// # }
+    /// ```
     pub fn remote_addr(&self) -> SocketAddr {
         match &self {
             ReliableTunnel::Tcp(tcp) => tcp.remote_addr,
             ReliableTunnel::Kcp(kcp) => kcp.remote_addr,
         }
     }
+    /// Returns the type of this tunnel (KCP or TCP).
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # use rustp2p_reliable::{ReliableTunnel, ReliableTunnelType};
+    /// # fn example(tunnel: ReliableTunnel) {
+    /// match tunnel.tunnel_type() {
+    ///     ReliableTunnelType::Kcp => println!("Using KCP"),
+    ///     ReliableTunnelType::Tcp => println!("Using TCP"),
+    /// }
+    /// # }
+    /// ```
     pub fn tunnel_type(&self) -> ReliableTunnelType {
         match &self {
             ReliableTunnel::Tcp(_tcp) => ReliableTunnelType::Tcp,

@@ -1,3 +1,222 @@
+//! # rustp2p-c-ffi - C FFI Bindings for rustp2p
+//!
+//! This crate provides C-compatible Foreign Function Interface (FFI) bindings for the `rustp2p`
+//! library, enabling integration with C, C++, and other languages that support C FFI.
+//!
+//! ## Features
+//!
+//! - **C-Compatible API**: Simple, pointer-based API for C/C++ integration
+//! - **Builder Pattern**: Fluent API for configuration
+//! - **Error Handling**: Clear error codes for all operations
+//! - **Memory Safety**: Proper ownership and cleanup functions
+//! - **Cross-Platform**: Works on Windows, Linux, and macOS
+//!
+//! ## Building
+//!
+//! This crate produces both a static library and a dynamic library:
+//!
+//! ```bash
+//! cargo build --release
+//! ```
+//!
+//! Output files:
+//! - `librustp2p_c_ffi.a` / `rustp2p_c_ffi.lib` (static)
+//! - `librustp2p_c_ffi.so` / `rustp2p_c_ffi.dll` / `librustp2p_c_ffi.dylib` (dynamic)
+//!
+//! ## C Usage Example
+//!
+//! ### Basic Setup
+//!
+//! ```c
+//! #include <stdio.h>
+//! #include <stdlib.h>
+//! #include <string.h>
+//!
+//! // Create and configure a node
+//! Rustp2pBuilder* builder = rustp2p_builder_new();
+//! rustp2p_builder_node_id(builder, "10.0.0.1");
+//! rustp2p_builder_udp_port(builder, 8080);
+//! rustp2p_builder_group_code(builder, "12345");
+//!
+//! // Build the endpoint
+//! Rustp2pEndpoint* endpoint = rustp2p_builder_build(builder);
+//! if (!endpoint) {
+//!     fprintf(stderr, "Failed to build endpoint\n");
+//!     return -1;
+//! }
+//! ```
+//!
+//! ### Sending Data
+//!
+//! ```c
+//! const char* message = "Hello, peer!";
+//! int result = rustp2p_endpoint_send_to(
+//!     endpoint,
+//!     "10.0.0.2",
+//!     (const uint8_t*)message,
+//!     strlen(message)
+//! );
+//!
+//! if (result == RUSTP2P_OK) {
+//!     printf("Message sent successfully\n");
+//! }
+//! ```
+//!
+//! ### Receiving Data
+//!
+//! ```c
+//! // Blocking receive
+//! Rustp2pRecvData* recv_data = rustp2p_endpoint_recv_from(endpoint);
+//! if (recv_data) {
+//!     const uint8_t* data;
+//!     size_t len;
+//!     rustp2p_recv_data_get_payload(recv_data, &data, &len);
+//!     
+//!     char src_id[16];
+//!     rustp2p_recv_data_get_src_id(recv_data, src_id, sizeof(src_id));
+//!     
+//!     printf("Received %zu bytes from %s\n", len, src_id);
+//!     
+//!     rustp2p_recv_data_free(recv_data);
+//! }
+//! ```
+//!
+//! ### Cleanup
+//!
+//! ```c
+//! rustp2p_endpoint_free(endpoint);
+//! ```
+//!
+//! ## Error Codes
+//!
+//! The library uses the following error codes:
+//!
+//! - `RUSTP2P_OK` (0): Success
+//! - `RUSTP2P_ERROR` (-1): General error
+//! - `RUSTP2P_ERROR_NULL_PTR` (-2): NULL pointer provided
+//! - `RUSTP2P_ERROR_INVALID_STR` (-3): Invalid string
+//! - `RUSTP2P_ERROR_INVALID_IP` (-4): Invalid IP address
+//! - `RUSTP2P_ERROR_BUILD_FAILED` (-5): Failed to build endpoint
+//! - `RUSTP2P_ERROR_WOULD_BLOCK` (-6): Operation would block
+//! - `RUSTP2P_ERROR_EOF` (-7): End of file / connection closed
+//!
+//! ## Complete C Example
+//!
+//! ```c
+//! #include <stdio.h>
+//! #include <stdlib.h>
+//! #include <string.h>
+//! #include <pthread.h>
+//!
+//! void* receive_thread(void* arg) {
+//!     Rustp2pEndpoint* endpoint = (Rustp2pEndpoint*)arg;
+//!     
+//!     while (1) {
+//!         Rustp2pRecvData* recv_data = rustp2p_endpoint_recv_from(endpoint);
+//!         if (!recv_data) {
+//!             break;
+//!         }
+//!         
+//!         const uint8_t* data;
+//!         size_t len;
+//!         rustp2p_recv_data_get_payload(recv_data, &data, &len);
+//!         
+//!         char src_id[16];
+//!         rustp2p_recv_data_get_src_id(recv_data, src_id, sizeof(src_id));
+//!         
+//!         printf("Received %zu bytes from %s: %.*s\n", len, src_id, (int)len, data);
+//!         
+//!         rustp2p_recv_data_free(recv_data);
+//!     }
+//!     
+//!     return NULL;
+//! }
+//!
+//! int main() {
+//!     // Create builder
+//!     Rustp2pBuilder* builder = rustp2p_builder_new();
+//!     if (!builder) {
+//!         return -1;
+//!     }
+//!     
+//!     // Configure
+//!     rustp2p_builder_node_id(builder, "10.0.0.1");
+//!     rustp2p_builder_udp_port(builder, 8080);
+//!     rustp2p_builder_tcp_port(builder, 8080);
+//!     rustp2p_builder_group_code(builder, "12345");
+//!     rustp2p_builder_add_peer(builder, "udp://192.168.1.100:9090");
+//!     
+//!     // Build endpoint
+//!     Rustp2pEndpoint* endpoint = rustp2p_builder_build(builder);
+//!     if (!endpoint) {
+//!         fprintf(stderr, "Failed to build endpoint\n");
+//!         return -1;
+//!     }
+//!     
+//!     // Start receive thread
+//!     pthread_t thread;
+//!     pthread_create(&thread, NULL, receive_thread, endpoint);
+//!     
+//!     // Send messages
+//!     const char* message = "Hello from C!";
+//!     rustp2p_endpoint_send_to(endpoint, "10.0.0.2",
+//!                              (const uint8_t*)message, strlen(message));
+//!     
+//!     // Wait for thread
+//!     pthread_join(thread, NULL);
+//!     
+//!     // Cleanup
+//!     rustp2p_endpoint_free(endpoint);
+//!     
+//!     return 0;
+//! }
+//! ```
+//!
+//! ## C++ Integration
+//!
+//! For C++ projects, wrap the C API in RAII classes:
+//!
+//! ```cpp
+//! class Rustp2pEndpointWrapper {
+//!     Rustp2pEndpoint* endpoint_;
+//! public:
+//!     Rustp2pEndpointWrapper(Rustp2pEndpoint* ep) : endpoint_(ep) {}
+//!     ~Rustp2pEndpointWrapper() {
+//!         if (endpoint_) {
+//!             rustp2p_endpoint_free(endpoint_);
+//!         }
+//!     }
+//!     
+//!     // Prevent copying
+//!     Rustp2pEndpointWrapper(const Rustp2pEndpointWrapper&) = delete;
+//!     Rustp2pEndpointWrapper& operator=(const Rustp2pEndpointWrapper&) = delete;
+//!     
+//!     Rustp2pEndpoint* get() { return endpoint_; }
+//! };
+//! ```
+//!
+//! ## JavaScript/TypeScript Integration
+//!
+//! See [JAVASCRIPT.md](https://github.com/rustp2p/rustp2p/blob/master/rustp2p-c-ffi/JAVASCRIPT.md)
+//! for details on using these bindings with Node.js via `node-ffi-napi`.
+//!
+//! ## Thread Safety
+//!
+//! - All functions are thread-safe
+//! - Multiple threads can call send/receive operations simultaneously
+//! - The Tokio runtime is managed internally
+//!
+//! ## Memory Management
+//!
+//! - Always call the corresponding `_free` function for allocated resources
+//! - Do not use pointers after calling `_free`
+//! - Received data pointers are valid only until `rustp2p_recv_data_free` is called
+//!
+//! ## See Also
+//!
+//! - [`rustp2p`](../rustp2p/index.html) - The main Rust library
+//! - [GitHub Repository](https://github.com/rustp2p/rustp2p)
+
 use std::ffi::{CStr, CString};
 use std::net::Ipv4Addr;
 use std::os::raw::{c_char, c_int, c_ushort};
@@ -11,34 +230,69 @@ use rustp2p::{Builder, EndPoint, PeerNodeAddress, RecvMetadata, RecvUserData};
 use tokio::runtime::Runtime;
 
 // Opaque handle types for C
+/// Builder handle for configuring a rustp2p endpoint.
+///
+/// Use the `rustp2p_builder_*` functions to configure, then call
+/// `rustp2p_builder_build` to create an endpoint.
 pub struct Rustp2pBuilder {
     builder: Builder,
     runtime: Arc<Runtime>,
     peers: Vec<PeerNodeAddress>,
 }
 
+/// Endpoint handle for sending and receiving P2P data.
+///
+/// Create with `rustp2p_builder_build`, free with `rustp2p_endpoint_free`.
 pub struct Rustp2pEndpoint {
     endpoint: Arc<EndPoint>,
     runtime: Arc<Runtime>,
 }
 
+/// Received data handle containing both payload and metadata.
+///
+/// Use `rustp2p_recv_data_get_*` functions to extract information,
+/// then call `rustp2p_recv_data_free` to release.
 pub struct Rustp2pRecvData {
     data: RecvUserData,
     metadata: RecvMetadata,
 }
 
 // Error codes
+/// Operation completed successfully.
 pub const RUSTP2P_OK: c_int = 0;
+/// General error occurred.
 pub const RUSTP2P_ERROR: c_int = -1;
+/// NULL pointer was provided where a valid pointer was expected.
 pub const RUSTP2P_ERROR_NULL_PTR: c_int = -2;
+/// Invalid string format or encoding.
 pub const RUSTP2P_ERROR_INVALID_STR: c_int = -3;
+/// Invalid IP address format.
 pub const RUSTP2P_ERROR_INVALID_IP: c_int = -4;
+/// Failed to build endpoint (e.g., port in use, invalid config).
 pub const RUSTP2P_ERROR_BUILD_FAILED: c_int = -5;
+/// Operation would block (for non-blocking operations).
 pub const RUSTP2P_ERROR_WOULD_BLOCK: c_int = -6;
+/// End of file / connection closed.
 pub const RUSTP2P_ERROR_EOF: c_int = -7;
 
 /// Create a new builder
-/// Returns NULL on failure
+///
+/// Returns a new builder handle that must be freed with `rustp2p_builder_free`
+/// or consumed by `rustp2p_builder_build`.
+///
+/// # Returns
+///
+/// Returns a valid builder pointer on success, or NULL on failure (e.g., out of memory).
+///
+/// # Example
+///
+/// ```c
+/// Rustp2pBuilder* builder = rustp2p_builder_new();
+/// if (!builder) {
+///     fprintf(stderr, "Failed to create builder\n");
+///     return -1;
+/// }
+/// ```
 #[no_mangle]
 pub extern "C" fn rustp2p_builder_new() -> *mut Rustp2pBuilder {
     let runtime = match Runtime::new() {
@@ -56,6 +310,24 @@ pub extern "C" fn rustp2p_builder_new() -> *mut Rustp2pBuilder {
 }
 
 /// Set UDP port
+///
+/// Configures the UDP port for this endpoint. Use 0 for a random port.
+///
+/// # Arguments
+///
+/// * `builder` - The builder handle
+/// * `port` - The UDP port number (0-65535)
+///
+/// # Returns
+///
+/// * `RUSTP2P_OK` on success
+/// * `RUSTP2P_ERROR_NULL_PTR` if builder is NULL
+///
+/// # Example
+///
+/// ```c
+/// rustp2p_builder_udp_port(builder, 8080);
+/// ```
 #[no_mangle]
 pub extern "C" fn rustp2p_builder_udp_port(builder: *mut Rustp2pBuilder, port: c_ushort) -> c_int {
     if builder.is_null() {
@@ -67,6 +339,24 @@ pub extern "C" fn rustp2p_builder_udp_port(builder: *mut Rustp2pBuilder, port: c
 }
 
 /// Set TCP port
+///
+/// Configures the TCP port for this endpoint. Use 0 for a random port.
+///
+/// # Arguments
+///
+/// * `builder` - The builder handle
+/// * `port` - The TCP port number (0-65535)
+///
+/// # Returns
+///
+/// * `RUSTP2P_OK` on success
+/// * `RUSTP2P_ERROR_NULL_PTR` if builder is NULL
+///
+/// # Example
+///
+/// ```c
+/// rustp2p_builder_tcp_port(builder, 8080);
+/// ```
 #[no_mangle]
 pub extern "C" fn rustp2p_builder_tcp_port(builder: *mut Rustp2pBuilder, port: c_ushort) -> c_int {
     if builder.is_null() {
@@ -78,6 +368,29 @@ pub extern "C" fn rustp2p_builder_tcp_port(builder: *mut Rustp2pBuilder, port: c
 }
 
 /// Set node ID from IPv4 address string (e.g., "10.0.0.1")
+///
+/// Each node in the P2P network must have a unique node ID.
+///
+/// # Arguments
+///
+/// * `builder` - The builder handle
+/// * `node_id_str` - NULL-terminated IPv4 address string
+///
+/// # Returns
+///
+/// * `RUSTP2P_OK` on success
+/// * `RUSTP2P_ERROR_NULL_PTR` if builder or node_id_str is NULL
+/// * `RUSTP2P_ERROR_INVALID_STR` if the string is not valid UTF-8
+/// * `RUSTP2P_ERROR_INVALID_IP` if the IP address format is invalid
+///
+/// # Example
+///
+/// ```c
+/// int result = rustp2p_builder_node_id(builder, "10.0.0.1");
+/// if (result != RUSTP2P_OK) {
+///     fprintf(stderr, "Failed to set node ID\n");
+/// }
+/// ```
 #[no_mangle]
 pub extern "C" fn rustp2p_builder_node_id(
     builder: *mut Rustp2pBuilder,
@@ -104,7 +417,29 @@ pub extern "C" fn rustp2p_builder_node_id(
 }
 
 /// Set group code from string (e.g., "mygroup" or "12345")
-/// The string will be converted to a 16-byte array (padded with zeros if shorter)
+///
+/// The group code creates isolated P2P networks. Nodes with different
+/// group codes cannot communicate with each other.
+///
+/// The string will be converted to a 16-byte array (padded with zeros if shorter).
+///
+/// # Arguments
+///
+/// * `builder` - The builder handle
+/// * `group_code` - NULL-terminated group code string
+///
+/// # Returns
+///
+/// * `RUSTP2P_OK` on success
+/// * `RUSTP2P_ERROR_NULL_PTR` if builder or group_code is NULL
+/// * `RUSTP2P_ERROR_INVALID_STR` if the string is not valid UTF-8
+/// * `RUSTP2P_ERROR` if the group code format is invalid
+///
+/// # Example
+///
+/// ```c
+/// rustp2p_builder_group_code(builder, "12345");
+/// ```
 #[no_mangle]
 pub extern "C" fn rustp2p_builder_group_code(
     builder: *mut Rustp2pBuilder,
@@ -131,6 +466,28 @@ pub extern "C" fn rustp2p_builder_group_code(
 }
 
 /// Add a peer address (e.g., "udp://127.0.0.1:9090" or "tcp://192.168.1.1:8080")
+///
+/// Adds an initial peer that this node will connect to. You can call this
+/// multiple times to add multiple peers.
+///
+/// # Arguments
+///
+/// * `builder` - The builder handle
+/// * `peer_addr` - NULL-terminated peer address string (format: "protocol://ip:port")
+///
+/// # Returns
+///
+/// * `RUSTP2P_OK` on success
+/// * `RUSTP2P_ERROR_NULL_PTR` if builder or peer_addr is NULL
+/// * `RUSTP2P_ERROR_INVALID_STR` if the string is not valid UTF-8
+/// * `RUSTP2P_ERROR` if the address format is invalid
+///
+/// # Example
+///
+/// ```c
+/// rustp2p_builder_add_peer(builder, "udp://192.168.1.100:9090");
+/// rustp2p_builder_add_peer(builder, "tcp://10.0.0.1:8080");
+/// ```
 #[no_mangle]
 pub extern "C" fn rustp2p_builder_add_peer(
     builder: *mut Rustp2pBuilder,
@@ -216,7 +573,33 @@ pub extern "C" fn rustp2p_builder_encryption(
 }
 
 /// Build the endpoint
-/// Returns NULL on failure
+///
+/// Consumes the builder and creates an endpoint. The builder is freed automatically
+/// and must not be used after this call, regardless of success or failure.
+///
+/// # Arguments
+///
+/// * `builder` - The builder handle (will be freed)
+///
+/// # Returns
+///
+/// Returns a valid endpoint pointer on success, or NULL on failure.
+/// Common failure reasons include:
+/// - Port already in use
+/// - Missing required configuration (e.g., node_id)
+/// - Network initialization errors
+///
+/// # Example
+///
+/// ```c
+/// Rustp2pEndpoint* endpoint = rustp2p_builder_build(builder);
+/// if (!endpoint) {
+///     fprintf(stderr, "Failed to build endpoint\n");
+///     return -1;
+/// }
+/// // Use endpoint...
+/// rustp2p_endpoint_free(endpoint);
+/// ```
 #[no_mangle]
 pub extern "C" fn rustp2p_builder_build(builder: *mut Rustp2pBuilder) -> *mut Rustp2pEndpoint {
     if builder.is_null() {
@@ -242,6 +625,17 @@ pub extern "C" fn rustp2p_builder_build(builder: *mut Rustp2pBuilder) -> *mut Ru
 }
 
 /// Free/destroy the builder
+///
+/// Releases all resources associated with the builder. Only use this if you
+/// did NOT call `rustp2p_builder_build` (which frees the builder automatically).
+///
+/// # Safety
+///
+/// The builder pointer must not be used after this call.
+///
+/// # Arguments
+///
+/// * `builder` - The builder handle to free (can be NULL, in which case this is a no-op)
 #[no_mangle]
 pub extern "C" fn rustp2p_builder_free(builder: *mut Rustp2pBuilder) {
     if !builder.is_null() {
@@ -252,9 +646,40 @@ pub extern "C" fn rustp2p_builder_free(builder: *mut Rustp2pBuilder) {
 }
 
 /// Send data to a peer
-/// dest_ip: destination node IP address string (e.g., "10.0.0.2")
-/// data: pointer to data buffer
-/// len: length of data
+///
+/// Sends data to a specific peer by their node ID. This operation blocks until
+/// the data is queued for sending (but not necessarily delivered).
+///
+/// # Arguments
+///
+/// * `endpoint` - The endpoint handle
+/// * `dest_ip` - NULL-terminated destination node IP address string (e.g., "10.0.0.2")
+/// * `data` - Pointer to data buffer
+/// * `len` - Length of data in bytes
+///
+/// # Returns
+///
+/// * `RUSTP2P_OK` on success
+/// * `RUSTP2P_ERROR_NULL_PTR` if any pointer is NULL
+/// * `RUSTP2P_ERROR_INVALID_STR` if dest_ip is not valid UTF-8
+/// * `RUSTP2P_ERROR_INVALID_IP` if dest_ip format is invalid
+/// * `RUSTP2P_ERROR` on other errors (e.g., network failure)
+///
+/// # Example
+///
+/// ```c
+/// const char* message = "Hello, peer!";
+/// int result = rustp2p_endpoint_send_to(
+///     endpoint,
+///     "10.0.0.2",
+///     (const uint8_t*)message,
+///     strlen(message)
+/// );
+///
+/// if (result == RUSTP2P_OK) {
+///     printf("Message sent\n");
+/// }
+/// ```
 #[no_mangle]
 pub extern "C" fn rustp2p_endpoint_send_to(
     endpoint: *mut Rustp2pEndpoint,
@@ -328,8 +753,31 @@ pub extern "C" fn rustp2p_endpoint_try_send_to(
 }
 
 /// Receive data from peers (blocking)
-/// Returns pointer to received data structure, or NULL on error
-/// Caller must free the returned pointer with rustp2p_recv_data_free
+///
+/// Blocks until data is received from any peer or an error occurs.
+/// The returned structure must be freed with `rustp2p_recv_data_free`.
+///
+/// # Arguments
+///
+/// * `endpoint` - The endpoint handle
+///
+/// # Returns
+///
+/// Returns pointer to received data structure, or NULL on error or connection closed.
+/// Caller must free the returned pointer with `rustp2p_recv_data_free`.
+///
+/// # Example
+///
+/// ```c
+/// Rustp2pRecvData* recv_data = rustp2p_endpoint_recv_from(endpoint);
+/// if (recv_data) {
+///     const uint8_t* data;
+///     size_t len;
+///     rustp2p_recv_data_get_payload(recv_data, &data, &len);
+///     printf("Received %zu bytes\n", len);
+///     rustp2p_recv_data_free(recv_data);
+/// }
+/// ```
 #[no_mangle]
 pub extern "C" fn rustp2p_endpoint_recv_from(
     endpoint: *mut Rustp2pEndpoint,
@@ -483,6 +931,23 @@ pub extern "C" fn rustp2p_recv_data_free(recv_data: *mut Rustp2pRecvData) {
 }
 
 /// Free/destroy the endpoint
+///
+/// Releases all resources associated with the endpoint and closes all connections.
+///
+/// # Safety
+///
+/// The endpoint pointer must not be used after this call.
+///
+/// # Arguments
+///
+/// * `endpoint` - The endpoint handle to free (can be NULL, in which case this is a no-op)
+///
+/// # Example
+///
+/// ```c
+/// rustp2p_endpoint_free(endpoint);
+/// endpoint = NULL;  // Good practice to avoid use-after-free
+/// ```
 #[no_mangle]
 pub extern "C" fn rustp2p_endpoint_free(endpoint: *mut Rustp2pEndpoint) {
     if !endpoint.is_null() {

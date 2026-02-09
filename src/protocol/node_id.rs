@@ -1,5 +1,26 @@
 use std::net::Ipv4Addr;
 
+/// Unique identifier for a peer in the P2P network.
+///
+/// `NodeID` is a 4-byte identifier typically based on an IPv4 address.
+/// Each peer in the network must have a unique `NodeID` for routing purposes.
+///
+/// # Examples
+///
+/// ```rust
+/// use rustp2p::NodeID;
+/// use std::net::Ipv4Addr;
+///
+/// // Create from IPv4 address
+/// let node_id: NodeID = Ipv4Addr::new(10, 0, 0, 1).into();
+///
+/// // Create from u32
+/// let node_id: NodeID = 0x0A000001u32.into();
+///
+/// // Convert back to IPv4
+/// let addr: Ipv4Addr = node_id.into();
+/// assert_eq!(addr, Ipv4Addr::new(10, 0, 0, 1));
+/// ```
 #[repr(transparent)]
 #[derive(Hash, Eq, PartialEq, Ord, PartialOrd, Copy, Clone, Debug)]
 pub struct NodeID([u8; ID_LEN]);
@@ -12,16 +33,61 @@ impl AsRef<[u8]> for NodeID {
 }
 
 impl NodeID {
+    /// Returns a broadcast NodeID (255.255.255.255).
+    ///
+    /// Messages sent to this ID will be broadcast to all peers.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use rustp2p::NodeID;
+    ///
+    /// let broadcast = NodeID::broadcast();
+    /// assert!(broadcast.is_broadcast());
+    /// ```
     pub fn broadcast() -> NodeID {
         NodeID([255u8; ID_LEN])
     }
+
+    /// Returns an unspecified NodeID (0.0.0.0).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use rustp2p::NodeID;
+    ///
+    /// let unspec = NodeID::unspecified();
+    /// assert!(unspec.is_unspecified());
+    /// ```
     pub fn unspecified() -> NodeID {
         NodeID([0u8; ID_LEN])
     }
+
+    /// Checks if this NodeID is unspecified (all zeros).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use rustp2p::NodeID;
+    ///
+    /// let unspec = NodeID::unspecified();
+    /// assert!(unspec.is_unspecified());
+    /// ```
     pub fn is_unspecified(&self) -> bool {
         let buf = self.as_ref();
         buf.iter().all(|v| *v == 0)
     }
+
+    /// Checks if this NodeID is a broadcast address (all 255s).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use rustp2p::NodeID;
+    ///
+    /// let broadcast = NodeID::broadcast();
+    /// assert!(broadcast.is_broadcast());
+    /// ```
     pub fn is_broadcast(&self) -> bool {
         let buf = self.as_ref();
         buf.iter().all(|v| *v == 255)
@@ -81,6 +147,27 @@ impl TryFrom<&[u8]> for NodeID {
     }
 }
 
+/// Group identifier for isolating P2P networks.
+///
+/// `GroupCode` is a 16-byte identifier that creates isolated P2P networks.
+/// Peers with different group codes cannot communicate with each other.
+///
+/// # Examples
+///
+/// ```rust
+/// use rustp2p::GroupCode;
+/// use std::convert::TryFrom;
+///
+/// // Create from string
+/// let group = GroupCode::try_from("my-group").unwrap();
+///
+/// // Create from u128
+/// let group: GroupCode = 12345u128.into();
+///
+/// // Create unspecified (default)
+/// let unspec = GroupCode::unspecified();
+/// assert!(unspec.is_unspecified());
+/// ```
 #[repr(transparent)]
 #[derive(Hash, Eq, PartialEq, Ord, PartialOrd, Copy, Clone, Debug)]
 pub struct GroupCode([u8; GROUP_CODE_LEN]);
@@ -92,9 +179,30 @@ impl Default for GroupCode {
 }
 pub const GROUP_CODE_LEN: usize = 16;
 impl GroupCode {
+    /// Returns an unspecified GroupCode (all zeros).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use rustp2p::GroupCode;
+    ///
+    /// let unspec = GroupCode::unspecified();
+    /// assert!(unspec.is_unspecified());
+    /// ```
     pub fn unspecified() -> GroupCode {
         GroupCode([0u8; GROUP_CODE_LEN])
     }
+
+    /// Checks if this GroupCode is unspecified (all zeros).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use rustp2p::GroupCode;
+    ///
+    /// let unspec = GroupCode::unspecified();
+    /// assert!(unspec.is_unspecified());
+    /// ```
     pub fn is_unspecified(&self) -> bool {
         let buf = self.as_ref();
         buf.iter().all(|v| *v == 0)

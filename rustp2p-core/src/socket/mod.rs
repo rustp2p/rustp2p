@@ -1,3 +1,21 @@
+//! Low-level socket creation and management.
+//!
+//! This module provides functions for creating and configuring UDP and TCP sockets
+//! with support for interface binding, port reuse, and other socket options.
+//!
+//! # Examples
+//!
+//! ```rust,no_run
+//! use rust_p2p_core::socket::{create_udp_socket, LocalInterface};
+//! use std::net::SocketAddr;
+//!
+//! # fn main() -> std::io::Result<()> {
+//! let addr: SocketAddr = "0.0.0.0:0".parse().unwrap();
+//! let socket = create_udp_socket(addr, None)?;
+//! # Ok(())
+//! # }
+//! ```
+
 #[cfg(windows)]
 use crate::socket::windows::ignore_conn_reset;
 use socket2::Protocol;
@@ -15,6 +33,24 @@ pub(crate) trait SocketTrait {
     }
 }
 
+/// Network interface identifier for binding sockets.
+///
+/// On Linux/Android, this uses the interface name (e.g., "eth0").
+/// On other platforms, this uses the interface index.
+///
+/// # Examples
+///
+/// ```rust
+/// use rust_p2p_core::socket::LocalInterface;
+///
+/// // On Linux/Android
+/// #[cfg(any(target_os = "linux", target_os = "android"))]
+/// let iface = LocalInterface::new("eth0".to_string());
+///
+/// // On other platforms
+/// #[cfg(not(any(target_os = "linux", target_os = "android")))]
+/// let iface = LocalInterface::new(2); // interface index
+/// ```
 #[derive(Clone, Debug)]
 pub struct LocalInterface {
     #[cfg(not(any(target_os = "linux", target_os = "android")))]
