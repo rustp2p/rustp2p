@@ -63,7 +63,7 @@
 //!     "stun1.l.google.com:19302".to_string(),
 //! ];
 //!
-//! let (nat_type, public_ips, port_range) = 
+//! let (nat_type, public_ips, port_range) =
 //!     stun_test_nat(stun_servers, None).await?;
 //!
 //! println!("NAT Type: {:?}", nat_type);

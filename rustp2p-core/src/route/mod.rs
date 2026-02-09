@@ -77,25 +77,25 @@ impl RouteKey {
     pub(crate) const fn new(index: Index, addr: SocketAddr) -> Self {
         Self { index, addr }
     }
-    
+
     /// Returns the connection protocol (UDP or TCP).
     #[inline]
     pub fn protocol(&self) -> ConnectProtocol {
         self.index.protocol()
     }
-    
+
     /// Returns the socket index.
     #[inline]
     pub fn index(&self) -> Index {
         self.index
     }
-    
+
     /// Returns the socket index as usize.
     #[inline]
     pub fn index_usize(&self) -> usize {
         self.index.index()
     }
-    
+
     /// Returns the remote socket address.
     #[inline]
     pub fn addr(&self) -> SocketAddr {
@@ -132,7 +132,7 @@ impl ConnectProtocol {
     pub fn is_tcp(&self) -> bool {
         self == &ConnectProtocol::TCP
     }
-    
+
     /// Returns true if this is UDP.
     #[inline]
     pub fn is_udp(&self) -> bool {

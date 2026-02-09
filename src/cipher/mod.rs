@@ -179,7 +179,7 @@ impl Cipher {
             Cipher::None => Ok(payload.len()),
         }
     }
-    
+
     /// Encrypts data in place using the cipher.
     ///
     /// # Arguments
@@ -202,7 +202,7 @@ impl Cipher {
             Cipher::None => Ok(()),
         }
     }
-    
+
     /// Returns the number of extra bytes required for the cipher's authentication tag.
     ///
     /// This is typically 16 bytes for GCM modes. When allocating buffers for

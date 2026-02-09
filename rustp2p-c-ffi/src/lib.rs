@@ -31,13 +31,13 @@
 //! #include <stdio.h>
 //! #include <stdlib.h>
 //! #include <string.h>
-//! 
+//!
 //! // Create and configure a node
 //! Rustp2pBuilder* builder = rustp2p_builder_new();
 //! rustp2p_builder_node_id(builder, "10.0.0.1");
 //! rustp2p_builder_udp_port(builder, 8080);
 //! rustp2p_builder_group_code(builder, "12345");
-//! 
+//!
 //! // Build the endpoint
 //! Rustp2pEndpoint* endpoint = rustp2p_builder_build(builder);
 //! if (!endpoint) {
@@ -56,7 +56,7 @@
 //!     (const uint8_t*)message,
 //!     strlen(message)
 //! );
-//! 
+//!
 //! if (result == RUSTP2P_OK) {
 //!     printf("Message sent successfully\n");
 //! }
@@ -107,7 +107,7 @@
 //! #include <stdlib.h>
 //! #include <string.h>
 //! #include <pthread.h>
-//! 
+//!
 //! void* receive_thread(void* arg) {
 //!     Rustp2pEndpoint* endpoint = (Rustp2pEndpoint*)arg;
 //!     
@@ -131,7 +131,7 @@
 //!     
 //!     return NULL;
 //! }
-//! 
+//!
 //! int main() {
 //!     // Create builder
 //!     Rustp2pBuilder* builder = rustp2p_builder_new();
@@ -159,7 +159,7 @@
 //!     
 //!     // Send messages
 //!     const char* message = "Hello from C!";
-//!     rustp2p_endpoint_send_to(endpoint, "10.0.0.2", 
+//!     rustp2p_endpoint_send_to(endpoint, "10.0.0.2",
 //!                              (const uint8_t*)message, strlen(message));
 //!     
 //!     // Wait for thread
@@ -675,7 +675,7 @@ pub extern "C" fn rustp2p_builder_free(builder: *mut Rustp2pBuilder) {
 ///     (const uint8_t*)message,
 ///     strlen(message)
 /// );
-/// 
+///
 /// if (result == RUSTP2P_OK) {
 ///     printf("Message sent\n");
 /// }

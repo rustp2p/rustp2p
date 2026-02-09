@@ -63,7 +63,7 @@ impl NatType {
     pub fn is_cone(&self) -> bool {
         self == &NatType::Cone
     }
-    
+
     /// Returns true if this is a Symmetric NAT.
     #[inline]
     pub fn is_symmetric(&self) -> bool {

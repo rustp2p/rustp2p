@@ -1,7 +1,7 @@
 //! # rustp2p - Decentralized P2P Library
 //!
-//! `rustp2p` is a decentralized peer-to-peer library written in Rust that provides simple and 
-//! efficient NAT traversal and peer-to-peer communication. It supports both UDP and TCP hole 
+//! `rustp2p` is a decentralized peer-to-peer library written in Rust that provides simple and
+//! efficient NAT traversal and peer-to-peer communication. It supports both UDP and TCP hole
 //! punching, reliable transport over KCP, and secure encryption.
 //!
 //! ## Features
@@ -185,7 +185,7 @@
 //! # async fn main() -> std::io::Result<()> {
 //! # let endpoint = Builder::new().node_id(Ipv4Addr::new(10, 0, 0, 1).into()).udp_port(8080).build().await?;
 //! let peer_id = Ipv4Addr::new(10, 0, 0, 2);
-//! 
+//!
 //! // Non-blocking send
 //! match endpoint.try_send_to(b"Quick message", peer_id) {
 //!     Ok(_) => println!("Sent successfully"),

@@ -171,7 +171,7 @@ impl Puncher {
         }
         self.punch_now(Some(buf), buf, punch_info).await
     }
-    
+
     /// Performs hole punching immediately without checking if it's needed.
     ///
     /// Attempts both TCP and UDP hole punching based on available socket managers

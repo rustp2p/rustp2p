@@ -48,7 +48,7 @@ impl NodeID {
     pub fn broadcast() -> NodeID {
         NodeID([255u8; ID_LEN])
     }
-    
+
     /// Returns an unspecified NodeID (0.0.0.0).
     ///
     /// # Examples
@@ -62,7 +62,7 @@ impl NodeID {
     pub fn unspecified() -> NodeID {
         NodeID([0u8; ID_LEN])
     }
-    
+
     /// Checks if this NodeID is unspecified (all zeros).
     ///
     /// # Examples
@@ -77,7 +77,7 @@ impl NodeID {
         let buf = self.as_ref();
         buf.iter().all(|v| *v == 0)
     }
-    
+
     /// Checks if this NodeID is a broadcast address (all 255s).
     ///
     /// # Examples
@@ -192,7 +192,7 @@ impl GroupCode {
     pub fn unspecified() -> GroupCode {
         GroupCode([0u8; GROUP_CODE_LEN])
     }
-    
+
     /// Checks if this GroupCode is unspecified (all zeros).
     ///
     /// # Examples

@@ -272,13 +272,13 @@ impl TcpTunnelConfig {
         self.tcp_multiplexing_limit = tcp_multiplexing_limit;
         self
     }
-    
+
     /// Sets the idle timeout for TCP routes.
     pub fn set_route_idle_time(mut self, route_idle_time: Duration) -> Self {
         self.route_idle_time = route_idle_time;
         self
     }
-    
+
     /// Sets the TCP port to listen on (0 for random).
     pub fn set_tcp_port(mut self, tcp_port: u16) -> Self {
         self.tcp_port = tcp_port;
