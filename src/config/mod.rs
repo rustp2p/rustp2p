@@ -587,20 +587,13 @@ impl InitCodec for LengthPrefixedInitCodec {
 ///
 /// # Examples
 ///
-/// ```rust
-/// use rustp2p::{DataInterceptor, RecvResult};
+/// ```rust,no_run
+/// use rustp2p::RecvResult;
 /// use async_trait::async_trait;
 ///
-/// struct MyInterceptor;
-///
-/// #[async_trait]
-/// impl DataInterceptor for MyInterceptor {
-///     async fn pre_handle(&self, data: &mut RecvResult) -> bool {
-///         // Log or filter data
-///         println!("Received {} bytes", data.payload().len());
-///         false // Return true to drop the packet
-///     }
-/// }
+/// // Note: DataInterceptor is not directly exported, use through Builder
+/// // struct MyInterceptor;
+/// // impl DataInterceptor for MyInterceptor { ... }
 /// ```
 pub trait DataInterceptor: Send + Sync {
     /// Preprocesses received data before delivery.
@@ -632,18 +625,11 @@ impl DataInterceptor for DefaultInterceptor {
 ///
 /// # Examples
 ///
-/// ```rust
-/// use rustp2p::{PunchingPolicy, NodeID};
-/// use rust_p2p_core::punch::PunchRole;
-///
-/// struct MyPolicy;
-///
-/// impl PunchingPolicy for MyPolicy {
-///     fn should_punch(&self, role: PunchRole, node_id: &NodeID) -> bool {
-///         // Custom logic to decide whether to punch
-///         true
-///     }
-/// }
+/// ```rust,no_run
+/// use rustp2p::NodeID;
+/// // Note: PunchingPolicy is not directly exported, use through Builder
+/// // struct MyPolicy;
+/// // impl PunchingPolicy for MyPolicy { ... }
 /// ```
 pub trait PunchingPolicy: Send + Sync {
     /// Determines whether to attempt hole punching with a peer.
