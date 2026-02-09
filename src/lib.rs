@@ -35,7 +35,8 @@
 //!     tokio::spawn(async move {
 //!         loop {
 //!             if let Ok((data, metadata)) = endpoint.recv_from().await {
-//!                 println!("Received from {}: {:?}", metadata.src_id(), data.payload());
+//!                 let src: Ipv4Addr = metadata.src_id().into();
+//!                 println!("Received from {}: {:?}", src, data.payload());
 //!             }
 //!         }
 //!     });
@@ -100,7 +101,8 @@
 //! loop {
 //!     match endpoint.recv_from().await {
 //!         Ok((data, metadata)) => {
-//!             println!("From {}: {:?}", metadata.src_id(), data.payload());
+//!             let src: Ipv4Addr = metadata.src_id().into();
+//!             println!("From {}: {:?}", src, data.payload());
 //!         }
 //!         Err(e) => {
 //!             eprintln!("Error receiving: {}", e);
@@ -150,7 +152,7 @@
 //! let endpoint = Builder::new()
 //!     .node_id(Ipv4Addr::new(10, 0, 0, 1).into())
 //!     .udp_port(8080)
-//!     .group_code(GroupCode::from(12345))
+//!     .group_code(GroupCode::try_from("12345").unwrap())
 //!     .build()
 //!     .await?;
 //! # Ok(())
@@ -329,7 +331,8 @@ impl EndPoint {
     /// # let endpoint = Builder::new().node_id(Ipv4Addr::new(10, 0, 0, 1).into()).udp_port(8080).build().await?;
     /// loop {
     ///     let (data, metadata) = endpoint.recv_from().await?;
-    ///     println!("From {}: {:?}", metadata.src_id(), data.payload());
+    ///     let src: Ipv4Addr = metadata.src_id().into();
+    ///     println!("From {}: {:?}", src, data.payload());
     /// }
     /// # }
     /// ```
@@ -529,6 +532,8 @@ impl Drop for OwnedJoinHandle {
 ///
 /// # #[tokio::main]
 /// # async fn main() -> std::io::Result<()> {
+/// # #[cfg(any(feature = "aes-gcm-openssl", feature = "aes-gcm-ring"))]
+/// # {
 /// let endpoint = Builder::new()
 ///     .node_id(Ipv4Addr::new(10, 0, 0, 1).into())
 ///     .udp_port(8080)
@@ -536,11 +541,19 @@ impl Drop for OwnedJoinHandle {
 ///     .peers(vec![
 ///         PeerNodeAddress::from_str("udp://192.168.1.100:9090").unwrap()
 ///     ])
-///     .group_code(GroupCode::from(12345))
-///     # #[cfg(any(feature = "aes-gcm-openssl", feature = "aes-gcm-ring"))]
+///     .group_code(GroupCode::try_from("12345").unwrap())
 ///     .encryption(Algorithm::AesGcm("password".to_string()))
 ///     .build()
 ///     .await?;
+/// # }
+/// # #[cfg(not(any(feature = "aes-gcm-openssl", feature = "aes-gcm-ring")))]
+/// # {
+/// # let endpoint = Builder::new()
+/// #     .node_id(Ipv4Addr::new(10, 0, 0, 1).into())
+/// #     .udp_port(8080)
+/// #     .build()
+/// #     .await?;
+/// # }
 /// # Ok(())
 /// # }
 /// ```
@@ -686,10 +699,11 @@ impl Builder {
     /// # Examples
     ///
     /// ```rust
-    /// use rustp2p::{Builder, GroupCode};
+    /// use rustp2p::Builder;
+    /// use rustp2p::GroupCode;
     ///
     /// let builder = Builder::new()
-    ///     .group_code(GroupCode::from(12345));
+    ///     .group_code(GroupCode::try_from("12345").unwrap());
     /// ```
     pub fn group_code(mut self, group_code: GroupCode) -> Self {
         self.group_code = Some(group_code);
