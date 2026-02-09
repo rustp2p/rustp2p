@@ -11,7 +11,7 @@ repository = "https://github.com/rustp2p/rustp2p"
 crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
-rustp2p = { path = "..", version="0.4.0", features = ["aes-gcm-ring"] }
+rustp2p = { path = "..", version="0.4", features = ["aes-gcm-ring"] }
 tokio = { workspace = true }
 libc = "0.2"
 
