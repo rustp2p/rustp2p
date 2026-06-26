@@ -230,7 +230,7 @@ impl Puncher {
             .await?;
 
         let mut tcp_tasks = Vec::new();
-        let tcp_buf_owned: Option<Arc<[u8]>> = tcp_buf.map(|b| Arc::from(b));
+        let tcp_buf_owned: Option<Arc<[u8]>> = tcp_buf.map(Arc::from);
         if let Some(tcp_socket_manager) = self.tcp_socket_manager.as_ref() {
             for addr in &peer_nat_info.mapping_tcp_addr {
                 let mgr = tcp_socket_manager.clone();

@@ -198,20 +198,14 @@ async fn test_nat_(
         let mut changed_addr = None;
         for x in msg.attrs_iter() {
             match x {
-                Attr::MappedAddress(addr) => {
-                    if mapped_addr.is_none() {
-                        let _ = mapped_addr.insert(stun_addr(addr));
-                    }
+                Attr::MappedAddress(addr) if mapped_addr.is_none() => {
+                    let _ = mapped_addr.insert(stun_addr(addr));
                 }
-                Attr::ChangedAddress(addr) => {
-                    if changed_addr.is_none() {
-                        let _ = changed_addr.insert(stun_addr(addr));
-                    }
+                Attr::ChangedAddress(addr) if changed_addr.is_none() => {
+                    let _ = changed_addr.insert(stun_addr(addr));
                 }
-                Attr::XorMappedAddress(addr) => {
-                    if mapped_addr.is_none() {
-                        let _ = mapped_addr.insert(stun_addr(addr));
-                    }
+                Attr::XorMappedAddress(addr) if mapped_addr.is_none() => {
+                    let _ = mapped_addr.insert(stun_addr(addr));
                 }
                 _ => {}
             }

@@ -387,10 +387,10 @@ async fn kcp_run(
 
         match event {
             Event::Input(buf) => {
-                _ = kcp.input(&buf).map_err(|e| Error::other(e))?;
+                _ = kcp.input(&buf).map_err(Error::other)?;
             }
             Event::Output(buf) => {
-                _ = kcp.send(&buf).map_err(|e| Error::other(e))?;
+                _ = kcp.send(&buf).map_err(Error::other)?;
                 _ = kcp.async_flush().await;
             }
             Event::Timeout => {
@@ -400,7 +400,7 @@ async fn kcp_run(
                     .unwrap_or_default();
                 kcp.async_update(millis.as_millis() as _)
                     .await
-                    .map_err(|e| Error::other(e))?;
+                    .map_err(Error::other)?;
             }
         }
 

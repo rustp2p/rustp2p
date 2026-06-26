@@ -234,7 +234,6 @@ impl Config {
 ///     .tcp_port(8080)
 ///     .multiplex_limit(4);
 /// ```
-
 /// UDP tunnel configuration.
 ///
 /// Controls UDP socket behavior including port allocation and socket model.
@@ -247,7 +246,6 @@ impl Config {
 /// let config = UdpTunnelConfig::default()
 ///     .simple_udp_port(8080);
 /// ```
-
 impl From<Config> for rust_p2p_core::tunnel::config::TunnelConfig {
     fn from(value: Config) -> Self {
         let udp_tunnel_config = value.udp_tunnel_config.map(|mut config| {
