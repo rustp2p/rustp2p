@@ -119,7 +119,9 @@ impl NodeContext {
 
         for (index, addr) in direct_node.into_iter().enumerate() {
             let id = ids[index];
-            let node_addrs = addr.to_addr(&self.dns, self.default_interface.as_ref()).await?;
+            let node_addrs = addr
+                .to_addr(&self.dns, self.default_interface.as_ref())
+                .await?;
             addrs.push((addr, id, node_addrs))
         }
         let mut guard = self.direct_node_address_list.write();

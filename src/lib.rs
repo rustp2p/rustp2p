@@ -248,7 +248,7 @@ pub use protocol::{
     node_id::{self, GroupCode, NodeID},
     NetPacket, HEAD_LEN,
 };
-pub use tunnel::{ResolvedAddr, PeerAddr, RecvUserData};
+pub use tunnel::{PeerAddr, RecvUserData, ResolvedAddr};
 
 #[cfg(feature = "use-kcp")]
 pub use reliable::*;
@@ -834,12 +834,9 @@ impl Builder {
         } else {
             Config::new()
                 .udp_tunnel_config(
-                    UdpTunnelConfig::default()
-                        .simple_udp_port(self.udp_port.unwrap_or_default()),
+                    UdpTunnelConfig::default().simple_udp_port(self.udp_port.unwrap_or_default()),
                 )
-                .tcp_tunnel_config(
-                    TcpTunnelConfig::default().tcp_port(self.tcp_port.unwrap_or(0)),
-                )
+                .tcp_tunnel_config(TcpTunnelConfig::default().tcp_port(self.tcp_port.unwrap_or(0)))
                 .node_id(self.node_id.ok_or(io::Error::new(
                     io::ErrorKind::InvalidInput,
                     "node_id is required",

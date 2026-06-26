@@ -142,12 +142,7 @@ impl Puncher {
         let Some(id) = punch_info.peer_nat_info.flag() else {
             return false;
         };
-        let stats = self
-            .punch_stats
-            .lock()
-            .entry(id)
-            .or_default()
-            .clone();
+        let stats = self.punch_stats.lock().entry(id).or_default().clone();
         if stats.total_count > 8 {
             let interval = stats.total_count / 8;
             return stats.total_count.is_multiple_of(interval.min(360));
@@ -250,14 +245,22 @@ impl Puncher {
                     let mgr = tcp_socket_manager.clone();
                     let buf = tcp_buf_owned.clone();
                     tcp_tasks.push(tokio::spawn(async move {
-                        Self::connect_tcp(&mgr, buf.as_deref(), addr, ttl, Duration::from_millis(100)).await;
+                        Self::connect_tcp(
+                            &mgr,
+                            buf.as_deref(),
+                            addr,
+                            ttl,
+                            Duration::from_millis(100),
+                        )
+                        .await;
                     }));
                 }
                 for addr in peer_nat_info.public_ipv4_tcp() {
                     let mgr = tcp_socket_manager.clone();
                     let buf = tcp_buf_owned.clone();
                     tcp_tasks.push(tokio::spawn(async move {
-                        Self::connect_tcp(&mgr, buf.as_deref(), addr, ttl, Duration::from_secs(3)).await;
+                        Self::connect_tcp(&mgr, buf.as_deref(), addr, ttl, Duration::from_secs(3))
+                            .await;
                     }));
                 }
             }
@@ -266,7 +269,8 @@ impl Puncher {
                     let mgr = tcp_socket_manager.clone();
                     let buf = tcp_buf_owned.clone();
                     tcp_tasks.push(tokio::spawn(async move {
-                        Self::connect_tcp(&mgr, buf.as_deref(), addr, ttl, Duration::from_secs(3)).await;
+                        Self::connect_tcp(&mgr, buf.as_deref(), addr, ttl, Duration::from_secs(3))
+                            .await;
                     }));
                 }
             }

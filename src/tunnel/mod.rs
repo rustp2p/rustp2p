@@ -10,8 +10,8 @@ use async_shutdown::ShutdownManager;
 
 use bytes::BytesMut;
 use dashmap::DashMap;
-pub use node_context::ResolvedAddr;
 pub use node_context::PeerAddr;
+pub use node_context::ResolvedAddr;
 use rust_p2p_core::idle::IdleRouteManager;
 use rust_p2p_core::nat::NatType;
 use rust_p2p_core::punch::{PunchConsultInfo, PunchRole};

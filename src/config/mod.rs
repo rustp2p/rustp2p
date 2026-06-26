@@ -4,14 +4,14 @@ use std::time::Duration;
 use async_trait::async_trait;
 
 use crate::protocol::node_id::{GroupCode, NodeID};
-use crate::tunnel::{ResolvedAddr, PeerAddr, RecvResult};
+use crate::tunnel::{PeerAddr, RecvResult, ResolvedAddr};
 pub use rust_p2p_core::nat::*;
 pub use rust_p2p_core::punch::config::{PunchModel, PunchPolicy, PunchPolicySet};
 use rust_p2p_core::punch::PunchRole;
 pub use rust_p2p_core::socket::LocalInterface;
 pub use rust_p2p_core::tunnel::config::LoadBalance;
-pub use rust_p2p_core::tunnel::config::UdpTunnelConfig;
 pub use rust_p2p_core::tunnel::config::TcpTunnelConfig;
+pub use rust_p2p_core::tunnel::config::UdpTunnelConfig;
 
 pub(crate) mod punch_info;
 
@@ -252,12 +252,16 @@ impl From<Config> for rust_p2p_core::tunnel::config::TunnelConfig {
     fn from(value: Config) -> Self {
         let udp_tunnel_config = value.udp_tunnel_config.map(|mut config| {
             config.use_v6 = value.use_v6;
-            config.default_interface.clone_from(&value.default_interface);
+            config
+                .default_interface
+                .clone_from(&value.default_interface);
             config
         });
         let tcp_tunnel_config = value.tcp_tunnel_config.map(|mut config| {
             config.use_v6 = value.use_v6;
-            config.default_interface.clone_from(&value.default_interface);
+            config
+                .default_interface
+                .clone_from(&value.default_interface);
             config
         });
         rust_p2p_core::tunnel::config::TunnelConfig {
