@@ -1003,6 +1003,7 @@ fn sockaddr_to_socket_addr(addr: &sockaddr_storage, _len: socklen_t) -> SocketAd
     }
 }
 
+#[allow(unused_variables)]
 fn should_ignore_error(e: &io::Error) -> bool {
     #[cfg(windows)]
     {
