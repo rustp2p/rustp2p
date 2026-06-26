@@ -1,7 +1,7 @@
 use crate::protocol::node_id::{GroupCode, NodeID};
 use crate::protocol::protocol_type::ProtocolType;
 use crate::protocol::NetPacket;
-use crate::tunnel::node_context::NodeAddress;
+use crate::tunnel::node_context::ResolvedAddr;
 use crate::tunnel::TunnelRouter;
 use bytes::Bytes;
 use std::collections::HashSet;
@@ -63,7 +63,7 @@ async fn timestamp_request(tunnel_tx: &TunnelRouter) -> io::Result<()> {
 }
 
 async fn direct_heartbeat_request(
-    direct_nodes: Vec<(NodeAddress, Option<(GroupCode, NodeID)>)>,
+    direct_nodes: Vec<(ResolvedAddr, Option<(GroupCode, NodeID)>)>,
     sent_ids: &HashSet<NodeID>,
     tunnel_tx: &TunnelRouter,
     buf: &[u8],
@@ -77,7 +77,7 @@ async fn direct_heartbeat_request(
             }
         }
         match addr {
-            NodeAddress::Tcp(addr) => match tunnel_tx.socket_manager.tcp_socket_manager_as_ref() {
+            ResolvedAddr::Tcp(addr) => match tunnel_tx.socket_manager.tcp_socket_manager_as_ref() {
                 None => {}
                 Some(tcp) => {
                     if let Err(e) = tcp.send_to_addr(buf_bytes.clone(), addr).await {
@@ -85,7 +85,7 @@ async fn direct_heartbeat_request(
                     }
                 }
             },
-            NodeAddress::Udp(addr) => match tunnel_tx.socket_manager.udp_socket_manager_as_ref() {
+            ResolvedAddr::Udp(addr) => match tunnel_tx.socket_manager.udp_socket_manager_as_ref() {
                 None => {}
                 Some(udp) => {
                     if let Err(e) = udp.send_to(&buf_bytes, addr).await {

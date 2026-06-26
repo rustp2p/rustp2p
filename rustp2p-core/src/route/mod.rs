@@ -17,6 +17,8 @@ use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 
 pub mod route_table;
 
+pub use route_table::Route;
+
 pub const DEFAULT_RTT: u32 = 9999;
 
 use crate::tunnel::udp::UDPIndex;

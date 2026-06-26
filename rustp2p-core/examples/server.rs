@@ -35,12 +35,12 @@ pub const MY_SERVER_ID: u32 = 0;
 #[tokio::main]
 async fn main() {
     env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
-    let udp_config = UdpTunnelConfig::default().set_simple_udp_port(3000);
-    let tcp_config = TcpTunnelConfig::new(Box::new(LengthPrefixedInitCodec)).set_tcp_port(3000);
+    let udp_config = UdpTunnelConfig::default().simple_udp_port(3000);
+    let tcp_config = TcpTunnelConfig::new(Box::new(LengthPrefixedInitCodec)).tcp_port(3000);
     let config = TunnelConfig::empty()
         .major_socket_count(1)
-        .set_tcp_tunnel_config(tcp_config)
-        .set_udp_tunnel_config(udp_config);
+        .tcp_tunnel_config(tcp_config)
+        .udp_tunnel_config(udp_config);
     let (mut tunnel_factory, _puncher) = new_tunnel_component(config).unwrap();
     let writer = tunnel_factory.socket_manager();
     let route_table = RouteTable::default();

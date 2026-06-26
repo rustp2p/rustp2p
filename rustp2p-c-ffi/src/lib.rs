@@ -226,7 +226,7 @@ use std::sync::Arc;
 
 use rustp2p::cipher::Algorithm;
 use rustp2p::node_id::GroupCode;
-use rustp2p::{Builder, EndPoint, PeerNodeAddress, RecvMetadata, RecvUserData};
+use rustp2p::{Builder, EndPoint, PeerAddr, RecvMetadata, RecvUserData};
 use tokio::runtime::Runtime;
 
 // Opaque handle types for C
@@ -237,7 +237,7 @@ use tokio::runtime::Runtime;
 pub struct Rustp2pBuilder {
     builder: Builder,
     runtime: Arc<Runtime>,
-    peers: Vec<PeerNodeAddress>,
+    peers: Vec<PeerAddr>,
 }
 
 /// Endpoint handle for sending and receiving P2P data.
@@ -503,7 +503,7 @@ pub extern "C" fn rustp2p_builder_add_peer(
         Err(_) => return RUSTP2P_ERROR_INVALID_STR,
     };
 
-    let peer = match PeerNodeAddress::from_str(addr_str) {
+    let peer = match PeerAddr::from_str(addr_str) {
         Ok(p) => p,
         Err(_) => return RUSTP2P_ERROR,
     };

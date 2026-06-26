@@ -2,7 +2,7 @@ use crate::protocol::node_id::NodeID;
 use crate::protocol::protocol_type::ProtocolType;
 use crate::protocol::NetPacket;
 use crate::tunnel::node_context::DirectNodes;
-use crate::tunnel::{NodeAddress, TunnelRouter};
+use crate::tunnel::{ResolvedAddr, TunnelRouter};
 use bytes::Bytes;
 use rand::seq::SliceRandom;
 use std::collections::HashSet;
@@ -61,7 +61,7 @@ async fn poll_direct_peer_node(
         packet.payload_mut()[2..4].copy_from_slice(&id.to_be_bytes());
         let buf_bytes = Bytes::copy_from_slice(packet.buffer());
         match addr {
-            NodeAddress::Tcp(addr) => match tunnel_tx.socket_manager.tcp_socket_manager_as_ref() {
+            ResolvedAddr::Tcp(addr) => match tunnel_tx.socket_manager.tcp_socket_manager_as_ref() {
                 None => {}
                 Some(tcp) => {
                     if let Err(e) = tcp.send_to_addr(buf_bytes, addr).await {
@@ -69,7 +69,7 @@ async fn poll_direct_peer_node(
                     }
                 }
             },
-            NodeAddress::Udp(addr) => match tunnel_tx.socket_manager.udp_socket_manager_as_ref() {
+            ResolvedAddr::Udp(addr) => match tunnel_tx.socket_manager.udp_socket_manager_as_ref() {
                 None => {}
                 Some(udp) => {
                     if let Err(e) = udp.send_to(&buf_bytes, addr).await {

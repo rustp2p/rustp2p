@@ -53,11 +53,6 @@ impl TunnelConfig {
     }
 }
 impl TunnelConfig {
-    pub fn none_tcp(self) -> Self {
-        self
-    }
-}
-impl TunnelConfig {
     pub fn empty() -> Self {
         Self {
             major_socket_count: MAX_MAJOR_SOCKET_COUNT,
@@ -71,11 +66,11 @@ impl TunnelConfig {
         self
     }
 
-    pub fn set_udp_tunnel_config(mut self, config: UdpTunnelConfig) -> Self {
+    pub fn udp_tunnel_config(mut self, config: UdpTunnelConfig) -> Self {
         self.udp_tunnel_config.replace(config);
         self
     }
-    pub fn set_tcp_tunnel_config(mut self, config: TcpTunnelConfig) -> Self {
+    pub fn tcp_tunnel_config(mut self, config: TcpTunnelConfig) -> Self {
         self.tcp_tunnel_config.replace(config);
         self
     }
@@ -92,67 +87,67 @@ impl TunnelConfig {
 
 #[derive(Clone)]
 pub struct TcpTunnelConfig {
-    pub route_idle_time: Duration,
-    pub tcp_multiplexing_limit: usize,
+    pub idle_timeout: Duration,
+    pub multiplex_limit: usize,
     pub default_interface: Option<LocalInterface>,
     pub tcp_port: u16,
     pub use_v6: bool,
-    pub init_codec: Box<dyn InitCodec>,
+    pub codec: Box<dyn InitCodec>,
 }
 
 impl Default for TcpTunnelConfig {
     fn default() -> Self {
         Self {
-            route_idle_time: ROUTE_IDLE_TIME,
-            tcp_multiplexing_limit: MAX_MAJOR_SOCKET_COUNT,
+            idle_timeout: ROUTE_IDLE_TIME,
+            multiplex_limit: MAX_MAJOR_SOCKET_COUNT,
             default_interface: None,
             tcp_port: 0,
             use_v6: true,
-            init_codec: Box::new(BytesInitCodec),
+            codec: Box::new(BytesInitCodec),
         }
     }
 }
 
 impl TcpTunnelConfig {
-    pub fn new(init_codec: Box<dyn InitCodec>) -> TcpTunnelConfig {
+    pub fn new(codec: Box<dyn InitCodec>) -> TcpTunnelConfig {
         Self {
-            route_idle_time: ROUTE_IDLE_TIME,
-            tcp_multiplexing_limit: MAX_MAJOR_SOCKET_COUNT,
+            idle_timeout: ROUTE_IDLE_TIME,
+            multiplex_limit: MAX_MAJOR_SOCKET_COUNT,
             default_interface: None,
             tcp_port: 0,
             use_v6: true,
-            init_codec,
+            codec,
         }
     }
     pub fn check(&self) -> io::Result<()> {
-        if self.tcp_multiplexing_limit == 0 {
-            return Err(io::Error::other("tcp_multiplexing_limit cannot be 0"));
+        if self.multiplex_limit == 0 {
+            return Err(io::Error::other("multiplex_limit cannot be 0"));
         }
-        if self.tcp_multiplexing_limit > MAX_MAIN_SOCKET_COUNT {
-            return Err(io::Error::other("tcp_multiplexing_limit cannot too large"));
+        if self.multiplex_limit > MAX_MAIN_SOCKET_COUNT {
+            return Err(io::Error::other("multiplex_limit cannot be too large"));
         }
         if self.use_v6 {
             socket2::Socket::new(socket2::Domain::IPV6, socket2::Type::STREAM, None)?;
         }
         Ok(())
     }
-    pub fn set_tcp_multiplexing_limit(mut self, tcp_multiplexing_limit: usize) -> Self {
-        self.tcp_multiplexing_limit = tcp_multiplexing_limit;
+    pub fn multiplex_limit(mut self, limit: usize) -> Self {
+        self.multiplex_limit = limit;
         self
     }
-    pub fn set_route_idle_time(mut self, route_idle_time: Duration) -> Self {
-        self.route_idle_time = route_idle_time;
+    pub fn idle_timeout(mut self, timeout: Duration) -> Self {
+        self.idle_timeout = timeout;
         self
     }
-    pub fn set_default_interface(mut self, default_interface: LocalInterface) -> Self {
-        self.default_interface = Some(default_interface.clone());
+    pub fn default_interface(mut self, default_interface: LocalInterface) -> Self {
+        self.default_interface = Some(default_interface);
         self
     }
-    pub fn set_tcp_port(mut self, tcp_port: u16) -> Self {
+    pub fn tcp_port(mut self, tcp_port: u16) -> Self {
         self.tcp_port = tcp_port;
         self
     }
-    pub fn set_use_v6(mut self, use_v6: bool) -> Self {
+    pub fn use_v6(mut self, use_v6: bool) -> Self {
         self.use_v6 = use_v6;
         self
     }
@@ -160,8 +155,8 @@ impl TcpTunnelConfig {
 
 #[derive(Clone)]
 pub struct UdpTunnelConfig {
-    pub main_udp_count: usize,
-    pub sub_udp_count: usize,
+    pub main_count: usize,
+    pub sub_count: usize,
     pub model: Model,
     pub default_interface: Option<LocalInterface>,
     pub udp_ports: Vec<u16>,
@@ -171,8 +166,8 @@ pub struct UdpTunnelConfig {
 impl Default for UdpTunnelConfig {
     fn default() -> Self {
         Self {
-            main_udp_count: MAX_MAJOR_SOCKET_COUNT,
-            sub_udp_count: MAX_UDP_SUB_SOCKET_COUNT,
+            main_count: MAX_MAJOR_SOCKET_COUNT,
+            sub_count: MAX_UDP_SUB_SOCKET_COUNT,
             model: Model::Low,
             default_interface: None,
             udp_ports: vec![0, 0],
@@ -183,13 +178,13 @@ impl Default for UdpTunnelConfig {
 
 impl UdpTunnelConfig {
     pub fn check(&self) -> io::Result<()> {
-        if self.main_udp_count == 0 {
+        if self.main_count == 0 {
             return Err(io::Error::other("main socket count cannot be 0"));
         }
-        if self.main_udp_count > MAX_MAIN_SOCKET_COUNT {
+        if self.main_count > MAX_MAIN_SOCKET_COUNT {
             return Err(io::Error::other("main socket count is too large"));
         }
-        if self.sub_udp_count > MAX_SYMMETRIC_SOCKET_COUNT {
+        if self.sub_count > MAX_SYMMETRIC_SOCKET_COUNT {
             return Err(io::Error::other(
                 "socket count for symmetric nat is too large",
             ));
@@ -199,31 +194,31 @@ impl UdpTunnelConfig {
         }
         Ok(())
     }
-    pub fn set_main_udp_count(mut self, count: usize) -> Self {
-        self.main_udp_count = count;
+    pub fn main_count(mut self, count: usize) -> Self {
+        self.main_count = count;
         self
     }
-    pub fn set_sub_udp_count(mut self, count: usize) -> Self {
-        self.sub_udp_count = count;
+    pub fn sub_count(mut self, count: usize) -> Self {
+        self.sub_count = count;
         self
     }
-    pub fn set_model(mut self, model: Model) -> Self {
+    pub fn model(mut self, model: Model) -> Self {
         self.model = model;
         self
     }
-    pub fn set_default_interface(mut self, default_interface: LocalInterface) -> Self {
-        self.default_interface = Some(default_interface.clone());
+    pub fn default_interface(mut self, default_interface: LocalInterface) -> Self {
+        self.default_interface = Some(default_interface);
         self
     }
-    pub fn set_udp_ports(mut self, udp_ports: Vec<u16>) -> Self {
+    pub fn udp_ports(mut self, udp_ports: Vec<u16>) -> Self {
         self.udp_ports = udp_ports;
         self
     }
-    pub fn set_simple_udp_port(mut self, udp_port: u16) -> Self {
+    pub fn simple_udp_port(mut self, udp_port: u16) -> Self {
         self.udp_ports = vec![udp_port];
         self
     }
-    pub fn set_use_v6(mut self, use_v6: bool) -> Self {
+    pub fn use_v6(mut self, use_v6: bool) -> Self {
         self.use_v6 = use_v6;
         self
     }

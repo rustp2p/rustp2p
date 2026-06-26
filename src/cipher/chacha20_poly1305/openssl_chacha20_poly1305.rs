@@ -31,10 +31,10 @@ impl ChaCha20Poly1305Cipher {
             *b ^= extra_info[i];
         }
 
-        // 提取标签（tag）
+        // Extract tag
         let tag = &payload[data_len - ENCRYPTION_RESERVED..data_len - 12];
 
-        // 创建解密器
+        // Create decrypter
         let mut decrypter = Crypter::new(
             Cipher::chacha20_poly1305(),
             Mode::Decrypt,
@@ -48,7 +48,7 @@ impl ChaCha20Poly1305Cipher {
             )
         })?;
 
-        // 设置标签
+        // Set tag
         decrypter.set_tag(tag).map_err(|e| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -56,7 +56,7 @@ impl ChaCha20Poly1305Cipher {
             )
         })?;
 
-        // 解密数据
+        // Decrypt data
         let mut decrypted =
             vec![0; data_len - ENCRYPTION_RESERVED + Cipher::chacha20_poly1305().block_size()];
         let mut count = decrypter
@@ -75,7 +75,7 @@ impl ChaCha20Poly1305Cipher {
             )
         })?;
 
-        // 复制解密后的数据回原缓冲区
+        // Copy decrypted data back to original buffer
         payload[..count].copy_from_slice(&decrypted[..count]);
 
         Ok(count)
@@ -95,7 +95,7 @@ impl ChaCha20Poly1305Cipher {
             *b ^= extra_info[i];
         }
 
-        // 创建加密器
+        // Create encrypter
         let mut encrypter = Crypter::new(
             Cipher::chacha20_poly1305(),
             Mode::Encrypt,
@@ -109,7 +109,7 @@ impl ChaCha20Poly1305Cipher {
             )
         })?;
 
-        // 加密数据
+        // Encrypt data
         let mut encrypted =
             vec![0; data_len - ENCRYPTION_RESERVED + Cipher::chacha20_poly1305().block_size()];
         let mut count = encrypter
@@ -128,7 +128,7 @@ impl ChaCha20Poly1305Cipher {
             )
         })?;
 
-        // 获取标签
+        // Get tag
         let mut tag = vec![0; 16];
         encrypter.get_tag(&mut tag).map_err(|e| {
             io::Error::new(
@@ -137,10 +137,9 @@ impl ChaCha20Poly1305Cipher {
             )
         })?;
 
-        // 复制加密后的数据回原缓冲区
-        payload[..count].copy_from_slice(&encrypted[..count]);
+        // Copy encrypted data back to original buffer
 
-        // 复制标签和随机数
+        // Copy tag and nonce
         payload[data_len - ENCRYPTION_RESERVED..data_len - ENCRYPTION_RESERVED + 16]
             .copy_from_slice(&tag);
         payload[data_len - 12..].copy_from_slice(&random);

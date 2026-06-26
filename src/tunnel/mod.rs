@@ -10,8 +10,8 @@ use async_shutdown::ShutdownManager;
 
 use bytes::BytesMut;
 use dashmap::DashMap;
-pub use node_context::NodeAddress;
-pub use node_context::PeerNodeAddress;
+pub use node_context::ResolvedAddr;
+pub use node_context::PeerAddr;
 use rust_p2p_core::idle::IdleRouteManager;
 use rust_p2p_core::nat::NatType;
 use rust_p2p_core::punch::{PunchConsultInfo, PunchRole};
@@ -59,7 +59,7 @@ impl TunnelDispatcher {
         let heartbeat_interval = config.heartbeat_interval;
         let route_idle_time = config.route_idle_time;
         let group_code = config.group_code.take();
-        let self_id = config.self_id.take();
+        let node_id = config.node_id.take();
         let direct_addrs = config.direct_addrs.take();
         let mapping_addrs = config.mapping_addrs.take();
         let dns = config.dns.take();
@@ -127,8 +127,8 @@ impl TunnelDispatcher {
         if let Some(group_code) = group_code {
             node_context.store_group_code(group_code)?;
         }
-        if let Some(node_id) = self_id {
-            node_context.store_self_id(node_id)?;
+        if let Some(id) = node_id {
+            node_context.store_self_id(id)?;
         }
         if let Some(addrs) = direct_addrs {
             node_context.update_direct_nodes(addrs).await?;
@@ -468,7 +468,8 @@ impl TunnelRouter {
                     map.insert(owner_id, (vec![owner_id, *id], *route));
                 }
             } else {
-                // 通过其他组的节点转发的，正常来说应该也要找到这个转发节点，这里为了简化操作，写为直接发送
+                // Forwarded via other group's node; ideally we'd find the relay node,
+                // but for simplicity we send directly
                 if !map.contains_key(id) {
                     map.insert(*id, (vec![*id], *route));
                 }
@@ -912,16 +913,16 @@ impl Tunnel {
                     block.truncate(rs.end);
                     Ok(Ok(Ok((
                         RecvUserData {
-                            _offset: rs.start,
-                            _data: block,
+                            offset: rs.start,
+                            data: block,
                         },
                         RecvMetadata {
-                            _src_id: rs.src_id,
-                            _dest_id: rs.dest_id,
-                            _route_key: rs.route_key,
-                            _ttl: rs.ttl,
-                            _max_ttl: rs.max_ttl,
-                            _protocol: rs.protocol,
+                            src_id: rs.src_id,
+                            dest_id: rs.dest_id,
+                            route_key: rs.route_key,
+                            ttl: rs.ttl,
+                            max_ttl: rs.max_ttl,
+                            protocol: rs.protocol,
                         },
                     ))))
                 } else {
@@ -998,7 +999,7 @@ impl Tunnel {
 
         let dest_id = NodeID::try_from(packet.dest_id())?;
         if dest_id.is_unspecified() {
-            // 是不同组的节点发给自己的数据
+            // Data from a different group's node sent to self
             match packet.protocol()? {
                 ProtocolType::EchoRequest => {
                     packet.set_protocol(ProtocolType::EchoReply);
@@ -1177,8 +1178,7 @@ impl Tunnel {
                 let start = HEAD_LEN + broadcast_packet.head_len() + HEAD_LEN;
                 let mut broadcast_to_self = false;
 
-                let range_id: Vec<NodeID> = broadcast_packet.iter().collect();
-                for node_id in range_id {
+                for node_id in broadcast_packet.iter() {
                     if node_id == self_id {
                         broadcast_to_self = true
                     } else if let Err(e) = self.send_to(&in_packet, &node_id).await {
@@ -1456,42 +1456,42 @@ struct HandleResultInner {
 }
 #[derive(Copy, Clone, Debug)]
 pub struct RecvMetadata {
-    _ttl: u8,
-    _max_ttl: u8,
-    _protocol: u8,
-    _src_id: NodeID,
-    _dest_id: NodeID,
-    _route_key: RouteKey,
+    ttl: u8,
+    max_ttl: u8,
+    protocol: u8,
+    src_id: NodeID,
+    dest_id: NodeID,
+    route_key: RouteKey,
 }
 impl RecvMetadata {
     pub fn ttl(&self) -> u8 {
-        self._ttl
+        self.ttl
     }
     pub fn max_ttl(&self) -> u8 {
-        self._max_ttl
+        self.max_ttl
     }
     pub(crate) fn protocol(&self) -> u8 {
-        self._protocol
+        self.protocol
     }
     pub fn src_id(&self) -> NodeID {
-        self._src_id
+        self.src_id
     }
     pub fn dest_id(&self) -> NodeID {
-        self._dest_id
+        self.dest_id
     }
     pub fn route_key(&self) -> RouteKey {
-        self._route_key
+        self.route_key
     }
     pub fn is_relay(&self) -> bool {
-        (self._max_ttl - self._ttl) != 0
+        (self.max_ttl - self.ttl) != 0
     }
     pub fn is_broadcast(&self) -> bool {
-        self._dest_id.is_broadcast()
+        self.dest_id.is_broadcast()
     }
 }
 pub struct RecvUserData {
-    _offset: usize,
-    _data: Data,
+    offset: usize,
+    data: Data,
 }
 
 pub(crate) enum Data {
@@ -1527,16 +1527,16 @@ impl DerefMut for Data {
 
 impl RecvUserData {
     pub fn offset(&self) -> usize {
-        self._offset
+        self.offset
     }
     pub fn original_bytes_mut(&mut self) -> &mut BytesMut {
-        &mut self._data
+        &mut self.data
     }
     pub fn original_bytes(&self) -> &BytesMut {
-        &self._data
+        &self.data
     }
     pub fn is_recyclable(&self) -> bool {
-        match self._data {
+        match self.data {
             Data::Recyclable(_) => true,
             Data::Temporary(_) => false,
         }
@@ -1545,10 +1545,10 @@ impl RecvUserData {
 
 impl RecvUserData {
     pub fn payload(&self) -> &[u8] {
-        &self._data[self._offset..]
+        &self.data[self.offset..]
     }
     pub fn payload_mut(&mut self) -> &mut [u8] {
-        &mut self._data[self._offset..]
+        &mut self.data[self.offset..]
     }
 }
 
@@ -1597,6 +1597,6 @@ fn now() -> io::Result<u32> {
     let time = std::time::SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|_e| io::Error::other("system time error"))?
-        .as_millis() as u32;
+        .as_secs() as u32;
     Ok(time)
 }

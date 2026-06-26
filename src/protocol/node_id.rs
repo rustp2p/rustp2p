@@ -248,13 +248,6 @@ impl TryFrom<String> for GroupCode {
     }
 }
 
-impl TryFrom<&String> for GroupCode {
-    type Error = std::io::Error;
-    fn try_from(value: &String) -> Result<Self, Self::Error> {
-        Self::try_from(value.as_str())
-    }
-}
-
 impl From<u128> for GroupCode {
     fn from(value: u128) -> Self {
         GroupCode(value.to_be_bytes())

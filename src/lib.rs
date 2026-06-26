@@ -52,7 +52,7 @@
 //! Use the [`Builder`] to configure and create an [`EndPoint`]:
 //!
 //! ```rust,no_run
-//! use rustp2p::{Builder, PeerNodeAddress};
+//! use rustp2p::{Builder, PeerAddr};
 //! use std::net::Ipv4Addr;
 //! use std::str::FromStr;
 //!
@@ -64,7 +64,7 @@
 //!     .tcp_port(8080)
 //!     // Add initial peers to connect to
 //!     .peers(vec![
-//!         PeerNodeAddress::from_str("udp://192.168.1.100:9090").unwrap()
+//!         PeerAddr::from_str("udp://192.168.1.100:9090").unwrap()
 //!     ])
 //!     .build()
 //!     .await?;
@@ -248,7 +248,7 @@ pub use protocol::{
     node_id::{self, GroupCode, NodeID},
     NetPacket, HEAD_LEN,
 };
-pub use tunnel::{NodeAddress, PeerNodeAddress, RecvUserData};
+pub use tunnel::{ResolvedAddr, PeerAddr, RecvUserData};
 
 #[cfg(feature = "use-kcp")]
 pub use reliable::*;
@@ -524,7 +524,7 @@ impl Drop for OwnedJoinHandle {
 /// ## Full Configuration
 ///
 /// ```rust,no_run
-/// use rustp2p::{Builder, PeerNodeAddress, GroupCode};
+/// use rustp2p::{Builder, PeerAddr, GroupCode};
 /// # #[cfg(any(feature = "aes-gcm-openssl", feature = "aes-gcm-ring"))]
 /// use rustp2p::cipher::Algorithm;
 /// use std::net::Ipv4Addr;
@@ -539,7 +539,7 @@ impl Drop for OwnedJoinHandle {
 ///     .udp_port(8080)
 ///     .tcp_port(8080)
 ///     .peers(vec![
-///         PeerNodeAddress::from_str("udp://192.168.1.100:9090").unwrap()
+///         PeerAddr::from_str("udp://192.168.1.100:9090").unwrap()
 ///     ])
 ///     .group_code(GroupCode::try_from("12345").unwrap())
 ///     .encryption(Algorithm::AesGcm("password".to_string()))
@@ -560,7 +560,7 @@ impl Drop for OwnedJoinHandle {
 pub struct Builder {
     udp_port: Option<u16>,
     tcp_port: Option<u16>,
-    peers: Option<Vec<PeerNodeAddress>>,
+    peers: Option<Vec<PeerAddr>>,
     group_code: Option<GroupCode>,
     encryption: Option<Algorithm>,
     node_id: Option<NodeID>,
@@ -608,7 +608,7 @@ impl Builder {
     ///
     /// # #[tokio::main]
     /// # async fn main() -> std::io::Result<()> {
-    /// let config = Config::empty();
+    /// let config = Config::new();
     /// let builder = Builder::from_config(config);
     /// # Ok(())
     /// # }
@@ -674,16 +674,16 @@ impl Builder {
     /// # Examples
     ///
     /// ```rust,no_run
-    /// use rustp2p::{Builder, PeerNodeAddress};
+    /// use rustp2p::{Builder, PeerAddr};
     /// use std::str::FromStr;
     ///
     /// let builder = Builder::new()
     ///     .peers(vec![
-    ///         PeerNodeAddress::from_str("udp://192.168.1.100:9090").unwrap(),
-    ///         PeerNodeAddress::from_str("tcp://10.0.0.1:8080").unwrap(),
+    ///         PeerAddr::from_str("udp://192.168.1.100:9090").unwrap(),
+    ///         PeerAddr::from_str("tcp://10.0.0.1:8080").unwrap(),
     ///     ]);
     /// ```
-    pub fn peers(mut self, peers: Vec<PeerNodeAddress>) -> Self {
+    pub fn peers(mut self, peers: Vec<PeerAddr>) -> Self {
         self.peers = Some(peers);
         self
     }
@@ -832,33 +832,33 @@ impl Builder {
         let mut config = if let Some(config) = self.config {
             config
         } else {
-            Config::empty()
-                .set_udp_tunnel_config(
+            Config::new()
+                .udp_tunnel_config(
                     UdpTunnelConfig::default()
-                        .set_simple_udp_port(self.udp_port.unwrap_or_default()),
+                        .simple_udp_port(self.udp_port.unwrap_or_default()),
                 )
-                .set_tcp_tunnel_config(
-                    TcpTunnelConfig::default().set_tcp_port(self.tcp_port.unwrap_or(0)),
+                .tcp_tunnel_config(
+                    TcpTunnelConfig::default().tcp_port(self.tcp_port.unwrap_or(0)),
                 )
-                .set_node_id(self.node_id.ok_or(io::Error::new(
+                .node_id(self.node_id.ok_or(io::Error::new(
                     io::ErrorKind::InvalidInput,
                     "node_id is required",
                 ))?)
         };
         if let Some(interface) = self.interface {
-            config = config.set_default_interface(interface);
+            config = config.default_interface(interface);
         }
         if let Some(punching_policy) = self.punching_policy {
-            config = config.set_punching_policy_arc(punching_policy);
+            config = config.punching_policy_arc(punching_policy);
         }
         if let Some(load_balance) = self.load_balance {
-            config = config.set_load_balance(load_balance);
+            config = config.load_balance(load_balance);
         }
         if let Some(group_code) = self.group_code {
-            config = config.set_group_code(group_code);
+            config = config.group_code(group_code);
         }
         if let Some(peers) = self.peers {
-            config = config.set_direct_addrs(peers);
+            config = config.direct_addrs(peers);
         }
         #[cfg(any(
             feature = "aes-gcm-openssl",
@@ -867,7 +867,7 @@ impl Builder {
             feature = "chacha20-poly1305-ring"
         ))]
         if let Some(encryption) = self.encryption {
-            config = config.set_encryption(encryption);
+            config = config.encryption(encryption);
         }
 
         let tunnel_manager = TunnelDispatcher::new(config).await?;
@@ -891,7 +891,7 @@ impl EndPoint {
     ///
     /// # #[tokio::main]
     /// # async fn main() -> std::io::Result<()> {
-    /// let config = Config::empty();
+    /// let config = Config::new();
     /// let endpoint = EndPoint::new(config).await?;
     /// # Ok(())
     /// # }

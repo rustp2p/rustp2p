@@ -6,12 +6,12 @@
 //! # Examples
 //!
 //! ```rust,no_run
-//! use rust_p2p_core::socket::{create_udp_socket, LocalInterface};
+//! use rust_p2p_core::socket::{bind_udp, LocalInterface};
 //! use std::net::SocketAddr;
 //!
 //! # fn main() -> std::io::Result<()> {
 //! let addr: SocketAddr = "0.0.0.0:0".parse().unwrap();
-//! let socket = create_udp_socket(addr, None)?;
+//! let socket = bind_udp(addr, None)?;
 //! # Ok(())
 //! # }
 //! ```

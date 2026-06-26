@@ -78,14 +78,11 @@ impl SendPacket {
         packet.reset_data_len();
     }
     pub fn clear(&mut self) {
-        unsafe {
-            self.set_payload_len(0);
-            self.buf.fill(0);
-
-            let mut packet = NetPacket::new_unchecked(self.buf_mut());
-            packet.set_protocol(ProtocolType::MessageData);
-            packet.set_ttl(15);
-        }
+        self.buf.resize(HEAD_LEN, 0);
+        self.buf.fill(0);
+        let mut packet = unsafe { NetPacket::new_unchecked(self.buf_mut()) };
+        packet.set_protocol(ProtocolType::MessageData);
+        packet.set_ttl(15);
     }
     pub fn set_ttl(&mut self, ttl: u8) {
         let ttl = ttl & 0xF;

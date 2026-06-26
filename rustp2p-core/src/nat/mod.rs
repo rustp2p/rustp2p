@@ -110,6 +110,26 @@ pub struct NatInfo {
     /// The public port of `TCP` service, which works when there is either `nat1` or no `nat` exists
     pub public_tcp_port: u16,
 }
+
+impl Default for NatInfo {
+    fn default() -> Self {
+        Self {
+            nat_type: NatType::default(),
+            public_ips: Vec::new(),
+            public_udp_ports: Vec::new(),
+            mapping_tcp_addr: Vec::new(),
+            mapping_udp_addr: Vec::new(),
+            public_port_range: 0,
+            local_ipv4: Ipv4Addr::UNSPECIFIED,
+            local_ipv4s: Vec::new(),
+            ipv6: None,
+            local_udp_ports: Vec::new(),
+            local_tcp_port: 0,
+            public_tcp_port: 0,
+        }
+    }
+}
+
 impl NatInfo {
     pub(crate) fn flag(&self) -> Option<SocketAddr> {
         let vec = self.public_ipv4_addr();

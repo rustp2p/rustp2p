@@ -2,7 +2,7 @@ use clap::Parser;
 use env_logger::Env;
 use rustp2p::node_id::NodeID;
 use rustp2p::Builder;
-use rustp2p::PeerNodeAddress;
+use rustp2p::PeerAddr;
 use std::io;
 use std::time::Duration;
 
@@ -15,7 +15,7 @@ struct Args {
     /// Peer node address.
     /// example: --peer tcp://192.168.10.13:23333 --peer udp://192.168.10.23:23333
     #[arg(short, long)]
-    peer: Option<Vec<PeerNodeAddress>>,
+    peer: Option<Vec<PeerAddr>>,
     /// example: --id 1
     #[arg(short, long)]
     id: u32,

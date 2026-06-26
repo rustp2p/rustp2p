@@ -77,6 +77,7 @@ pub async fn stun_test_nat(
             Ok((nat_type_t, ip_list_t, port_range_t)) => {
                 if nat_type_t == NatType::Symmetric {
                     nat_type = NatType::Symmetric;
+                    break;
                 }
                 for x in ip_list_t {
                     hash_set.insert(x);
@@ -139,7 +140,7 @@ pub(crate) async fn stun_test_nat0(
     }
 }
 
-async fn test_nat(udp: &UdpSocket, stun_server: &String) -> io::Result<HashSet<SocketAddr>> {
+async fn test_nat(udp: &UdpSocket, stun_server: &str) -> io::Result<HashSet<SocketAddr>> {
     udp.connect(stun_server).await?;
     let tid = rand::rng().next_u64() as u128;
     let mut addr = HashSet::new();
@@ -152,7 +153,7 @@ async fn test_nat(udp: &UdpSocket, stun_server: &String) -> io::Result<HashSet<S
             match test_nat_(udp, stun_server, false, false, tid + 1).await {
                 Ok((mapped_addr2, _)) => {
                     if mapped_addr2.is_ipv4() {
-                        addr.insert(mapped_addr1);
+                        addr.insert(mapped_addr2);
                     }
                 }
                 Err(e) => {
@@ -168,7 +169,7 @@ async fn test_nat(udp: &UdpSocket, stun_server: &String) -> io::Result<HashSet<S
 
 async fn test_nat_(
     udp: &UdpSocket,
-    stun_server: &String,
+    stun_server: &str,
     change_ip: bool,
     change_port: bool,
     tid: u128,
@@ -253,7 +254,7 @@ pub fn send_stun_request() -> Vec<u8> {
     msg.as_bytes().to_vec()
 }
 pub fn is_stun_response(buf: &[u8]) -> bool {
-    buf[0] == 0x01
+    !buf.is_empty() && buf[0] == 0x01
 }
 pub fn recv_stun_response(buf: &[u8]) -> Option<SocketAddr> {
     let msg = stun_format::Msg::from(buf);

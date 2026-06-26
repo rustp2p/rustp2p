@@ -219,7 +219,7 @@ impl<PeerID: Hash + Eq + Clone> RouteTable<PeerID> {
     pub fn need_punch(&self, id: &PeerID) -> bool {
         if let Some(entry) = self.route_table.get(id) {
             let (_, routes) = entry.value();
-            //p2p的通道数符合要求
+            // Check if peer has sufficient direct channels
             return !routes.iter().any(|(k, _)| k.is_direct());
         }
         true
@@ -376,7 +376,7 @@ impl<PeerID: Hash + Eq + Clone> RouteTable<PeerID> {
         let mut exist_index = None;
         for (index, (x, time)) in list.iter_mut().enumerate() {
             if x.metric < route.metric && self.load_balance != LoadBalance::LowestLatency {
-                //非优先延迟的情况下 不能比当前的路径更长
+                // When not preferring latency, new route must not be longer than existing
                 return false;
             }
             if x.route_key() == key {
@@ -398,7 +398,7 @@ impl<PeerID: Hash + Eq + Clone> RouteTable<PeerID> {
             }
         } else {
             if self.load_balance != LoadBalance::LowestLatency && route.is_direct() {
-                //非优先延迟的情况下 添加了直连的则排除非直连的
+                // When not preferring latency, keep only direct routes if a direct route is added
                 list.retain(|(k, _)| k.is_direct());
             };
             if route.is_direct() {

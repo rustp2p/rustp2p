@@ -37,7 +37,7 @@
 //! let config = TunnelConfig::default();
 //!
 //! // Create tunnel components
-//! let (dispatcher, puncher) = new_tunnel_component(config)?;
+//! let (mut dispatcher, puncher) = new_tunnel_component(config)?;
 //!
 //! // Use dispatcher to handle incoming connections
 //! while let Ok(tunnel) = dispatcher.dispatch().await {
@@ -110,13 +110,13 @@
 //! Low-level socket creation and management:
 //!
 //! ```rust,no_run
-//! use rust_p2p_core::socket::{create_udp_socket, LocalInterface};
+//! use rust_p2p_core::socket::{bind_udp, LocalInterface};
 //! use std::net::{SocketAddr, Ipv4Addr};
 //!
 //! # #[tokio::main]
 //! # async fn main() -> std::io::Result<()> {
 //! let addr = SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0));
-//! let socket = create_udp_socket(addr, None)?;
+//! let socket = bind_udp(addr, None)?;
 //! # Ok(())
 //! # }
 //! ```

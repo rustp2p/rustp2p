@@ -106,10 +106,12 @@ impl<S: Into<SocketAddr>> ToRouteKeyForUdp<usize> for (usize, S) {
 pub(crate) fn create_tunnel_dispatcher(config: UdpTunnelConfig) -> io::Result<UdpTunnelDispatcher> {
     config.check()?;
     let mut udp_ports = config.udp_ports;
-    udp_ports.resize(config.main_udp_count, 0);
-    let mut main_udp_v4: Vec<Arc<UdpSocket>> = Vec::with_capacity(config.main_udp_count);
-    let mut main_udp_v6: Vec<Arc<UdpSocket>> = Vec::with_capacity(config.main_udp_count);
-    // 因为在mac上v4和v6的对绑定网卡的处理不同，所以这里分开监听，并且分开监听更容易处理发送目标为v4的情况，因为双协议栈下发送v4目标需要转换成v6
+    udp_ports.resize(config.main_count, 0);
+    let mut main_udp_v4: Vec<Arc<UdpSocket>> = Vec::with_capacity(config.main_count);
+    let mut main_udp_v6: Vec<Arc<UdpSocket>> = Vec::with_capacity(config.main_count);
+    // On macOS, v4 and v6 handle network interface binding differently,
+    // so we listen on separate sockets. Separate sockets also simplify sending
+    // to v4 targets, since dual-stack requires v4-to-v6 conversion.
     for port in &udp_ports {
         loop {
             let mut addr_v4 = DEFAULT_ADDRESS_V4;
@@ -137,14 +139,14 @@ pub(crate) fn create_tunnel_dispatcher(config: UdpTunnelConfig) -> io::Result<Ud
         }
     }
     let (tunnel_sender, tunnel_receiver) =
-        tachyonix::channel(config.main_udp_count * 2 + config.sub_udp_count * 2);
+        tachyonix::channel(config.main_count * 2 + config.sub_count * 2);
     let socket_manager = Arc::new(UdpSocketManager {
         main_udp_v4,
         main_udp_v6,
-        sub_udp: RwLock::new(Vec::with_capacity(config.sub_udp_count)),
+        sub_udp: RwLock::new(Vec::with_capacity(config.sub_count)),
         sub_close_notify: Default::default(),
         tunnel_dispatcher: tunnel_sender,
-        sub_udp_num: config.sub_udp_count,
+        sub_udp_num: config.sub_count,
         default_interface: config.default_interface,
         sender_map: Default::default(),
     });
@@ -600,7 +602,7 @@ fn socket_addr_to_sockaddr(addr: &SocketAddr) -> sockaddr_storage {
                 sin_family: libc::AF_INET as _,
                 sin_port: v4_addr.port().to_be(),
                 sin_addr: libc::in_addr {
-                    s_addr: u32::from_ne_bytes(v4_addr.ip().octets()), // IP 地址
+                    s_addr: u32::from_ne_bytes(v4_addr.ip().octets()),
                 },
                 sin_zero: [0; 8],
             };
@@ -778,7 +780,6 @@ impl UdpTunnel {
     pub fn done(&mut self) {
         _ = self.udp.take();
         _ = self.close_notify.take();
-        _ = self.re_dispatcher.take();
         _ = self.re_dispatcher.take();
         _ = self.sender.take();
     }
@@ -1005,12 +1006,16 @@ fn sockaddr_to_socket_addr(addr: &sockaddr_storage, _len: socklen_t) -> SocketAd
 fn should_ignore_error(e: &io::Error) -> bool {
     #[cfg(windows)]
     {
-        // 检查错误码是否为 WSAECONNRESET
         if let Some(os_error) = e.raw_os_error() {
             return os_error == windows_sys::Win32::Networking::WinSock::WSAECONNRESET;
         }
     }
-    _ = e;
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(os_error) = e.raw_os_error() {
+            return os_error == libc::ECONNRESET || os_error == libc::ECONNREFUSED;
+        }
+    }
     false
 }
 
@@ -1023,10 +1028,10 @@ mod tests {
     #[tokio::test]
     pub async fn create_udp_tunnel() {
         let config = crate::tunnel::config::UdpTunnelConfig::default()
-            .set_main_udp_count(2)
-            .set_sub_udp_count(10)
-            .set_model(Model::Low)
-            .set_use_v6(false);
+            .main_count(2)
+            .sub_count(10)
+            .model(Model::Low)
+            .use_v6(false);
         let mut udp_tunnel_factory = crate::tunnel::udp::create_tunnel_dispatcher(config).unwrap();
         let mut count = 0;
         let mut join = Vec::new();
@@ -1042,10 +1047,10 @@ mod tests {
     #[tokio::test]
     pub async fn create_sub_udp_tunnel() {
         let config = crate::tunnel::config::UdpTunnelConfig::default()
-            .set_main_udp_count(2)
-            .set_sub_udp_count(10)
-            .set_use_v6(false)
-            .set_model(Model::High);
+            .main_count(2)
+            .sub_count(10)
+            .use_v6(false)
+            .model(Model::High);
         let mut tunnel_factory = crate::tunnel::udp::create_tunnel_dispatcher(config).unwrap();
         let mut count = 0;
         let mut join = Vec::new();

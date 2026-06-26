@@ -12,7 +12,7 @@ use rust_p2p_core::socket::LocalInterface;
 pub async fn dns_query_txt(
     domain: &str,
     mut name_servers: Vec<String>,
-    default_interface: &Option<LocalInterface>,
+    default_interface: Option<&LocalInterface>,
 ) -> io::Result<Vec<String>> {
     let mut err: Option<io::Error> = None;
     if name_servers.is_empty() {
@@ -40,8 +40,8 @@ pub async fn dns_query_txt(
 }
 pub async fn dns_query_all(
     domain: &str,
-    name_servers: &Vec<String>,
-    default_interface: &Option<LocalInterface>,
+    name_servers: &[String],
+    default_interface: Option<&LocalInterface>,
 ) -> io::Result<Vec<SocketAddr>> {
     match SocketAddr::from_str(domain) {
         Ok(addr) => Ok(vec![addr]),
@@ -64,14 +64,14 @@ pub async fn dns_query_all(
                 let th1 = {
                     let host = host.to_string();
                     let name_server = name_server.clone();
-                    let default_interface = default_interface.clone();
-                    tokio::spawn(a_dns(host, name_server, default_interface.clone()))
+                    let default_interface = default_interface.cloned();
+                    tokio::spawn(a_dns(host, name_server, default_interface))
                 };
                 let th2 = {
                     let host = host.to_string();
                     let name_server = name_server.clone();
-                    let default_interface = default_interface.clone();
-                    tokio::spawn(aaaa_dns(host, name_server, default_interface.clone()))
+                    let default_interface = default_interface.cloned();
+                    tokio::spawn(aaaa_dns(host, name_server, default_interface))
                 };
                 let mut addr = Vec::new();
                 match th1.await? {
@@ -164,13 +164,13 @@ async fn query<'a>(
 pub async fn txt_dns(
     domain: &str,
     name_server: String,
-    default_interface: &Option<LocalInterface>,
+    default_interface: Option<&LocalInterface>,
 ) -> io::Result<Vec<String>> {
     let name_server: SocketAddr = name_server
         .parse()
         .map_err(|e| io::Error::other(format!("dns {name_server} is error :{e:?}")))?;
     let udp = bind_udp(name_server, default_interface)?;
-    let mut buf = [0; 65536];
+    let mut buf = vec![0u8; 65536];
     let message = query(&udp, domain, name_server, QueryType::TXT, &mut buf).await?;
     let mut rs = Vec::new();
     for record in message.answers {
@@ -187,14 +187,14 @@ pub async fn txt_dns(
 
 fn bind_udp(
     name_server: SocketAddr,
-    default_interface: &Option<LocalInterface>,
+    default_interface: Option<&LocalInterface>,
 ) -> io::Result<UdpSocket> {
     let addr: SocketAddr = if name_server.is_ipv4() {
         "0.0.0.0:0".parse().unwrap()
     } else {
         "[::]:0".parse().unwrap()
     };
-    let socket = rust_p2p_core::socket::bind_udp(addr, default_interface.as_ref())?;
+    let socket = rust_p2p_core::socket::bind_udp(addr, default_interface)?;
     UdpSocket::from_std(socket.into())
 }
 
@@ -206,8 +206,8 @@ pub async fn a_dns(
     let name_server: SocketAddr = name_server
         .parse()
         .map_err(|e| io::Error::other(format!("dns {name_server} is error :{e:?}")))?;
-    let udp = bind_udp(name_server, &default_interface)?;
-    let mut buf = [0; 65536];
+    let udp = bind_udp(name_server, default_interface.as_ref())?;
+    let mut buf = vec![0u8; 65536];
     let message = query(&udp, &domain, name_server, QueryType::A, &mut buf).await?;
     let mut rs = Vec::new();
     for record in message.answers {
@@ -226,8 +226,8 @@ pub async fn aaaa_dns(
     let name_server: SocketAddr = name_server
         .parse()
         .map_err(|e| io::Error::other(format!("dns {name_server} is error :{e:?}")))?;
-    let udp = bind_udp(name_server, &default_interface)?;
-    let mut buf = [0; 65536];
+    let udp = bind_udp(name_server, default_interface.as_ref())?;
+    let mut buf = vec![0u8; 65536];
     let message = query(&udp, &domain, name_server, QueryType::AAAA, &mut buf).await?;
     let mut rs = Vec::new();
     for record in message.answers {

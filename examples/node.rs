@@ -10,7 +10,7 @@ use pnet_packet::ip::IpNextHeaderProtocols;
 use pnet_packet::Packet;
 use rustp2p::cipher::Algorithm;
 use rustp2p::node_id::NodeID;
-use rustp2p::PeerNodeAddress;
+use rustp2p::PeerAddr;
 use rustp2p::{Builder, EndPoint};
 use tun_rs::AsyncDevice;
 
@@ -20,7 +20,7 @@ struct Args {
     /// Peer node address.
     /// example: --peer tcp://192.168.10.13:23333 --peer udp://192.168.10.23:23333
     #[arg(short, long)]
-    peer: Option<Vec<PeerNodeAddress>>,
+    peer: Option<Vec<PeerAddr>>,
     /// Local node IP and mask.
     /// example: --local 10.26.0.2/24
     #[arg(short, long)]

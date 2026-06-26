@@ -71,8 +71,8 @@ async fn main() {
     let udp_config = UdpTunnelConfig::default();
     let tcp_config = TcpTunnelConfig::new(Box::new(LengthPrefixedInitCodec));
     let config = TunnelConfig::empty()
-        .set_udp_tunnel_config(udp_config)
-        .set_tcp_tunnel_config(tcp_config)
+        .udp_tunnel_config(udp_config)
+        .tcp_tunnel_config(tcp_config)
         .major_socket_count(2);
     let (mut tunnel_factory, puncher) = new_tunnel_component(config).unwrap();
     let route_table = RouteTable::<u32>::default();

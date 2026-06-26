@@ -18,13 +18,13 @@ use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::{TcpListener, TcpStream};
 
 pub struct TcpTunnelDispatcher {
-    route_idle_time: Duration,
+    idle_timeout: Duration,
     tcp_listener: TcpListener,
     connect_receiver: Receiver<(RouteKey, ReadHalfBox, Sender<Bytes>)>,
     #[allow(dead_code)]
     pub(crate) socket_manager: Arc<TcpSocketManager>,
     write_half_collect: WriteHalfCollect,
-    init_codec: Arc<Box<dyn InitCodec>>,
+    codec: Arc<Box<dyn InitCodec>>,
 }
 
 impl TcpTunnelDispatcher {
@@ -41,23 +41,23 @@ impl TcpTunnelDispatcher {
         let local_addr = tcp_listener.local_addr()?;
         let tcp_listener = TcpListener::from_std(tcp_listener)?;
         let (connect_sender, connect_receiver) = tachyonix::channel(128);
-        let write_half_collect = WriteHalfCollect::new(config.tcp_multiplexing_limit);
-        let init_codec = Arc::new(config.init_codec);
+        let write_half_collect = WriteHalfCollect::new(config.multiplex_limit);
+        let codec = Arc::new(config.codec);
         let socket_manager = Arc::new(TcpSocketManager::new(
             local_addr,
-            config.tcp_multiplexing_limit,
+            config.multiplex_limit,
             write_half_collect.clone(),
             connect_sender,
             config.default_interface,
-            init_codec.clone(),
+            codec.clone(),
         ));
         Ok(TcpTunnelDispatcher {
-            route_idle_time: config.route_idle_time,
+            idle_timeout: config.idle_timeout,
             tcp_listener,
             connect_receiver,
             socket_manager,
             write_half_collect,
-            init_codec,
+            codec,
         })
     }
 }
@@ -70,18 +70,18 @@ impl TcpTunnelDispatcher {
                 let (route_key,read_half,sender) = rs.
                     map_err(|_| io::Error::other("connect_receiver done"))?;
                 let local_addr = read_half.read_half.local_addr()?;
-                Ok(TcpTunnel::new(local_addr,self.route_idle_time,route_key,read_half,sender))
+                Ok(TcpTunnel::new(local_addr,self.idle_timeout,route_key,read_half,sender))
             },
             rs=self.tcp_listener.accept()=>{
                 let (tcp_stream,addr) = rs?;
                 tcp_stream.set_nodelay(true)?;
                 let route_key = tcp_stream.route_key()?;
                 let (read_half,write_half) = tcp_stream.into_split();
-                let (decoder,encoder) = self.init_codec.codec(addr)?;
+                let (decoder,encoder) = self.codec.codec(addr)?;
                 let read_half = ReadHalfBox::new(read_half,decoder);
                 let sender = self.write_half_collect.add_write_half(route_key,0, write_half,encoder);
                 let local_addr = read_half.read_half.local_addr()?;
-                Ok(TcpTunnel::new(local_addr,self.route_idle_time,route_key,read_half,sender))
+                Ok(TcpTunnel::new(local_addr,self.idle_timeout,route_key,read_half,sender))
             }
         }
     }
@@ -93,7 +93,7 @@ impl TcpTunnelDispatcher {
 pub struct TcpTunnel {
     local_addr: SocketAddr,
     route_key: RouteKey,
-    route_idle_time: Duration,
+    idle_timeout: Duration,
     tcp_read: OwnedReadHalf,
     decoder: Box<dyn Decoder>,
     sender: Sender<Bytes>,
@@ -102,7 +102,7 @@ pub struct TcpTunnel {
 impl TcpTunnel {
     pub(crate) fn new(
         local_addr: SocketAddr,
-        route_idle_time: Duration,
+        idle_timeout: Duration,
         route_key: RouteKey,
         read: ReadHalfBox,
         sender: Sender<Bytes>,
@@ -112,7 +112,7 @@ impl TcpTunnel {
         Self {
             local_addr,
             route_key,
-            route_idle_time,
+            idle_timeout,
             tcp_read,
             decoder,
             sender,
@@ -171,7 +171,7 @@ impl TcpTunnel {
 
     pub async fn recv(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         match tokio::time::timeout(
-            self.route_idle_time,
+            self.idle_timeout,
             self.decoder.decode(&mut self.tcp_read, buf),
         )
         .await
@@ -189,7 +189,7 @@ impl TcpTunnel {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "bufs error"));
         }
         match tokio::time::timeout(
-            self.route_idle_time,
+            self.idle_timeout,
             self.decoder.decode(&mut self.tcp_read, bufs[0].as_mut()),
         )
         .await
@@ -239,15 +239,15 @@ impl TcpTunnel {
 
 #[derive(Clone)]
 pub struct WriteHalfCollect {
-    tcp_multiplexing_limit: usize,
+    multiplex_limit: usize,
     addr_mapping: Arc<DashMap<SocketAddr, Vec<usize>>>,
     write_half_map: Arc<DashMap<usize, Sender<Bytes>>>,
 }
 
 impl WriteHalfCollect {
-    fn new(tcp_multiplexing_limit: usize) -> Self {
+    fn new(multiplex_limit: usize) -> Self {
         Self {
-            tcp_multiplexing_limit,
+            multiplex_limit,
             addr_mapping: Default::default(),
             write_half_map: Default::default(),
         }
@@ -273,7 +273,7 @@ impl WriteHalfCollect {
         mut writer: OwnedWriteHalf,
         mut decoder: Box<dyn Encoder>,
     ) -> Sender<Bytes> {
-        assert!(index_offset < self.tcp_multiplexing_limit);
+        assert!(index_offset < self.multiplex_limit);
 
         let index = route_key.index_usize();
         let _ref = self
@@ -283,7 +283,7 @@ impl WriteHalfCollect {
                 v[index_offset] = index;
             })
             .or_insert_with(|| {
-                let mut v = vec![0; self.tcp_multiplexing_limit];
+                let mut v = vec![0; self.multiplex_limit];
                 v[index_offset] = index;
                 v
             });
@@ -293,9 +293,6 @@ impl WriteHalfCollect {
         let collect = self.clone();
         tokio::spawn(async move {
             let mut vec_buf = Vec::with_capacity(16);
-            const IO_SLICE_CAPACITY: usize = 16;
-            let mut io_buffer: Vec<IoSlice> = Vec::with_capacity(IO_SLICE_CAPACITY);
-            let io_slice_storage = io_buffer.as_mut_slice();
             while let Ok(v) = r.recv().await {
                 if let Ok(buf) = r.try_recv() {
                     vec_buf.push(v);
@@ -307,22 +304,9 @@ impl WriteHalfCollect {
                         }
                     }
 
-                    // Safety
-                    // reuse the storage of `io_buffer` via `vec` that only lives in this block and manually clear the content
-                    // within the storage when exiting the block
-                    // leak the memory storage after using `vec` since the storage is managed by `io_buffer`
-                    let rs = {
-                        let mut vec = unsafe {
-                            Vec::from_raw_parts(io_slice_storage.as_mut_ptr(), 0, IO_SLICE_CAPACITY)
-                        };
-                        for x in &vec_buf {
-                            vec.push(IoSlice::new(x));
-                        }
-                        let rs = decoder.encode_multiple(&mut writer, &vec).await;
-                        vec.clear();
-                        std::mem::forget(vec);
-                        rs
-                    };
+                    let io_slices: Vec<IoSlice<'_>> =
+                        vec_buf.iter().map(|b| IoSlice::new(b)).collect();
+                    let rs = decoder.encode_multiple(&mut writer, &io_slices).await;
                     vec_buf.clear();
                     if let Err(e) = rs {
                         log::debug!("{route_key:?},{e:?}");
@@ -385,7 +369,7 @@ impl WriteHalfCollect {
     }
     pub(crate) fn get_limit_route_key(&self, index: usize, addr: &SocketAddr) -> Option<RouteKey> {
         if let Some(v) = self.addr_mapping.get(addr) {
-            assert_eq!(v.len(), self.tcp_multiplexing_limit);
+            assert_eq!(v.len(), self.multiplex_limit);
             let index_usize = v[index];
             if index_usize == 0 {
                 return None;
@@ -424,30 +408,30 @@ impl WriteHalfCollect {
 pub struct TcpSocketManager {
     lock: DashMap<SocketAddr, Arc<Mutex<()>>>,
     local_addr: SocketAddr,
-    tcp_multiplexing_limit: usize,
+    multiplex_limit: usize,
     write_half_collect: WriteHalfCollect,
     connect_sender: Sender<(RouteKey, ReadHalfBox, Sender<Bytes>)>,
     default_interface: Option<LocalInterface>,
-    init_codec: Arc<Box<dyn InitCodec>>,
+    codec: Arc<Box<dyn InitCodec>>,
 }
 
 impl TcpSocketManager {
     pub(crate) fn new(
         local_addr: SocketAddr,
-        tcp_multiplexing_limit: usize,
+        multiplex_limit: usize,
         write_half_collect: WriteHalfCollect,
         connect_sender: Sender<(RouteKey, ReadHalfBox, Sender<Bytes>)>,
         default_interface: Option<LocalInterface>,
-        init_codec: Arc<Box<dyn InitCodec>>,
+        codec: Arc<Box<dyn InitCodec>>,
     ) -> Self {
         Self {
             local_addr,
             lock: Default::default(),
-            tcp_multiplexing_limit,
+            multiplex_limit,
             write_half_collect,
             connect_sender,
             default_interface,
-            init_codec,
+            codec,
         }
     }
     pub fn local_addr(&self) -> SocketAddr {
@@ -470,7 +454,7 @@ impl TcpSocketManager {
         index_offset: usize,
         ttl: Option<u8>,
     ) -> io::Result<RouteKey> {
-        let len = self.tcp_multiplexing_limit;
+        let len = self.multiplex_limit;
         if index_offset >= len {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -554,7 +538,7 @@ impl TcpSocketManager {
         let stream = connect_tcp(addr, bind_port, self.default_interface.as_ref(), ttl).await?;
         let route_key = stream.route_key()?;
         let (read_half, write_half) = stream.into_split();
-        let (decoder, encoder) = self.init_codec.codec(addr)?;
+        let (decoder, encoder) = self.codec.codec(addr)?;
         let read_half = ReadHalfBox::new(read_half, decoder);
         let sender =
             self.write_half_collect
@@ -583,7 +567,7 @@ impl TcpSocketManager {
         addr: A,
         ttl: Option<u8>,
     ) -> io::Result<()> {
-        let index_offset = rand::rng().random_range(0..self.tcp_multiplexing_limit);
+        let index_offset = rand::rng().random_range(0..self.multiplex_limit);
         let route_key = self
             .multi_connect_impl(addr.into(), index_offset, ttl)
             .await?;
@@ -693,6 +677,12 @@ impl Decoder for LengthPrefixedCodec {
         let mut head = [0; 4];
         read.read_exact(&mut head).await?;
         let len = u32::from_be_bytes(head) as usize;
+        if len > src.len() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("frame too large: {len} > {}", src.len()),
+            ));
+        }
         read.read_exact(&mut src[..len]).await?;
         Ok(len)
     }

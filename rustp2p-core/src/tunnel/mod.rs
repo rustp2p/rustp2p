@@ -27,7 +27,7 @@ use bytes::Bytes;
 use std::io;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 
-use crate::tunnel::config::TunnelConfig;
+pub use config::TunnelConfig;
 
 use crate::punch::Puncher;
 use crate::route::{ConnectProtocol, RouteKey};
@@ -69,13 +69,13 @@ pub const DEFAULT_ADDRESS_V6: SocketAddr =
 /// ```
 pub fn new_tunnel_component(config: TunnelConfig) -> io::Result<(TunnelDispatcher, Puncher)> {
     let udp_tunnel_dispatcher = if let Some(mut udp_tunnel_config) = config.udp_tunnel_config {
-        udp_tunnel_config.main_udp_count = config.major_socket_count;
+        udp_tunnel_config.main_count = config.major_socket_count;
         Some(udp::UdpTunnelDispatcher::new(udp_tunnel_config)?)
     } else {
         None
     };
     let tcp_tunnel_dispatcher = if let Some(mut tcp_tunnel_config) = config.tcp_tunnel_config {
-        tcp_tunnel_config.tcp_multiplexing_limit = config.major_socket_count;
+        tcp_tunnel_config.multiplex_limit = config.major_socket_count;
         Some(tcp::TcpTunnelDispatcher::new(tcp_tunnel_config)?)
     } else {
         None

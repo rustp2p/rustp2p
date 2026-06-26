@@ -29,7 +29,7 @@ use std::time::{Duration, Instant};
 pub struct NodeContext {
     self_node_id: Arc<AtomicCell<Option<NodeID>>>,
     group_code: Arc<AtomicCell<GroupCode>>,
-    direct_node_address_list: Arc<RwLock<Vec<(PeerNodeAddress, u16, Vec<NodeAddress>)>>>,
+    direct_node_address_list: Arc<RwLock<Vec<(PeerAddr, u16, Vec<ResolvedAddr>)>>>,
     direct_node_id_map: Arc<DashMap<u16, (GroupCode, NodeID, Instant)>>,
     pub(crate) reachable_nodes:
         Arc<DashMap<GroupCode, DashMap<NodeID, (GroupCode, NodeID, u8, Instant)>>>,
@@ -46,7 +46,7 @@ pub struct NodeContext {
     pub(crate) cipher: Option<Cipher>,
     pub(crate) major_tunnel_count: usize,
 }
-pub type DirectNodes = Vec<(NodeAddress, u16, Option<(GroupCode, NodeID)>)>;
+pub type DirectNodes = Vec<(ResolvedAddr, u16, Option<(GroupCode, NodeID)>)>;
 impl NodeContext {
     pub(crate) fn new(
         major_tunnel_count: usize,
@@ -112,14 +112,14 @@ impl NodeContext {
     pub fn load_id(&self) -> Option<NodeID> {
         self.self_node_id.load()
     }
-    pub async fn update_direct_nodes(&self, direct_node: Vec<PeerNodeAddress>) -> io::Result<()> {
+    pub async fn update_direct_nodes(&self, direct_node: Vec<PeerAddr>) -> io::Result<()> {
         let mut addrs = Vec::new();
         let mut ids: Vec<u16> = (10..u16::MAX).collect();
         ids.shuffle(&mut rand::rng());
 
         for (index, addr) in direct_node.into_iter().enumerate() {
             let id = ids[index];
-            let node_addrs = addr.to_addr(&self.dns, &self.default_interface).await?;
+            let node_addrs = addr.to_addr(&self.dns, self.default_interface.as_ref()).await?;
             addrs.push((addr, id, node_addrs))
         }
         let mut guard = self.direct_node_address_list.write();
@@ -129,11 +129,11 @@ impl NodeContext {
     }
     pub(crate) fn set_direct_nodes_and_id(
         &self,
-        direct_node: Vec<(PeerNodeAddress, u16, Vec<NodeAddress>)>,
+        direct_node: Vec<(PeerAddr, u16, Vec<ResolvedAddr>)>,
     ) {
         *self.direct_node_address_list.write() = direct_node;
     }
-    pub(crate) fn get_direct_nodes(&self) -> Vec<(NodeAddress, Option<(GroupCode, NodeID)>)> {
+    pub(crate) fn get_direct_nodes(&self) -> Vec<(ResolvedAddr, Option<(GroupCode, NodeID)>)> {
         let guard = self.direct_node_address_list.read();
         let mut addrs = Vec::new();
         for (_, id, v) in guard.iter() {
@@ -164,7 +164,7 @@ impl NodeContext {
         let mut addrs = self.direct_node_address_list.read().clone();
         for (peer_addr, _id, addr) in &mut addrs {
             *addr = peer_addr
-                .to_addr(&self.dns, &self.default_interface)
+                .to_addr(&self.dns, self.default_interface.as_ref())
                 .await?;
         }
         self.set_direct_nodes_and_id(addrs);
@@ -235,7 +235,7 @@ impl NodeContext {
     pub(crate) fn punch_model_box(&self) -> PunchPolicySet {
         self.punch_info.read().punch_model_box.clone()
     }
-    pub fn set_mapping_addrs(&self, mapping_addrs: Vec<NodeAddress>) {
+    pub fn set_mapping_addrs(&self, mapping_addrs: Vec<ResolvedAddr>) {
         let tcp_addr: Vec<SocketAddr> = mapping_addrs
             .iter()
             .filter(|v| v.is_tcp())
@@ -259,67 +259,67 @@ impl NodeContext {
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum NodeAddress {
+pub enum ResolvedAddr {
     Tcp(SocketAddr),
     Udp(SocketAddr),
 }
 
-impl NodeAddress {
+impl ResolvedAddr {
     pub fn is_tcp(&self) -> bool {
         match self {
-            NodeAddress::Tcp(_) => true,
-            NodeAddress::Udp(_) => false,
+            ResolvedAddr::Tcp(_) => true,
+            ResolvedAddr::Udp(_) => false,
         }
     }
     pub fn addr(&self) -> &SocketAddr {
         match self {
-            NodeAddress::Tcp(addr) => addr,
-            NodeAddress::Udp(addr) => addr,
+            ResolvedAddr::Tcp(addr) => addr,
+            ResolvedAddr::Udp(addr) => addr,
         }
     }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum PeerNodeAddress {
+pub enum PeerAddr {
     Tcp(SocketAddr),
     Udp(SocketAddr),
     TcpDomain(String),
     UdpDomain(String),
     TxtDomain(String),
 }
-impl PeerNodeAddress {
+impl PeerAddr {
     pub async fn to_addr(
         &self,
-        name_servers: &Vec<String>,
-        default_interface: &Option<LocalInterface>,
-    ) -> io::Result<Vec<NodeAddress>> {
+        name_servers: &[String],
+        default_interface: Option<&LocalInterface>,
+    ) -> io::Result<Vec<ResolvedAddr>> {
         let addrs = match self {
-            PeerNodeAddress::Tcp(addr) => vec![NodeAddress::Tcp(*addr)],
-            PeerNodeAddress::Udp(addr) => vec![NodeAddress::Udp(*addr)],
-            PeerNodeAddress::TcpDomain(domain) => {
+            PeerAddr::Tcp(addr) => vec![ResolvedAddr::Tcp(*addr)],
+            PeerAddr::Udp(addr) => vec![ResolvedAddr::Udp(*addr)],
+            PeerAddr::TcpDomain(domain) => {
                 let addrs = dns_query_all(domain, name_servers, default_interface).await?;
-                addrs.into_iter().map(NodeAddress::Tcp).collect()
+                addrs.into_iter().map(ResolvedAddr::Tcp).collect()
             }
-            PeerNodeAddress::UdpDomain(domain) => {
+            PeerAddr::UdpDomain(domain) => {
                 let addrs = dns_query_all(domain, name_servers, default_interface).await?;
-                addrs.into_iter().map(NodeAddress::Udp).collect()
+                addrs.into_iter().map(ResolvedAddr::Udp).collect()
             }
-            PeerNodeAddress::TxtDomain(domain) => {
-                let txt = dns_query_txt(domain, name_servers.clone(), default_interface).await?;
+            PeerAddr::TxtDomain(domain) => {
+                let txt = dns_query_txt(domain, name_servers.to_vec(), default_interface).await?;
                 let mut addrs = Vec::with_capacity(txt.len());
                 for x in txt {
                     let x = x.to_lowercase();
                     let addr =
                         if let Some(v) = x.strip_prefix("udp://") {
-                            NodeAddress::Udp(SocketAddr::from_str(v).map_err(|_| {
+                            ResolvedAddr::Udp(SocketAddr::from_str(v).map_err(|_| {
                                 io::Error::other("record type txt is not SocketAddr")
                             })?)
                         } else if let Some(v) = x.strip_prefix("tcp://") {
-                            NodeAddress::Tcp(SocketAddr::from_str(v).map_err(|_| {
+                            ResolvedAddr::Tcp(SocketAddr::from_str(v).map_err(|_| {
                                 io::Error::other("record type txt is not SocketAddr")
                             })?)
                         } else {
-                            NodeAddress::Tcp(SocketAddr::from_str(&x).map_err(|_| {
+                            ResolvedAddr::Tcp(SocketAddr::from_str(&x).map_err(|_| {
                                 io::Error::other("record type txt is not SocketAddr")
                             })?)
                         };
@@ -331,48 +331,48 @@ impl PeerNodeAddress {
         Ok(addrs)
     }
 }
-impl FromStr for PeerNodeAddress {
+impl FromStr for PeerAddr {
     type Err = io::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let domain = s.to_lowercase();
         let addr = if let Some(v) = domain.strip_prefix("tcp://") {
             match SocketAddr::from_str(v) {
-                Ok(addr) => PeerNodeAddress::Tcp(addr),
-                Err(_) => PeerNodeAddress::TcpDomain(v.to_string()),
+                Ok(addr) => PeerAddr::Tcp(addr),
+                Err(_) => PeerAddr::TcpDomain(v.to_string()),
             }
         } else if let Some(v) = domain.strip_prefix("udp://") {
             match SocketAddr::from_str(v) {
-                Ok(addr) => PeerNodeAddress::Udp(addr),
-                Err(_) => PeerNodeAddress::UdpDomain(v.to_string()),
+                Ok(addr) => PeerAddr::Udp(addr),
+                Err(_) => PeerAddr::UdpDomain(v.to_string()),
             }
         } else if let Some(v) = domain.strip_prefix("txt://") {
-            PeerNodeAddress::TxtDomain(v.to_string())
+            PeerAddr::TxtDomain(v.to_string())
         } else {
             match SocketAddr::from_str(&domain) {
-                Ok(addr) => PeerNodeAddress::Udp(addr),
-                Err(_) => PeerNodeAddress::UdpDomain(domain),
+                Ok(addr) => PeerAddr::Udp(addr),
+                Err(_) => PeerAddr::UdpDomain(domain),
             }
         };
         Ok(addr)
     }
 }
-impl Display for PeerNodeAddress {
+impl Display for PeerAddr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let str = match self {
-            PeerNodeAddress::Tcp(addr) => {
+            PeerAddr::Tcp(addr) => {
                 format!("tcp://{addr}")
             }
-            PeerNodeAddress::Udp(addr) => {
+            PeerAddr::Udp(addr) => {
                 format!("udp://{addr}")
             }
-            PeerNodeAddress::TcpDomain(addr) => {
+            PeerAddr::TcpDomain(addr) => {
                 format!("tcp://{addr}")
             }
-            PeerNodeAddress::UdpDomain(addr) => {
+            PeerAddr::UdpDomain(addr) => {
                 format!("udp://{addr}")
             }
-            PeerNodeAddress::TxtDomain(addr) => {
+            PeerAddr::TxtDomain(addr) => {
                 format!("txt://{addr}")
             }
         };

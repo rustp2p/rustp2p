@@ -43,10 +43,10 @@ impl AesGcmCipher {
             }
         };
 
-        // 提取标签（tag）
+        // Extract tag
         let tag = &payload[data_len - ENCRYPTION_RESERVED..data_len - 12];
 
-        // 创建解密器
+        // Create decrypter
         let (cipher_type, key_ref) = cipher;
         let mut decrypter = Crypter::new(cipher_type, Mode::Decrypt, key_ref, Some(&nonce_raw))
             .map_err(|e| {
@@ -56,7 +56,7 @@ impl AesGcmCipher {
                 )
             })?;
 
-        // 设置标签
+        // Set tag
         decrypter.set_tag(tag).map_err(|e| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -64,7 +64,7 @@ impl AesGcmCipher {
             )
         })?;
 
-        // 解密数据
+        // Decrypt data
         let mut decrypted = vec![0; data_len - ENCRYPTION_RESERVED + cipher_type.block_size()];
         let mut count = decrypter
             .update(&payload[..data_len - ENCRYPTION_RESERVED], &mut decrypted)
@@ -82,7 +82,7 @@ impl AesGcmCipher {
             )
         })?;
 
-        // 复制解密后的数据回原缓冲区
+        // Copy decrypted data back to original buffer
         payload[..count].copy_from_slice(&decrypted[..count]);
 
         Ok(count)
@@ -114,7 +114,7 @@ impl AesGcmCipher {
             }
         };
 
-        // 创建加密器
+        // Create encrypter
         let (cipher_type, key_ref) = cipher;
         let mut encrypter = Crypter::new(cipher_type, Mode::Encrypt, key_ref, Some(&nonce_raw))
             .map_err(|e| {
@@ -124,7 +124,7 @@ impl AesGcmCipher {
                 )
             })?;
 
-        // 加密数据
+        // Encrypt data
         let mut encrypted = vec![0; data_len - ENCRYPTION_RESERVED + cipher_type.block_size()];
         let mut count = encrypter
             .update(&payload[..data_len - ENCRYPTION_RESERVED], &mut encrypted)
@@ -142,7 +142,7 @@ impl AesGcmCipher {
             )
         })?;
 
-        // 获取标签
+        // Get tag
         let mut tag = vec![0; 16];
         encrypter.get_tag(&mut tag).map_err(|e| {
             io::Error::new(
@@ -151,10 +151,9 @@ impl AesGcmCipher {
             )
         })?;
 
-        // 复制加密后的数据回原缓冲区
-        payload[..count].copy_from_slice(&encrypted[..count]);
+        // Copy encrypted data back to original buffer
 
-        // 复制标签和随机数
+        // Copy tag and nonce
         payload[data_len - ENCRYPTION_RESERVED..data_len - ENCRYPTION_RESERVED + 16]
             .copy_from_slice(&tag);
         payload[data_len - 12..].copy_from_slice(&random);
