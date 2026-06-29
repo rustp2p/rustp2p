@@ -38,8 +38,8 @@ async fn nat_test(
     udp_stun_servers: &[String],
     default_interface: Option<&LocalInterface>,
 ) {
-    let local_ipv4 = rust_p2p_core::extend::addr::local_ipv4().await;
-    let local_ipv6 = rust_p2p_core::extend::addr::local_ipv6().await;
+    let local_ipv4 = rust_p2p_core::util::addr::local_ipv4().await;
+    let local_ipv6 = rust_p2p_core::util::addr::local_ipv6().await;
     {
         let mut guard = node_context.punch_info().write();
         match local_ipv4 {
@@ -52,7 +52,7 @@ async fn nat_test(
         }
         match local_ipv6 {
             Ok(local_ipv6) => {
-                if rust_p2p_core::extend::addr::is_ipv6_global(&local_ipv6) {
+                if rust_p2p_core::util::addr::is_ipv6_global(&local_ipv6) {
                     guard.ipv6.replace(local_ipv6);
                 }
             }

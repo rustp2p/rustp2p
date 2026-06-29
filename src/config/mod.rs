@@ -9,9 +9,9 @@ pub use rust_p2p_core::nat::*;
 pub use rust_p2p_core::punch::config::{PunchModel, PunchPolicy, PunchPolicySet};
 use rust_p2p_core::punch::PunchRole;
 pub use rust_p2p_core::socket::LocalInterface;
-pub use rust_p2p_core::tunnel::config::LoadBalance;
-pub use rust_p2p_core::tunnel::config::TcpTunnelConfig;
-pub use rust_p2p_core::tunnel::config::UdpTunnelConfig;
+pub use rust_p2p_core::transport::config::LoadBalance;
+pub use rust_p2p_core::transport::config::TcpTunnelConfig;
+pub use rust_p2p_core::transport::config::UdpTunnelConfig;
 
 pub(crate) mod punch_info;
 
@@ -102,7 +102,7 @@ impl Default for Config {
             ))]
             encryption: None,
             default_interface: None,
-            use_v6: rust_p2p_core::tunnel::config::UdpTunnelConfig::default()
+            use_v6: rust_p2p_core::transport::config::UdpTunnelConfig::default()
                 .use_v6(true)
                 .check()
                 .is_ok(),
@@ -246,7 +246,7 @@ impl Config {
 /// let config = UdpTunnelConfig::default()
 ///     .simple_udp_port(8080);
 /// ```
-impl From<Config> for rust_p2p_core::tunnel::config::TunnelConfig {
+impl From<Config> for rust_p2p_core::transport::config::TunnelConfig {
     fn from(value: Config) -> Self {
         let udp_tunnel_config = value.udp_tunnel_config.map(|mut config| {
             config.use_v6 = value.use_v6;
@@ -262,7 +262,7 @@ impl From<Config> for rust_p2p_core::tunnel::config::TunnelConfig {
                 .clone_from(&value.default_interface);
             config
         });
-        rust_p2p_core::tunnel::config::TunnelConfig {
+        rust_p2p_core::transport::config::TunnelConfig {
             major_socket_count: value.major_socket_count,
             udp_tunnel_config,
             tcp_tunnel_config,

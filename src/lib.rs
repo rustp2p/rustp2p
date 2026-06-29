@@ -263,9 +263,9 @@ pub use config::{
     Config, NatType, PunchModel, PunchPolicy, PunchPolicySet, TcpTunnelConfig, UdpTunnelConfig,
 };
 use flume::{Receiver, Sender, TryRecvError};
-pub use rust_p2p_core::route::RouteKey;
+pub use rust_p2p_core::route_table::RouteKey;
 pub use rust_p2p_core::socket::LocalInterface;
-use rust_p2p_core::tunnel::config::LoadBalance;
+use rust_p2p_core::transport::config::LoadBalance;
 use std::io;
 use std::ops::Deref;
 use std::sync::Arc;

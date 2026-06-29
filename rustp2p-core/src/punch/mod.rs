@@ -34,8 +34,8 @@ use std::time::Duration;
 
 use crate::nat::{NatInfo, NatType};
 
-use crate::tunnel::TunnelDispatcher;
-use crate::tunnel::{tcp, udp};
+use crate::transport::TunnelDispatcher;
+use crate::transport::{tcp, udp};
 pub use config::*;
 pub mod config;
 

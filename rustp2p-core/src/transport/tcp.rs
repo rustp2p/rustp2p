@@ -1,6 +1,6 @@
-use crate::route::{Index, RouteKey};
+use crate::route_table::{Index, RouteKey};
 use crate::socket::{connect_tcp, create_tcp_listener, LocalInterface};
-use crate::tunnel::config::TcpTunnelConfig;
+use crate::transport::config::TcpTunnelConfig;
 use async_lock::Mutex;
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -38,21 +38,29 @@ impl TcpTunnelDispatcher {
         };
 
         let tcp_listener = create_tcp_listener(address)?;
-        let local_addr = tcp_listener.local_addr()?;
-        let tcp_listener = TcpListener::from_std(tcp_listener)?;
+        Self::from_listener(tcp_listener)
+    }
+
+    /// Construct a `TCP` tunnel from a user-provided listener
+    pub(crate) fn from_listener(
+        listener: std::net::TcpListener,
+    ) -> io::Result<TcpTunnelDispatcher> {
+        let local_addr = listener.local_addr()?;
+        let tcp_listener = TcpListener::from_std(listener)?;
         let (connect_sender, connect_receiver) = tachyonix::channel(128);
-        let write_half_collect = WriteHalfCollect::new(config.multiplex_limit);
-        let codec = Arc::new(config.codec);
+        let multiplex_limit = 2;
+        let write_half_collect = WriteHalfCollect::new(multiplex_limit);
+        let codec: Arc<Box<dyn InitCodec>> = Arc::new(Box::new(BytesInitCodec));
         let socket_manager = Arc::new(TcpSocketManager::new(
             local_addr,
-            config.multiplex_limit,
+            multiplex_limit,
             write_half_collect.clone(),
             connect_sender,
-            config.default_interface,
+            None,
             codec.clone(),
         ));
         Ok(TcpTunnelDispatcher {
-            idle_timeout: config.idle_timeout,
+            idle_timeout: Duration::from_secs(10),
             tcp_listener,
             connect_receiver,
             socket_manager,
@@ -752,8 +760,8 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 
-    use crate::tunnel::config::TcpTunnelConfig;
-    use crate::tunnel::tcp::{Decoder, Encoder, InitCodec, TcpTunnelDispatcher};
+    use crate::transport::config::TcpTunnelConfig;
+    use crate::transport::tcp::{Decoder, Encoder, InitCodec, TcpTunnelDispatcher};
 
     #[tokio::test]
     pub async fn create_tcp_tunnel() {

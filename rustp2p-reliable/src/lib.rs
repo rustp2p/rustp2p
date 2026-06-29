@@ -119,7 +119,7 @@
 //!
 //! ```rust,no_run
 //! use rustp2p_reliable::Config;
-//! use rust_p2p_core::tunnel::TunnelConfig;
+//! use rust_p2p_core::transport::TunnelConfig;
 //!
 //! # fn example() {
 //! let config = Config {
@@ -202,16 +202,16 @@ pub use rust_p2p_core::nat::NatInfo;
 use rust_p2p_core::nat::NatType;
 pub use rust_p2p_core::punch::config::*;
 use rust_p2p_core::punch::Puncher as CorePuncher;
-use rust_p2p_core::route::Index;
+use rust_p2p_core::route_table::Index;
 use rust_p2p_core::socket::LocalInterface;
-pub use rust_p2p_core::tunnel::config::*;
-pub use rust_p2p_core::tunnel::tcp::{
+pub use rust_p2p_core::transport::config::*;
+pub use rust_p2p_core::transport::tcp::{
     BytesCodec, BytesInitCodec, Decoder, Encoder, InitCodec, LengthPrefixedCodec,
     LengthPrefixedInitCodec,
 };
-use rust_p2p_core::tunnel::tcp::{TcpTunnel, WeakTcpTunnelSender};
-use rust_p2p_core::tunnel::udp::{UDPIndex, UdpTunnel};
-use rust_p2p_core::tunnel::{SocketManager, Tunnel, TunnelDispatcher};
+use rust_p2p_core::transport::tcp::{TcpTunnel, WeakTcpTunnelSender};
+use rust_p2p_core::transport::udp::{UDPIndex, UdpTunnel};
+use rust_p2p_core::transport::{SocketManager, Tunnel, TunnelDispatcher};
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
@@ -259,7 +259,7 @@ pub async fn from_config(config: Config) -> io::Result<(ReliableTunnelListener, 
         .unwrap_or_default();
 
     let (unified_tunnel_factory, puncher) =
-        rust_p2p_core::tunnel::new_tunnel_component(tunnel_config)?;
+        rust_p2p_core::transport::new_tunnel_component(tunnel_config)?;
     let manager = unified_tunnel_factory.socket_manager();
     let shutdown_manager = ShutdownManager::<()>::new();
     let puncher = Puncher::new(
@@ -374,7 +374,7 @@ impl PunchContext {
         mut ips: Vec<Ipv4Addr>,
         public_port_range: u16,
     ) {
-        ips.retain(rust_p2p_core::extend::addr::is_ipv4_global);
+        ips.retain(rust_p2p_core::util::addr::is_ipv4_global);
         let mut guard = self.nat_info.lock();
         guard.public_ips = ips;
         guard.nat_type = nat_type;
@@ -393,7 +393,7 @@ impl PunchContext {
             return;
         };
         let mut nat_info = self.nat_info.lock();
-        if rust_p2p_core::extend::addr::is_ipv4_global(&ip) && !nat_info.public_ips.contains(&ip) {
+        if rust_p2p_core::util::addr::is_ipv4_global(&ip) && !nat_info.public_ips.contains(&ip) {
             nat_info.public_ips.push(ip);
         }
         nat_info.public_tcp_port = port;
@@ -406,7 +406,7 @@ impl PunchContext {
         };
         let mut nat_info = self.nat_info.lock();
 
-        if rust_p2p_core::extend::addr::is_ipv4_global(&ip) {
+        if rust_p2p_core::util::addr::is_ipv4_global(&ip) {
             if !nat_info.public_ips.contains(&ip) {
                 nat_info.public_ips.push(ip);
             }
@@ -431,8 +431,8 @@ impl PunchContext {
         }
     }
     pub async fn update_local_addr(&self) {
-        let local_ipv4 = rust_p2p_core::extend::addr::local_ipv4().await;
-        let local_ipv6 = rust_p2p_core::extend::addr::local_ipv6().await;
+        let local_ipv4 = rust_p2p_core::util::addr::local_ipv4().await;
+        let local_ipv6 = rust_p2p_core::util::addr::local_ipv6().await;
         let mut nat_info = self.nat_info.lock();
         if let Ok(local_ipv4) = local_ipv4 {
             nat_info.local_ipv4 = local_ipv4;
@@ -647,7 +647,7 @@ impl ReliableTunnelListener {
     pub async fn accept(&mut self) -> io::Result<ReliableTunnel> {
         loop {
             tokio::select! {
-                rs=self.unified_tunnel_factory.dispatch()=>{
+                rs=self.unified_tunnel_factory.accept()=>{
                     let unified_tunnel = rs?;
                     match unified_tunnel {
                         Tunnel::Udp(udp) => {

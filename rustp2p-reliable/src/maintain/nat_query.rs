@@ -1,6 +1,6 @@
 use crate::Puncher;
 use rust_p2p_core::nat::NatType;
-use rust_p2p_core::tunnel::udp::Model;
+use rust_p2p_core::transport::udp::Model;
 use std::time::Duration;
 
 pub(crate) async fn nat_test_loop(puncher: Puncher) {

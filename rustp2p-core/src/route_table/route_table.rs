@@ -6,8 +6,8 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::route::{Index, RouteKey, RouteSortKey, DEFAULT_RTT};
-use crate::tunnel::config::LoadBalance;
+use crate::route_table::{Index, RouteKey, RouteSortKey, DEFAULT_RTT};
+use crate::transport::config::LoadBalance;
 use crossbeam_utils::atomic::AtomicCell;
 use dashmap::DashMap;
 

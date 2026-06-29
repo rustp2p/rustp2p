@@ -21,10 +21,10 @@ use parking_lot::{Mutex, RwLock};
 use tachyonix::{Receiver, Sender, TrySendError};
 use tokio::net::UdpSocket;
 
-use crate::route::{Index, RouteKey};
+use crate::route_table::{Index, RouteKey};
 use crate::socket::{bind_udp, LocalInterface};
-use crate::tunnel::config::UdpTunnelConfig;
-use crate::tunnel::{DEFAULT_ADDRESS_V4, DEFAULT_ADDRESS_V6};
+use crate::transport::config::UdpTunnelConfig;
+use crate::transport::{DEFAULT_ADDRESS_V4, DEFAULT_ADDRESS_V6};
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
 const MAX_MESSAGES: usize = 16;
@@ -427,6 +427,41 @@ pub struct UdpTunnelDispatcher {
 }
 
 impl UdpTunnelDispatcher {
+    /// Creates a UdpTunnelDispatcher from a user-provided socket.
+    pub(crate) fn from_socket(socket: std::net::UdpSocket) -> io::Result<Self> {
+        let socket = Arc::new(UdpSocket::from_std(socket)?);
+
+        let (tunnel_sender, tunnel_receiver) = tachyonix::channel(16);
+        let socket_manager = Arc::new(UdpSocketManager {
+            main_udp_v4: vec![socket.clone()],
+            main_udp_v6: vec![],
+            sub_udp: RwLock::new(Vec::new()),
+            sub_close_notify: Default::default(),
+            tunnel_dispatcher: tunnel_sender,
+            sub_udp_num: 0,
+            default_interface: None,
+            sender_map: Default::default(),
+        });
+
+        let dispatcher = Self {
+            tunnel_receiver,
+            socket_manager,
+        };
+
+        // Register the socket for reading
+        let tunnel = InactiveUdpTunnel::new(true, Index::Udp(UDPIndex::MainV4(0)), socket, None);
+        if dispatcher
+            .socket_manager
+            .tunnel_dispatcher
+            .try_send(tunnel)
+            .is_err()
+        {
+            return Err(io::Error::other("tunnel channel error"));
+        }
+
+        Ok(dispatcher)
+    }
+
     pub(crate) fn init(&self) -> io::Result<()> {
         for (index, udp) in self.socket_manager.main_udp_v4.iter().enumerate() {
             let udp = udp.clone();
@@ -1024,16 +1059,17 @@ fn should_ignore_error(e: &io::Error) -> bool {
 mod tests {
     use std::time::Duration;
 
-    use crate::tunnel::udp::{Model, UdpTunnel};
+    use crate::transport::udp::{Model, UdpTunnel};
 
     #[tokio::test]
     pub async fn create_udp_tunnel() {
-        let config = crate::tunnel::config::UdpTunnelConfig::default()
+        let config = crate::transport::config::UdpTunnelConfig::default()
             .main_count(2)
             .sub_count(10)
             .model(Model::Low)
             .use_v6(false);
-        let mut udp_tunnel_factory = crate::tunnel::udp::create_tunnel_dispatcher(config).unwrap();
+        let mut udp_tunnel_factory =
+            crate::transport::udp::create_tunnel_dispatcher(config).unwrap();
         let mut count = 0;
         let mut join = Vec::new();
         while let Ok(rs) =
@@ -1047,12 +1083,12 @@ mod tests {
 
     #[tokio::test]
     pub async fn create_sub_udp_tunnel() {
-        let config = crate::tunnel::config::UdpTunnelConfig::default()
+        let config = crate::transport::config::UdpTunnelConfig::default()
             .main_count(2)
             .sub_count(10)
             .use_v6(false)
             .model(Model::High);
-        let mut tunnel_factory = crate::tunnel::udp::create_tunnel_dispatcher(config).unwrap();
+        let mut tunnel_factory = crate::transport::udp::create_tunnel_dispatcher(config).unwrap();
         let mut count = 0;
         let mut join = Vec::new();
         while let Ok(rs) =

@@ -1,8 +1,8 @@
 use crate::KcpMessageHub;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 use kcp::Kcp;
-use rust_p2p_core::route::RouteKey;
-use rust_p2p_core::tunnel::udp::WeakUdpTunnelSender;
+use rust_p2p_core::route_table::RouteKey;
+use rust_p2p_core::transport::udp::WeakUdpTunnelSender;
 use std::collections::HashMap;
 use std::io;
 use std::io::{Error, Write};

@@ -1,7 +1,7 @@
 use rust_p2p_core::nat::{NatInfo, NatType};
 use rust_p2p_core::punch::{PunchConsultInfo, PunchPolicySet};
-use rust_p2p_core::route::Index;
-use rust_p2p_core::tunnel::udp::UDPIndex;
+use rust_p2p_core::route_table::Index;
+use rust_p2p_core::transport::udp::UDPIndex;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 
 #[derive(Debug, Clone)]
@@ -48,7 +48,7 @@ impl NodePunchInfo {
         } else {
             return;
         };
-        if rust_p2p_core::extend::addr::is_ipv4_global(&ip) && !self.public_ips.contains(&ip) {
+        if rust_p2p_core::util::addr::is_ipv4_global(&ip) && !self.public_ips.contains(&ip) {
             self.public_ips.push(ip);
         }
         self.public_tcp_port = port;
@@ -65,7 +65,7 @@ impl NodePunchInfo {
         } else {
             return;
         };
-        if rust_p2p_core::extend::addr::is_ipv4_global(&ip) {
+        if rust_p2p_core::util::addr::is_ipv4_global(&ip) {
             if !self.public_ips.contains(&ip) {
                 self.public_ips.push(ip);
             }
@@ -90,7 +90,7 @@ impl NodePunchInfo {
         }
     }
     pub fn set_public_ip(&mut self, mut ips: Vec<Ipv4Addr>) {
-        ips.retain(rust_p2p_core::extend::addr::is_ipv4_global);
+        ips.retain(rust_p2p_core::util::addr::is_ipv4_global);
         self.public_ips = ips;
     }
 }

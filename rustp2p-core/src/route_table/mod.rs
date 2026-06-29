@@ -21,7 +21,7 @@ pub use route_table::Route;
 
 pub const DEFAULT_RTT: u32 = 9999;
 
-use crate::tunnel::udp::UDPIndex;
+use crate::transport::udp::UDPIndex;
 
 /// Socket index identifying a specific socket in a socket manager.
 #[non_exhaustive]

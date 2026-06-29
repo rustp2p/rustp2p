@@ -1,4 +1,4 @@
-use rust_p2p_core::tunnel::config::TunnelConfig;
+use rust_p2p_core::transport::config::TunnelConfig;
 
 pub struct Config {
     pub(crate) tunnel_config: TunnelConfig,

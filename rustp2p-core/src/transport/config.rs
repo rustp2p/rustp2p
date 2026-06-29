@@ -2,8 +2,8 @@ use std::io;
 use std::time::Duration;
 
 use crate::socket::LocalInterface;
-use crate::tunnel::tcp::{BytesInitCodec, InitCodec};
-use crate::tunnel::udp::Model;
+use crate::transport::tcp::{BytesInitCodec, InitCodec};
+use crate::transport::udp::Model;
 
 pub(crate) const MAX_SYMMETRIC_SOCKET_COUNT: usize = 200;
 pub(crate) const MAX_MAIN_SOCKET_COUNT: usize = 10;
@@ -42,6 +42,55 @@ pub(crate) const MAX_MAJOR_SOCKET_COUNT: usize = 2;
 pub(crate) const MAX_UDP_SUB_SOCKET_COUNT: usize = 82;
 
 impl TunnelConfig {
+    /// Creates a config with both UDP and TCP on the given ports.
+    ///
+    /// This is the simplest way to create a working configuration.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use rust_p2p_core::tunnel::config::TunnelConfig;
+    /// let config = TunnelConfig::simple(3000, 3000);
+    /// ```
+    pub fn simple(udp_port: u16, tcp_port: u16) -> Self {
+        Self {
+            major_socket_count: MAX_MAJOR_SOCKET_COUNT,
+            udp_tunnel_config: Some(UdpTunnelConfig::default().simple_udp_port(udp_port)),
+            tcp_tunnel_config: Some(TcpTunnelConfig::default().tcp_port(tcp_port)),
+        }
+    }
+
+    /// Creates a config with only UDP on the given port.
+    pub fn udp_only(port: u16) -> Self {
+        Self {
+            major_socket_count: MAX_MAJOR_SOCKET_COUNT,
+            udp_tunnel_config: Some(UdpTunnelConfig::default().simple_udp_port(port)),
+            tcp_tunnel_config: None,
+        }
+    }
+
+    /// Creates a config with only TCP on the given port.
+    pub fn tcp_only(port: u16) -> Self {
+        Self {
+            major_socket_count: MAX_MAJOR_SOCKET_COUNT,
+            udp_tunnel_config: None,
+            tcp_tunnel_config: Some(TcpTunnelConfig::default().tcp_port(port)),
+        }
+    }
+
+    /// Creates a config with a user-provided UDP socket.
+    ///
+    /// The socket will be used as the primary UDP channel.
+    /// Additional sockets may be created by Puncher for symmetric NAT.
+    pub fn udp_socket(socket: std::net::UdpSocket) -> Self {
+        Self {
+            major_socket_count: 1,
+            udp_tunnel_config: Some(UdpTunnelConfig::from_socket(socket)),
+            tcp_tunnel_config: None,
+        }
+    }
+
+    /// Creates a config using the given codec for TCP.
     pub fn new(tcp_init_codec: Box<dyn InitCodec>) -> TunnelConfig {
         let udp_tunnel_config = Some(UdpTunnelConfig::default());
         let tcp_tunnel_config = Some(TcpTunnelConfig::new(tcp_init_codec));
@@ -177,6 +226,22 @@ impl Default for UdpTunnelConfig {
 }
 
 impl UdpTunnelConfig {
+    /// Creates a config from a user-provided socket.
+    ///
+    /// The socket is used as the primary UDP channel.
+    /// `sub_count` controls how many additional sockets Puncher may create.
+    pub fn from_socket(socket: std::net::UdpSocket) -> Self {
+        let port = socket.local_addr().map(|a| a.port()).unwrap_or(0);
+        Self {
+            main_count: 1,
+            sub_count: MAX_UDP_SUB_SOCKET_COUNT,
+            model: Model::Low,
+            default_interface: None,
+            udp_ports: vec![port],
+            use_v6: false,
+        }
+    }
+
     pub fn check(&self) -> io::Result<()> {
         if self.main_count == 0 {
             return Err(io::Error::other("main socket count cannot be 0"));

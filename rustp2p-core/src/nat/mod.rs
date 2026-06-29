@@ -30,7 +30,7 @@
 //! }
 //! ```
 
-use crate::extend::addr::is_ipv6_global;
+use crate::util::addr::is_ipv6_global;
 use serde::{Deserialize, Serialize};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 

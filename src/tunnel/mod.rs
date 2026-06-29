@@ -15,9 +15,9 @@ pub use node_context::ResolvedAddr;
 use rust_p2p_core::idle::IdleRouteManager;
 use rust_p2p_core::nat::NatType;
 use rust_p2p_core::punch::{PunchConsultInfo, PunchRole};
-use rust_p2p_core::route::route_table::{Route, RouteTable};
-use rust_p2p_core::route::{ConnectProtocol, RouteKey};
-use rust_p2p_core::tunnel::config::LoadBalance;
+use rust_p2p_core::route_table::route_table::{Route, RouteTable};
+use rust_p2p_core::route_table::{ConnectProtocol, RouteKey};
+use rust_p2p_core::transport::config::LoadBalance;
 pub(crate) use send_packet::SendPacket;
 use std::collections::HashMap;
 use std::io;
@@ -37,7 +37,7 @@ pub(crate) struct TunnelDispatcher {
     recv_buffer_size: usize,
     node_context: NodeContext,
     route_table: RouteTable<NodeID>,
-    tunnel_dispatcher: rust_p2p_core::tunnel::TunnelDispatcher,
+    tunnel_dispatcher: rust_p2p_core::transport::TunnelDispatcher,
     shutdown_manager: ShutdownManager<()>,
     active_punch_sender: Sender<(NodeID, PunchConsultInfo)>,
     passive_punch_sender: Sender<(NodeID, PunchConsultInfo)>,
@@ -95,8 +95,8 @@ impl TunnelDispatcher {
         ))]
         let cipher = config.encryption.clone().map(crate::cipher::Cipher::from);
 
-        let config: rust_p2p_core::tunnel::config::TunnelConfig = config.into();
-        let (tunnel_factory, puncher) = rust_p2p_core::tunnel::new_tunnel_component(config)?;
+        let config: rust_p2p_core::transport::config::TunnelConfig = config.into();
+        let (tunnel_factory, puncher) = rust_p2p_core::transport::new_tunnel_component(config)?;
         let route_table = RouteTable::<NodeID>::new(load_balance);
         let idle_route_manager = IdleRouteManager::new(route_idle_time, route_table.clone());
 
@@ -206,7 +206,7 @@ impl TunnelDispatcher {
         }
         let Ok(tunnel) = self
             .shutdown_manager
-            .wrap_cancel(self.tunnel_dispatcher.dispatch())
+            .wrap_cancel(self.tunnel_dispatcher.accept())
             .await
         else {
             return Err(io::Error::other("shutdown"));
@@ -242,7 +242,7 @@ pub struct TunnelRouter {
     send_buffer_size: usize,
     node_context: NodeContext,
     route_table: RouteTable<NodeID>,
-    pub(crate) socket_manager: rust_p2p_core::tunnel::SocketManager,
+    pub(crate) socket_manager: rust_p2p_core::transport::SocketManager,
     shutdown_manager: ShutdownManager<()>,
 }
 
@@ -270,7 +270,7 @@ impl TunnelRouter {
         if self.shutdown_manager.is_shutdown_triggered() {
             return Err(io::Error::other("shutdown"));
         }
-        use rust_p2p_core::tunnel::udp::Model;
+        use rust_p2p_core::transport::udp::Model;
         match nat_type {
             NatType::Cone => {
                 if let Some(socket_manager) = self.socket_manager.udp_socket_manager_as_ref() {
@@ -675,7 +675,7 @@ impl TunnelRouter {
 pub(crate) struct Tunnel {
     shutdown_manager: ShutdownManager<()>,
     node_context: NodeContext,
-    tunnel: rust_p2p_core::tunnel::Tunnel,
+    tunnel: rust_p2p_core::transport::Tunnel,
     tunnel_transmit: TunnelRouter,
     route_table: RouteTable<NodeID>,
     active_punch_sender: Sender<(NodeID, PunchConsultInfo)>,
@@ -689,7 +689,7 @@ pub(crate) struct Tunnel {
 }
 impl Drop for Tunnel {
     fn drop(&mut self) {
-        if let rust_p2p_core::tunnel::Tunnel::Tcp(tcp) = &self.tunnel {
+        if let rust_p2p_core::transport::Tunnel::Tcp(tcp) = &self.tunnel {
             if let Some(id) = self.route_table.get_id_by_route_key(&tcp.route_key()) {
                 self.route_table.remove_route(&id, &tcp.route_key());
             }

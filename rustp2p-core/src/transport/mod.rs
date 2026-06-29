@@ -3,18 +3,17 @@
 //! This module provides unified management of UDP and TCP tunnels, handling
 //! connection dispatch, socket management, and tunnel lifecycle.
 //!
-//! # Examples
+//! # Quick Start
 //!
 //! ```rust,no_run
-//! use rust_p2p_core::tunnel::{TunnelConfig, new_tunnel_component};
+//! use rust_p2p_core::transport::{Transport, TunnelConfig};
 //!
 //! # #[tokio::main]
 //! # async fn main() -> std::io::Result<()> {
-//! let config = TunnelConfig::default();
-//! let (mut dispatcher, puncher) = new_tunnel_component(config)?;
+//! let (mut transport, puncher) = Transport::new(TunnelConfig::default())?;
 //!
 //! // Accept incoming tunnels
-//! while let Ok(tunnel) = dispatcher.dispatch().await {
+//! while let Ok(tunnel) = transport.accept().await {
 //!     tokio::spawn(async move {
 //!         // Handle tunnel
 //!     });
@@ -23,14 +22,14 @@
 //! # }
 //! ```
 
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use std::io;
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 
 pub use config::TunnelConfig;
 
 use crate::punch::Puncher;
-use crate::route::{ConnectProtocol, RouteKey};
+use crate::route_table::{ConnectProtocol, RouteKey};
 use std::sync::Arc;
 
 pub mod config;
@@ -42,7 +41,13 @@ pub const DEFAULT_ADDRESS_V4: SocketAddr =
 pub const DEFAULT_ADDRESS_V6: SocketAddr =
     SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, 0));
 
-/// Creates tunnel dispatcher and puncher from configuration.
+/// Type alias: `Transport` is the primary name for the network transport layer.
+///
+/// Use `Transport` as the main entry point. It manages UDP/TCP tunnels,
+/// socket I/O, and NAT traversal.
+pub type Transport = TunnelDispatcher;
+
+/// Creates the transport layer and puncher from configuration.
 ///
 /// This is the main entry point for setting up the tunnel infrastructure.
 ///
@@ -53,7 +58,7 @@ pub const DEFAULT_ADDRESS_V6: SocketAddr =
 /// # Returns
 ///
 /// A tuple containing:
-/// - `TunnelDispatcher` - For accepting incoming connections
+/// - `TunnelDispatcher` (alias `Transport`) - For accepting incoming connections
 /// - `Puncher` - For NAT traversal
 ///
 /// # Examples
@@ -91,11 +96,69 @@ pub fn new_tunnel_component(config: TunnelConfig) -> io::Result<(TunnelDispatche
 
 /// Dispatcher for accepting incoming tunnel connections.
 ///
-/// `TunnelDispatcher` manages both UDP and TCP tunnel dispatchers and
-/// provides a unified interface for accepting connections.
+/// `TunnelDispatcher` (aliased as `Transport`) manages both UDP and TCP
+/// tunnel dispatchers and provides a unified interface for accepting connections.
 pub struct TunnelDispatcher {
     udp_tunnel_dispatcher: Option<udp::UdpTunnelDispatcher>,
     tcp_tunnel_dispatcher: Option<tcp::TcpTunnelDispatcher>,
+}
+
+impl TunnelDispatcher {
+    /// Creates a new Transport from configuration.
+    ///
+    /// This is the preferred way to create a transport layer.
+    /// Returns the transport and a puncher for NAT traversal.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use rust_p2p_core::tunnel::{Transport, TunnelConfig};
+    ///
+    /// # fn main() -> std::io::Result<()> {
+    /// let (mut transport, puncher) = Transport::new(TunnelConfig::default())?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn new(config: TunnelConfig) -> io::Result<(Self, Puncher)> {
+        new_tunnel_component(config)
+    }
+
+    /// Creates a Transport from a user-provided UDP socket.
+    ///
+    /// The socket is used as the primary communication channel.
+    /// Puncher can add additional sockets later for symmetric NAT.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use rust_p2p_core::tunnel::Transport;
+    ///
+    /// # fn main() -> std::io::Result<()> {
+    /// let socket = std::net::UdpSocket::bind("0.0.0.0:0")?;
+    /// let (mut transport, puncher) = Transport::bind(socket)?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn bind(socket: std::net::UdpSocket) -> io::Result<(Self, Puncher)> {
+        let udp_dispatcher = udp::UdpTunnelDispatcher::from_socket(socket)?;
+        let tunnel_dispatcher = TunnelDispatcher {
+            udp_tunnel_dispatcher: Some(udp_dispatcher),
+            tcp_tunnel_dispatcher: None,
+        };
+        let puncher = Puncher::from(&tunnel_dispatcher);
+        Ok((tunnel_dispatcher, puncher))
+    }
+
+    /// Creates a Transport from a user-provided TCP listener.
+    pub fn bind_tcp(listener: std::net::TcpListener) -> io::Result<(Self, Puncher)> {
+        let tcp_dispatcher = tcp::TcpTunnelDispatcher::from_listener(listener)?;
+        let tunnel_dispatcher = TunnelDispatcher {
+            udp_tunnel_dispatcher: None,
+            tcp_tunnel_dispatcher: Some(tcp_dispatcher),
+        };
+        let puncher = Puncher::from(&tunnel_dispatcher);
+        Ok((tunnel_dispatcher, puncher))
+    }
 }
 
 /// Unified tunnel type for UDP or TCP connections.
@@ -130,24 +193,20 @@ impl TunnelDispatcher {
     /// This method blocks until a connection is available from either
     /// UDP or TCP dispatcher.
     ///
-    /// # Returns
-    ///
-    /// The next available tunnel connection.
-    ///
     /// # Examples
     ///
     /// ```rust,no_run
     /// # use rust_p2p_core::tunnel::TunnelDispatcher;
     /// # async fn example(mut dispatcher: TunnelDispatcher) -> std::io::Result<()> {
     /// loop {
-    ///     let tunnel = dispatcher.dispatch().await?;
+    ///     let tunnel = dispatcher.accept().await?;
     ///     tokio::spawn(async move {
     ///         // Handle tunnel
     ///     });
     /// }
     /// # }
     /// ```
-    pub async fn dispatch(&mut self) -> io::Result<Tunnel> {
+    pub async fn accept(&mut self) -> io::Result<Tunnel> {
         tokio::select! {
             rs=dispatch_udp_tunnel(self.udp_tunnel_dispatcher.as_mut())=>{
                 rs
@@ -221,7 +280,7 @@ impl SocketManager {
 }
 
 impl SocketManager {
-    /// Writing `buf` to the target denoted by `route_key`
+    /// Sends data to the target denoted by `route_key`.
     pub async fn send_to(&self, buf: Bytes, route_key: &RouteKey) -> io::Result<()> {
         match route_key.protocol() {
             ConnectProtocol::UDP => {
@@ -300,13 +359,34 @@ impl SocketManager {
 // }
 
 impl Tunnel {
-    /// Receiving buf from the associated tunnel
-    /// `usize` in the `Ok` branch indicates how many bytes are received
-    /// `RouteKey` in the `Ok` branch denotes the source where these bytes are received from
+    /// Receives data from the tunnel into the provided buffer.
+    ///
+    /// Returns `None` when the tunnel is closed (TCP EOF or UDP shutdown).
+    /// Returns `Some(Ok((len, route_key)))` on success.
+    /// Returns `Some(Err(e))` on error.
     pub async fn recv_from(&mut self, buf: &mut [u8]) -> Option<io::Result<(usize, RouteKey)>> {
         match self {
             Tunnel::Udp(tunnel) => tunnel.recv_from(buf).await,
             Tunnel::Tcp(tunnel) => Some(tunnel.recv_from(buf).await),
+        }
+    }
+
+    /// Receives data into a `BytesMut` buffer (growable).
+    ///
+    /// Convenience method that allocates a new buffer for each received datagram.
+    /// For high-performance scenarios, use `recv_from` with a pre-allocated buffer.
+    pub async fn recv(&mut self) -> Option<io::Result<(BytesMut, RouteKey)>> {
+        let mut buf = BytesMut::with_capacity(65536);
+        unsafe {
+            buf.set_len(65536);
+        }
+        match self.recv_from(&mut buf).await {
+            Some(Ok((len, route_key))) => {
+                buf.truncate(len);
+                Some(Ok((buf, route_key)))
+            }
+            Some(Err(e)) => Some(Err(e)),
+            None => None,
         }
     }
     pub async fn batch_recv_from<B: AsMut<[u8]>>(
