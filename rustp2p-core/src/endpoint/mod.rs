@@ -30,5 +30,5 @@ pub use config::{
     Config, LoadBalance, Model, TcpConfig, UdpConfig, DEFAULT_ADDRESS_V4, DEFAULT_ADDRESS_V6,
 };
 pub use endpoint::{EndPoint, Received};
-pub use pool::{Protocol, SocketPool};
+pub use pool::{Protocol, SocketPool, TcpConnection};
 pub use transport::Transport;

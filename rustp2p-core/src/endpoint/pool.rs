@@ -30,8 +30,8 @@ struct UdpEntry {
 }
 
 /// A TCP connection with Encoder for writing.
-pub(crate) struct TcpConnection {
-    pub(crate) peer_addr: SocketAddr,
+pub struct TcpConnection {
+    pub peer_addr: SocketAddr,
     write_tx: mpsc::Sender<Vec<u8>>,
 }
 

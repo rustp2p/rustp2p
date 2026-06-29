@@ -90,7 +90,7 @@ impl Default for RouteKey {
     }
 }
 impl RouteKey {
-    pub(crate) const fn new(index: Index, addr: SocketAddr) -> Self {
+    pub const fn new(index: Index, addr: SocketAddr) -> Self {
         Self { index, addr }
     }
 
