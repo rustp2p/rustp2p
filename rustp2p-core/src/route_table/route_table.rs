@@ -1,45 +1,38 @@
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::io;
-use std::net::SocketAddr;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 use std::time::Instant;
 
 use crate::endpoint::LoadBalance;
-use crate::route_table::{Index, RouteKey, RouteSortKey, DEFAULT_RTT};
+use crate::route_table::{RouteKey, RouteSortKey, DEFAULT_RTT};
 use crossbeam_utils::atomic::AtomicCell;
 use dashmap::DashMap;
 
 #[derive(Copy, Clone, Debug)]
 pub struct Route {
-    index: Index,
-    addr: SocketAddr,
+    route_key: RouteKey,
     metric: u8,
     rtt: u32,
 }
 impl Route {
     pub fn from(route_key: RouteKey, metric: u8, rtt: u32) -> Self {
         Self {
-            index: route_key.index,
-            addr: route_key.addr,
+            route_key,
             metric,
             rtt,
         }
     }
     pub fn from_default_rt(route_key: RouteKey, metric: u8) -> Self {
         Self {
-            index: route_key.index,
-            addr: route_key.addr,
+            route_key,
             metric,
             rtt: DEFAULT_RTT,
         }
     }
     pub fn route_key(&self) -> RouteKey {
-        RouteKey {
-            index: self.index,
-            addr: self.addr,
-        }
+        self.route_key
     }
     pub fn sort_key(&self) -> RouteSortKey {
         RouteSortKey {

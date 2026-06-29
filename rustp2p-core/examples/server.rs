@@ -2,7 +2,7 @@ use bytes::{BufMut, BytesMut};
 use env_logger::Env;
 use rust_p2p_core::endpoint::{Config, EndPoint, Sender};
 use rust_p2p_core::route_table::route_table::RouteTable;
-use rust_p2p_core::route_table::{Index, RouteKey, UDPIndex};
+use rust_p2p_core::route_table::RouteKey;
 
 /*Demo Protocol
    0                                            15                                              31
@@ -57,7 +57,7 @@ async fn handler(
 ) {
     let data = &received.data;
     let addr = received.transport.remote_addr();
-    let route_key = RouteKey::new(Index::Udp(UDPIndex::MainV4(0)), addr);
+    let route_key = RouteKey::from_transport(&received.transport);
 
     if data.len() < HEAD_LEN {
         log::warn!("invalid protocol {:?}", &data[..]);

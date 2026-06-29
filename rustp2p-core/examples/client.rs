@@ -12,7 +12,7 @@ use rust_p2p_core::idle::IdleRouteManager;
 use rust_p2p_core::nat::NatInfo;
 use rust_p2p_core::punch::{PunchInfo, PunchModel, Puncher};
 use rust_p2p_core::route_table::route_table::RouteTable;
-use rust_p2p_core::route_table::{Index, RouteKey, UDPIndex};
+use rust_p2p_core::route_table::{Protocol, RouteKey};
 
 /*Demo Protocol
    0                                            15                                              31
@@ -247,17 +247,13 @@ impl ContextHandler {
                 request.put_u32(src_id);
                 self.sender
                     .try_send_via_all(request.freeze().as_ref(), addr);
-                self.route_table.add_route(
-                    src_id,
-                    (RouteKey::new(Index::Udp(UDPIndex::MainV4(0)), addr), 1),
-                );
+                self.route_table
+                    .add_route(src_id, (RouteKey::new(Protocol::UDP, addr), 1));
             }
             PUNCH_RES => {
                 log::info!("======================== PUNCH_RES ========================");
-                self.route_table.add_route(
-                    src_id,
-                    (RouteKey::new(Index::Udp(UDPIndex::MainV4(0)), addr), 1),
-                );
+                self.route_table
+                    .add_route(src_id, (RouteKey::new(Protocol::UDP, addr), 1));
             }
             PUBLIC_ADDR_RES => {
                 let public_addr =

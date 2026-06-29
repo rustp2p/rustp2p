@@ -7,13 +7,6 @@ use tokio::sync::{broadcast, mpsc, RwLock};
 
 use crate::endpoint::codec::InitCodec;
 
-/// Protocol type for a route.
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum Protocol {
-    Udp,
-    Tcp,
-}
-
 /// Socket role in the pool.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum SocketRole {

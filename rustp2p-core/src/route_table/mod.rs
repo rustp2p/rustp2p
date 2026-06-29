@@ -6,14 +6,20 @@
 //! # Examples
 //!
 //! ```rust
-//! use rust_p2p_core::route_table::{RouteKey, ConnectProtocol};
+//! use rust_p2p_core::route_table::{RouteKey, Protocol};
 //!
-//! // RouteKey identifies a specific connection path
-//! // It combines protocol (UDP/TCP) and socket address
+//! # fn example() {
+//! // Create a RouteKey from protocol and address
+//! let key = RouteKey::new(Protocol::UDP, "127.0.0.1:3000".parse().unwrap());
+//! assert!(key.protocol().is_udp());
+//! assert_eq!(key.addr().port(), 3000);
+//! # }
 //! ```
 
 use std::fmt;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+
+use crate::endpoint::transport::Transport;
 
 pub mod route_table;
 
@@ -21,9 +27,9 @@ pub use route_table::Route;
 
 pub const DEFAULT_RTT: u32 = 9999;
 
-/// UDP socket index variants.
+/// UDP socket index variants (internal use only).
 #[derive(Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash, Debug)]
-pub enum UDPIndex {
+pub(crate) enum UDPIndex {
     MainV4(usize),
     MainV6(usize),
     SubV4(usize),
@@ -37,79 +43,77 @@ impl UDPIndex {
     }
 }
 
-/// Socket index identifying a specific socket in a socket manager.
+/// Socket index identifying a specific socket (internal use only).
 #[non_exhaustive]
 #[derive(Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash, Debug)]
-pub enum Index {
+pub(crate) enum Index {
     Udp(UDPIndex),
     Tcp(usize),
 }
 impl Index {
-    pub fn index(&self) -> usize {
+    pub(crate) fn index(&self) -> usize {
         match self {
             Index::Udp(index) => index.index(),
             Index::Tcp(index) => *index,
         }
     }
-    pub fn protocol(&self) -> ConnectProtocol {
+    pub(crate) fn protocol(&self) -> Protocol {
         match self {
-            Index::Tcp(_) => ConnectProtocol::TCP,
-            Index::Udp(_) => ConnectProtocol::UDP,
+            Index::Tcp(_) => Protocol::TCP,
+            Index::Udp(_) => Protocol::UDP,
         }
     }
 }
 
 /// Identifies a specific route to a peer.
 ///
-/// `RouteKey` uniquely identifies a connection path by combining the
-/// socket index and remote address.
+/// `RouteKey` uniquely identifies a path by combining the
+/// protocol (UDP/TCP) and remote address.
 ///
 /// # Examples
 ///
 /// ```rust
-/// use rust_p2p_core::route_table::{RouteKey, ConnectProtocol};
+/// use rust_p2p_core::route_table::{RouteKey, Protocol};
 ///
-/// # fn example(route: RouteKey) {
-/// // Check the protocol
-/// if route.protocol() == ConnectProtocol::UDP {
-///     println!("UDP route to {}", route.addr());
-/// }
+/// # fn example() {
+/// // Create from protocol and address
+/// let key = RouteKey::new(Protocol::UDP, "127.0.0.1:3000".parse().unwrap());
+///
+/// // Or from a Transport
+/// // let key = RouteKey::from_transport(&transport);
 /// # }
 /// ```
 #[derive(Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash, Debug)]
 pub struct RouteKey {
-    index: Index,
+    protocol: Protocol,
     addr: SocketAddr,
 }
 impl Default for RouteKey {
     fn default() -> Self {
         Self {
-            index: Index::Tcp(0),
+            protocol: Protocol::TCP,
             addr: SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0)),
         }
     }
 }
 impl RouteKey {
-    pub const fn new(index: Index, addr: SocketAddr) -> Self {
-        Self { index, addr }
+    /// Creates a new RouteKey from protocol and address.
+    pub const fn new(protocol: Protocol, addr: SocketAddr) -> Self {
+        Self { protocol, addr }
     }
 
-    /// Returns the connection protocol (UDP or TCP).
-    #[inline]
-    pub fn protocol(&self) -> ConnectProtocol {
-        self.index.protocol()
+    /// Creates a RouteKey from a Transport handle.
+    pub fn from_transport(transport: &Transport) -> Self {
+        Self {
+            protocol: transport.protocol(),
+            addr: transport.remote_addr(),
+        }
     }
 
-    /// Returns the socket index.
+    /// Returns the protocol (UDP or TCP).
     #[inline]
-    pub fn index(&self) -> Index {
-        self.index
-    }
-
-    /// Returns the socket index as usize.
-    #[inline]
-    pub fn index_usize(&self) -> usize {
-        self.index.index()
+    pub fn protocol(&self) -> Protocol {
+        self.protocol
     }
 
     /// Returns the remote socket address.
@@ -126,33 +130,33 @@ pub struct RouteSortKey {
     rtt: u32,
 }
 
-/// Connection protocol type.
+/// Protocol type (UDP or TCP).
 ///
 /// # Examples
 ///
 /// ```rust
-/// use rust_p2p_core::route_table::ConnectProtocol;
+/// use rust_p2p_core::route_table::Protocol;
 ///
-/// let proto = ConnectProtocol::UDP;
+/// let proto = Protocol::UDP;
 /// assert!(proto.is_udp());
 /// assert!(!proto.is_tcp());
 /// ```
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
-pub enum ConnectProtocol {
+pub enum Protocol {
     UDP,
     TCP,
 }
-impl ConnectProtocol {
+impl Protocol {
     /// Returns true if this is TCP.
     #[inline]
     pub fn is_tcp(&self) -> bool {
-        self == &ConnectProtocol::TCP
+        self == &Protocol::TCP
     }
 
     /// Returns true if this is UDP.
     #[inline]
     pub fn is_udp(&self) -> bool {
-        self == &ConnectProtocol::UDP
+        self == &Protocol::UDP
     }
 }
 
@@ -163,11 +167,11 @@ impl fmt::Display for RouteKey {
     }
 }
 
-impl fmt::Display for ConnectProtocol {
+impl fmt::Display for Protocol {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ConnectProtocol::UDP => write!(f, "udp"),
-            ConnectProtocol::TCP => write!(f, "tcp"),
+            Protocol::UDP => write!(f, "udp"),
+            Protocol::TCP => write!(f, "tcp"),
         }
     }
 }

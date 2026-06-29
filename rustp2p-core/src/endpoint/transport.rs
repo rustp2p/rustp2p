@@ -3,8 +3,8 @@ use std::net::SocketAddr;
 use std::sync::Weak;
 use tokio::net::UdpSocket;
 
-use crate::endpoint::pool::Protocol;
 use crate::endpoint::pool::TcpConnection;
+use crate::route_table::Protocol;
 
 /// A transport handle to a peer, holding a Weak reference to the socket.
 ///
@@ -91,8 +91,8 @@ impl Transport {
     /// Returns the protocol (UDP or TCP).
     pub fn protocol(&self) -> Protocol {
         match self.inner {
-            TransportInner::Udp(_) => Protocol::Udp,
-            TransportInner::Tcp(_) => Protocol::Tcp,
+            TransportInner::Udp(_) => Protocol::UDP,
+            TransportInner::Tcp(_) => Protocol::TCP,
         }
     }
 
