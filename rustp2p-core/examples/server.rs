@@ -1,9 +1,8 @@
 use bytes::{BufMut, BytesMut};
 use env_logger::Env;
-use rust_p2p_core::endpoint::{Config, EndPoint, SocketPool};
+use rust_p2p_core::endpoint::{Config, EndPoint, Sender};
 use rust_p2p_core::route_table::route_table::RouteTable;
 use rust_p2p_core::route_table::{Index, RouteKey, UDPIndex};
-use std::sync::Arc;
 
 /*Demo Protocol
    0                                            15                                              31
@@ -38,15 +37,15 @@ async fn main() {
         .unwrap();
 
     let route_table: RouteTable<u32> = RouteTable::default();
-    let pool = ep.pool().clone();
+    let sender = ep.sender();
 
     log::info!("Server listening on {:?}", ep.local_addr().await);
 
     while let Some(received) = ep.recv().await {
         let route_table = route_table.clone();
-        let pool = pool.clone();
+        let sender = sender.clone();
         tokio::spawn(async move {
-            handler(route_table, received, pool).await;
+            handler(route_table, received, sender).await;
         });
     }
 }
@@ -54,7 +53,7 @@ async fn main() {
 async fn handler(
     route_table: RouteTable<u32>,
     received: rust_p2p_core::endpoint::Received,
-    pool: Arc<SocketPool>,
+    sender: Sender,
 ) {
     let data = &received.data;
     let addr = received.transport.remote_addr();
@@ -94,7 +93,7 @@ async fn handler(
                 .unwrap();
                 response.extend_from_slice(json.as_bytes());
                 let peer_addr = peer_route.route_key().addr();
-                pool.try_send_via_all(response.freeze().as_ref(), peer_addr);
+                sender.try_send_via_all(response.freeze().as_ref(), peer_addr);
             }
         }
         PUNCH_START_1 | PUNCH_START_2 => match route_table.get_route_by_id(&dest_id) {
@@ -116,7 +115,7 @@ async fn handler(
             response.put_u32(MY_SERVER_ID);
             response.put_u32(src_id);
             response.extend_from_slice(addr.to_string().as_bytes());
-            pool.try_send_via_all(response.freeze().as_ref(), addr);
+            sender.try_send_via_all(response.freeze().as_ref(), addr);
         }
         _ => {
             log::warn!(

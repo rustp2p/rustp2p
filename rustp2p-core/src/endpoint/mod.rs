@@ -22,7 +22,7 @@
 mod codec;
 mod config;
 mod endpoint;
-pub mod pool;
+pub(crate) mod pool;
 mod transport;
 
 pub use codec::{BytesInitCodec, Decoder, Encoder, InitCodec, LengthPrefixedInitCodec};
@@ -30,5 +30,6 @@ pub use config::{
     Config, LoadBalance, Model, TcpConfig, UdpConfig, DEFAULT_ADDRESS_V4, DEFAULT_ADDRESS_V6,
 };
 pub use endpoint::{EndPoint, Received};
-pub use pool::{Protocol, SocketPool, TcpConnection};
+pub use pool::{Protocol, Sender};
+pub(crate) use pool::{SocketPool, TcpConnection};
 pub use transport::Transport;

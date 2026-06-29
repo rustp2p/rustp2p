@@ -338,3 +338,87 @@ impl SocketPool {
         drop(socket);
     }
 }
+
+/// A lightweight handle for sending data and querying socket state.
+///
+/// `Sender` is cloneable and can be moved into async tasks.
+/// It provides send methods and read-only query methods without
+/// exposing internal socket management (add/remove/clean).
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// use rust_p2p_core::endpoint::{EndPoint, Config};
+///
+/// # #[tokio::main]
+/// # async fn main() -> std::io::Result<()> {
+/// let ep = EndPoint::bind(Config::new().udp_port(3000)).await?;
+/// let sender = ep.sender();
+///
+/// // Send to a known address
+/// sender.try_send_via_all(b"hello", "127.0.0.1:4000".parse().unwrap());
+///
+/// // Query local address
+/// println!("Listening on: {:?}", sender.local_addr().await);
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Clone)]
+pub struct Sender(pub(crate) Arc<SocketPool>);
+
+impl Sender {
+    // === Send methods ===
+
+    /// Send data through ALL UDP sockets (main + assistant) to a specific address.
+    pub fn try_send_via_all(&self, buf: &[u8], addr: SocketAddr) {
+        self.0.try_send_via_all(buf, addr);
+    }
+
+    /// Send data through ALL main UDP sockets to specific addresses.
+    /// Addresses are distributed round-robin across main sockets.
+    pub fn try_send_via_main(&self, buf: &[u8], addrs: &[SocketAddr]) {
+        self.0.try_send_via_main(buf, addrs);
+    }
+
+    /// Send data through ALL assistant UDP sockets to a specific address.
+    pub fn send_via_assistants(&self, buf: &[u8], addr: SocketAddr) {
+        self.0.send_via_assistants(buf, addr);
+    }
+
+    // === Read-only query methods ===
+
+    /// Get local address of first UDP socket.
+    pub async fn local_addr(&self) -> io::Result<SocketAddr> {
+        self.0.local_addr().await
+    }
+
+    /// Get the number of assistant sockets.
+    pub async fn assistant_count(&self) -> usize {
+        self.0.assistant_count().await
+    }
+
+    /// Get all UDP sockets.
+    pub async fn all_udp_sockets(&self) -> Vec<Arc<UdpSocket>> {
+        self.0.all_udp_sockets().await
+    }
+
+    /// Get a UDP socket by index.
+    pub async fn udp_socket(&self, index: usize) -> Option<Arc<UdpSocket>> {
+        self.0.udp_socket(index).await
+    }
+
+    /// Get the last TCP connection.
+    pub async fn last_tcp(&self) -> Option<Arc<TcpConnection>> {
+        self.0.last_tcp().await
+    }
+
+    /// Get a TCP connection by index.
+    pub async fn tcp_connection(&self, index: usize) -> Option<Arc<TcpConnection>> {
+        self.0.tcp_connection(index).await
+    }
+
+    /// Get all TCP connections.
+    pub async fn tcp_connections(&self) -> Vec<Arc<TcpConnection>> {
+        self.0.tcp_connections().await
+    }
+}

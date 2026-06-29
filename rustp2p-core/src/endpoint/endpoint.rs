@@ -133,9 +133,38 @@ impl EndPoint {
         &self.config
     }
 
-    /// Returns a reference to the socket pool for direct socket access.
-    pub fn pool(&self) -> &Arc<SocketPool> {
-        &self.pool
+    /// Returns a Sender handle for sending data and querying socket state.
+    ///
+    /// `Sender` is lightweight and cloneable. It provides send methods
+    /// and read-only query methods without exposing internal socket management.
+    pub fn sender(&self) -> super::pool::Sender {
+        super::pool::Sender(self.pool.clone())
+    }
+
+    /// Returns a Puncher for NAT hole-punching.
+    ///
+    /// The Puncher is constructed using the endpoint's internal socket pool.
+    pub fn puncher(&self) -> crate::punch::Puncher {
+        crate::punch::Puncher::new(self.pool.clone())
+    }
+
+    /// Get local UDP ports (for building NatInfo).
+    pub async fn local_udp_ports(&self) -> Vec<u16> {
+        self.pool
+            .all_udp_sockets()
+            .await
+            .iter()
+            .map(|s| s.local_addr().unwrap().port())
+            .collect()
+    }
+
+    /// Get local TCP port (for building NatInfo).
+    pub async fn local_tcp_port(&self) -> u16 {
+        self.pool
+            .last_tcp()
+            .await
+            .map(|c| c.peer_addr.port())
+            .unwrap_or(0)
     }
 }
 

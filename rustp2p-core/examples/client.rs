@@ -7,7 +7,7 @@ use bytes::{BufMut, BytesMut};
 use clap::Parser;
 use env_logger::Env;
 use parking_lot::Mutex;
-use rust_p2p_core::endpoint::{Config, EndPoint, SocketPool};
+use rust_p2p_core::endpoint::{Config, EndPoint, Sender};
 use rust_p2p_core::idle::IdleRouteManager;
 use rust_p2p_core::nat::NatInfo;
 use rust_p2p_core::punch::{PunchInfo, PunchModel, Puncher};
@@ -54,7 +54,7 @@ async fn main() {
     let Args {
         server,
         id: my_id,
-        tcp,
+        tcp: _,
     } = Args::parse();
     env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
     log::info!("my_id:{my_id},server:{server}");
@@ -62,13 +62,13 @@ async fn main() {
     let mut ep = EndPoint::bind(Config::new().udp_port(0).tcp_port(0))
         .await
         .unwrap();
-    let pool = ep.pool().clone();
-    let puncher = Puncher::new(pool.clone());
+    let sender = ep.sender();
+    let puncher = ep.puncher();
     let route_table: RouteTable<u32> = RouteTable::default();
     let idle_route_manager = IdleRouteManager::new(Duration::from_secs(12), route_table.clone());
 
-    // Get NAT info
-    let nat_info = my_nat_info(&pool).await;
+    // Get NAT info using endpoint helpers
+    let nat_info = my_nat_info(&ep).await;
 
     // Register with server
     {
@@ -76,12 +76,12 @@ async fn main() {
         request.put_u32(UP);
         request.put_u32(my_id);
         request.put_u32(MY_SERVER_ID);
-        pool.try_send_via_all(request.freeze().as_ref(), server);
+        sender.try_send_via_all(request.freeze().as_ref(), server);
     }
 
     let peer_list = Arc::new(Mutex::new(Vec::<u32>::new()));
     let peer_list1 = peer_list.clone();
-    let pool1 = pool.clone();
+    let sender1 = sender.clone();
     let nat_info1 = nat_info.clone();
 
     // Idle route cleanup
@@ -117,14 +117,14 @@ async fn main() {
                     let nat_info = nat_info1.lock().clone();
                     let data = serde_json::to_string(&nat_info).unwrap();
                     request.extend_from_slice(data.as_bytes());
-                    pool1.try_send_via_all(request.freeze().as_ref(), server);
+                    sender1.try_send_via_all(request.freeze().as_ref(), server);
                 }
             }
         }
     });
 
     // Periodic public address request
-    let pool2 = pool.clone();
+    let sender2 = sender.clone();
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(Duration::from_secs(3)).await;
@@ -132,7 +132,7 @@ async fn main() {
             request.put_u32(PUBLIC_ADDR_REQ);
             request.put_u32(my_id);
             request.put_u32(MY_SERVER_ID);
-            pool2.try_send_via_all(request.freeze().as_ref(), server);
+            sender2.try_send_via_all(request.freeze().as_ref(), server);
         }
     });
 
@@ -143,7 +143,7 @@ async fn main() {
         nat_info,
         route_table: route_table.clone(),
         server,
-        pool,
+        sender,
     };
 
     // Handle incoming messages
@@ -168,7 +168,7 @@ struct ContextHandler {
     route_table: RouteTable<u32>,
     #[allow(dead_code)]
     server: SocketAddr,
-    pool: Arc<SocketPool>,
+    sender: Sender,
 }
 
 impl ContextHandler {
@@ -206,7 +206,8 @@ impl ContextHandler {
                 let nat_info = self.nat_info.lock().clone();
                 let nat_data = serde_json::to_string(&nat_info).unwrap();
                 request.extend_from_slice(nat_data.as_bytes());
-                self.pool.try_send_via_all(request.freeze().as_ref(), addr);
+                self.sender
+                    .try_send_via_all(request.freeze().as_ref(), addr);
 
                 {
                     let mut request = BytesMut::new();
@@ -244,7 +245,8 @@ impl ContextHandler {
                 request.put_u32(PUNCH_RES);
                 request.put_u32(self.my_id);
                 request.put_u32(src_id);
-                self.pool.try_send_via_all(request.freeze().as_ref(), addr);
+                self.sender
+                    .try_send_via_all(request.freeze().as_ref(), addr);
                 self.route_table.add_route(
                     src_id,
                     (RouteKey::new(Index::Udp(UDPIndex::MainV4(0)), addr), 1),
@@ -277,7 +279,7 @@ impl ContextHandler {
     }
 }
 
-async fn my_nat_info(pool: &Arc<SocketPool>) -> Arc<Mutex<NatInfo>> {
+async fn my_nat_info(ep: &EndPoint) -> Arc<Mutex<NatInfo>> {
     let stun_server = vec![
         "stun.miwifi.com:3478".to_string(),
         "stun.chat.bilibili.com:3478".to_string(),
@@ -292,17 +294,8 @@ async fn my_nat_info(pool: &Arc<SocketPool>) -> Arc<Mutex<NatInfo>> {
         .await
         .unwrap_or(std::net::Ipv4Addr::UNSPECIFIED);
 
-    let local_udp_ports: Vec<u16> = pool
-        .all_udp_sockets()
-        .await
-        .iter()
-        .map(|s| s.local_addr().unwrap().port())
-        .collect();
-    let local_tcp_port = pool
-        .last_tcp()
-        .await
-        .map(|c| c.peer_addr.port())
-        .unwrap_or(0);
+    let local_udp_ports = ep.local_udp_ports().await;
+    let local_tcp_port = ep.local_tcp_port().await;
 
     let mut public_ports = local_udp_ports.clone();
     public_ports.fill(0);
