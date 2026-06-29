@@ -9,7 +9,7 @@
 //!
 //! # #[tokio::main]
 //! # async fn main() -> std::io::Result<()> {
-//! let ep = EndPoint::bind(Config::new().udp_port(3000)).await?;
+//! let mut ep = EndPoint::bind(Config::new().udp_port(3000)).await?;
 //!
 //! while let Some(received) = ep.recv().await {
 //!     println!("From {}: {:?}", received.transport.remote_addr(), received.data);

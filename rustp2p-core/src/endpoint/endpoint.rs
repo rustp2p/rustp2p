@@ -27,7 +27,7 @@ pub struct Received {
 ///
 /// # #[tokio::main]
 /// # async fn main() -> std::io::Result<()> {
-/// let ep = EndPoint::bind(Config::new().udp_port(3000)).await?;
+/// let mut ep = EndPoint::bind(Config::new().udp_port(3000)).await?;
 /// println!("Listening on: {:?}", ep.local_addr().await);
 ///
 /// while let Some(received) = ep.recv().await {

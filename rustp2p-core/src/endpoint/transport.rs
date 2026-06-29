@@ -8,7 +8,7 @@ use crate::endpoint::pool::TcpConnection;
 
 /// A transport handle to a peer, holding a Weak reference to the socket.
 ///
-/// Transport is a send handle — it does NOT store received data.
+/// Transport is a send handle - it does NOT store received data.
 /// Data is stored in `Received` alongside the Transport.
 ///
 /// When the socket is dropped by the pool (e.g., environment change),

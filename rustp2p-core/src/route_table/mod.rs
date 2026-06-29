@@ -6,7 +6,7 @@
 //! # Examples
 //!
 //! ```rust
-//! use rust_p2p_core::route::{RouteKey, ConnectProtocol};
+//! use rust_p2p_core::route_table::{RouteKey, ConnectProtocol};
 //!
 //! // RouteKey identifies a specific connection path
 //! // It combines protocol (UDP/TCP) and socket address
@@ -67,7 +67,7 @@ impl Index {
 /// # Examples
 ///
 /// ```rust
-/// use rust_p2p_core::route::{RouteKey, ConnectProtocol};
+/// use rust_p2p_core::route_table::{RouteKey, ConnectProtocol};
 ///
 /// # fn example(route: RouteKey) {
 /// // Check the protocol
@@ -131,7 +131,7 @@ pub struct RouteSortKey {
 /// # Examples
 ///
 /// ```rust
-/// use rust_p2p_core::route::ConnectProtocol;
+/// use rust_p2p_core::route_table::ConnectProtocol;
 ///
 /// let proto = ConnectProtocol::UDP;
 /// assert!(proto.is_udp());

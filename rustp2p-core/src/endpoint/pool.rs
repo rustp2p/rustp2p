@@ -213,6 +213,36 @@ impl SocketPool {
         }
     }
 
+    /// Send data through ALL main UDP sockets to specific addresses.
+    pub fn try_send_main_v4_to(&self, buf: &[u8], addrs: &[SocketAddr]) {
+        let sockets = self.udp_sockets.blocking_read();
+        let main_count = sockets
+            .iter()
+            .filter(|e| e.role == SocketRole::Main)
+            .count();
+        if main_count == 0 {
+            return;
+        }
+        for (i, addr) in addrs.iter().enumerate() {
+            let idx = i % main_count;
+            if let Some(entry) = sockets
+                .iter()
+                .filter(|e| e.role == SocketRole::Main)
+                .nth(idx)
+            {
+                let _ = entry.socket.try_send_to(buf, *addr);
+            }
+        }
+    }
+
+    /// Send data through ALL UDP sockets (main + sub) to a specific address.
+    pub fn try_send_all_to(&self, buf: &[u8], addr: SocketAddr) {
+        let sockets = self.udp_sockets.blocking_read();
+        for entry in sockets.iter() {
+            let _ = entry.socket.try_send_to(buf, addr);
+        }
+    }
+
     /// Shutdown all tasks (program exit).
     pub fn shutdown(&self) {
         let _ = self.global_shutdown.send(());
@@ -227,6 +257,11 @@ impl SocketPool {
             .ok_or_else(|| io::Error::other("no UDP sockets"))?
             .socket
             .local_addr()
+    }
+
+    /// Get the last TCP connection.
+    pub async fn last_tcp(&self) -> Option<Arc<TcpConnection>> {
+        self.tcp_conns.read().await.last().cloned()
     }
 
     /// Get a UDP socket by index.
