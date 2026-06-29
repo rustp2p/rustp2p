@@ -184,11 +184,15 @@ impl Puncher {
                 .filter(|a| a.is_ipv4())
                 .copied()
                 .collect();
-            self.pool.try_send_via_main(buf, &addrs);
+            for addr in &addrs {
+                let _ = self.pool.send_via_main(buf, *addr);
+            }
         }
         if !peer_nat_info.local_ipv4_addrs().is_empty() {
             let addrs = peer_nat_info.local_ipv4_addrs();
-            self.pool.try_send_via_main(buf, &addrs);
+            for addr in &addrs {
+                let _ = self.pool.send_via_main(buf, *addr);
+            }
         }
 
         match peer_nat_info.nat_type {

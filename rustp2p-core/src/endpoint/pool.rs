@@ -206,26 +206,18 @@ impl SocketPool {
         }
     }
 
-    /// Send data through ALL main UDP sockets to specific addresses.
-    pub fn try_send_via_main(&self, buf: &[u8], addrs: &[SocketAddr]) {
+    /// Send data through the first main UDP socket to an address.
+    pub fn send_via_main(&self, buf: &[u8], addr: SocketAddr) -> io::Result<()> {
         let sockets = self.udp_sockets.blocking_read();
-        let main_count = sockets
+        let main_socket = sockets
             .iter()
-            .filter(|e| e.role == SocketRole::Main)
-            .count();
-        if main_count == 0 {
-            return;
-        }
-        for (i, addr) in addrs.iter().enumerate() {
-            let idx = i % main_count;
-            if let Some(entry) = sockets
-                .iter()
-                .filter(|e| e.role == SocketRole::Main)
-                .nth(idx)
-            {
-                let _ = entry.socket.try_send_to(buf, *addr);
-            }
-        }
+            .find(|e| e.role == SocketRole::Main)
+            .ok_or_else(|| io::Error::other("no main UDP socket"))?;
+        main_socket
+            .socket
+            .try_send_to(buf, addr)
+            .map(|_| ())
+            .map_err(|e| io::Error::other(format!("send failed: {e}")))
     }
 
     /// Send data through ALL UDP sockets (main + assistant) to a specific address.
@@ -367,10 +359,9 @@ impl Sender {
         self.0.try_send_via_all(buf, addr);
     }
 
-    /// Send data through ALL main UDP sockets to specific addresses.
-    /// Addresses are distributed round-robin across main sockets.
-    pub fn try_send_via_main(&self, buf: &[u8], addrs: &[SocketAddr]) {
-        self.0.try_send_via_main(buf, addrs);
+    /// Send data through the first main UDP socket to an address.
+    pub fn send_via_main(&self, buf: &[u8], addr: SocketAddr) -> io::Result<()> {
+        self.0.send_via_main(buf, addr)
     }
 
     /// Send data through ALL assistant UDP sockets to a specific address.

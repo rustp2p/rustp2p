@@ -70,13 +70,13 @@ async fn main() {
     // Get NAT info using endpoint helpers
     let nat_info = my_nat_info(&ep).await;
 
-    // Register with server
+    // Register with server (use main socket only)
     {
         let mut request = BytesMut::new();
         request.put_u32(UP);
         request.put_u32(my_id);
         request.put_u32(MY_SERVER_ID);
-        sender.try_send_via_all(request.freeze().as_ref(), server);
+        sender.send_via_main(request.freeze().as_ref(), server).ok();
     }
 
     let peer_list = Arc::new(Mutex::new(Vec::<u32>::new()));
@@ -117,13 +117,15 @@ async fn main() {
                     let nat_info = nat_info1.lock().clone();
                     let data = serde_json::to_string(&nat_info).unwrap();
                     request.extend_from_slice(data.as_bytes());
-                    sender1.try_send_via_all(request.freeze().as_ref(), server);
+                    sender1
+                        .send_via_main(request.freeze().as_ref(), server)
+                        .ok();
                 }
             }
         }
     });
 
-    // Periodic public address request
+    // Periodic public address request (use main socket only)
     let sender2 = sender.clone();
     tokio::spawn(async move {
         loop {
@@ -132,7 +134,9 @@ async fn main() {
             request.put_u32(PUBLIC_ADDR_REQ);
             request.put_u32(my_id);
             request.put_u32(MY_SERVER_ID);
-            sender2.try_send_via_all(request.freeze().as_ref(), server);
+            sender2
+                .send_via_main(request.freeze().as_ref(), server)
+                .ok();
         }
     });
 
