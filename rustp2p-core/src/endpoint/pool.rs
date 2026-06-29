@@ -18,7 +18,7 @@ pub enum Protocol {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum SocketRole {
     Main,
-    Sub,
+    Assistant,
 }
 
 /// A managed UDP socket entry with its own shutdown signal.
@@ -86,14 +86,14 @@ impl SocketPool {
         (pool, data_rx)
     }
 
-    /// Add a sub UDP socket (for symmetric NAT probing).
-    /// Its reader task exits when the sub socket is removed.
-    pub async fn add_sub_udp(&self, socket: UdpSocket) -> Weak<UdpSocket> {
+    /// Add an assistant UDP socket (for symmetric NAT probing).
+    /// Its reader task exits when the assistant socket is removed.
+    pub async fn add_assistant_udp(&self, socket: UdpSocket) -> Weak<UdpSocket> {
         let socket = Arc::new(socket);
         let weak = Arc::downgrade(&socket);
         let socket_weak = weak.clone();
 
-        // Per-socket shutdown for this sub socket
+        // Per-socket shutdown for this assistant socket
         let (socket_shutdown, mut socket_shutdown_rx) = broadcast::channel(4);
         let mut global_rx = self.global_shutdown.subscribe();
         let data_tx = self.data_tx.clone();
@@ -107,7 +107,7 @@ impl SocketPool {
 
         let entry = UdpEntry {
             socket,
-            role: SocketRole::Sub,
+            role: SocketRole::Assistant,
             _shutdown: socket_shutdown,
         };
 
@@ -118,8 +118,8 @@ impl SocketPool {
         weak
     }
 
-    /// Remove all sub UDP sockets and cancel their reader tasks.
-    pub fn remove_sub_udp(&self) {
+    /// Clean all assistant UDP sockets and cancel their reader tasks.
+    pub fn clean_assistant_udp(&self) {
         let mut sockets = self.udp_sockets.blocking_write();
         // Dropping UdpEntry drops _shutdown Sender, reader task exits
         sockets.retain(|e| e.role == SocketRole::Main);
@@ -203,18 +203,18 @@ impl SocketPool {
         Ok(weak)
     }
 
-    /// Send data through ALL sub UDP sockets to a specific address.
-    pub fn send_sub_udp_to(&self, buf: &[u8], addr: SocketAddr) {
+    /// Send data through ALL assistant UDP sockets to a specific address.
+    pub fn send_assistant_udp_to(&self, buf: &[u8], addr: SocketAddr) {
         let sockets = self.udp_sockets.blocking_read();
         for entry in sockets.iter() {
-            if entry.role == SocketRole::Sub {
+            if entry.role == SocketRole::Assistant {
                 let _ = entry.socket.try_send_to(buf, addr);
             }
         }
     }
 
     /// Send data through ALL main UDP sockets to specific addresses.
-    pub fn try_send_main_v4_to(&self, buf: &[u8], addrs: &[SocketAddr]) {
+    pub fn try_send_via_main(&self, buf: &[u8], addrs: &[SocketAddr]) {
         let sockets = self.udp_sockets.blocking_read();
         let main_count = sockets
             .iter()
@@ -235,8 +235,8 @@ impl SocketPool {
         }
     }
 
-    /// Send data through ALL UDP sockets (main + sub) to a specific address.
-    pub fn try_send_all_to(&self, buf: &[u8], addr: SocketAddr) {
+    /// Send data through ALL UDP sockets (main + assistant) to a specific address.
+    pub fn try_send_via_all(&self, buf: &[u8], addr: SocketAddr) {
         let sockets = self.udp_sockets.blocking_read();
         for entry in sockets.iter() {
             let _ = entry.socket.try_send_to(buf, addr);
@@ -283,13 +283,13 @@ impl SocketPool {
             .collect()
     }
 
-    /// Get the number of sub sockets.
-    pub async fn sub_count(&self) -> usize {
+    /// Get the number of assistant sockets.
+    pub async fn assistant_count(&self) -> usize {
         self.udp_sockets
             .read()
             .await
             .iter()
-            .filter(|e| e.role == SocketRole::Sub)
+            .filter(|e| e.role == SocketRole::Assistant)
             .count()
     }
 

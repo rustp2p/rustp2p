@@ -184,11 +184,11 @@ impl Puncher {
                 .filter(|a| a.is_ipv4())
                 .copied()
                 .collect();
-            self.pool.try_send_main_v4_to(buf, &addrs);
+            self.pool.try_send_via_main(buf, &addrs);
         }
         if !peer_nat_info.local_ipv4_addrs().is_empty() {
             let addrs = peer_nat_info.local_ipv4_addrs();
-            self.pool.try_send_main_v4_to(buf, &addrs);
+            self.pool.try_send_via_main(buf, &addrs);
         }
 
         match peer_nat_info.nat_type {
@@ -258,7 +258,7 @@ impl Puncher {
             }
             NatType::Cone => {
                 if let Some(addr) = peer_nat_info.public_ipv4_addr().into_iter().next() {
-                    self.pool.try_send_all_to(buf, addr);
+                    self.pool.try_send_via_all(buf, addr);
                 }
             }
         }
@@ -279,7 +279,7 @@ impl Puncher {
                     return index;
                 }
                 let addr = SocketAddr::V4(SocketAddrV4::new(*pub_ip, *port));
-                let _ = self.pool.try_send_all_to(buf, addr);
+                let _ = self.pool.try_send_via_all(buf, addr);
                 std::thread::sleep(Duration::from_millis(2));
             }
         }

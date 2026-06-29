@@ -46,7 +46,7 @@ pub enum LoadBalance {
 #[derive(Clone)]
 pub struct UdpConfig {
     pub main_count: usize,
-    pub sub_count: usize,
+    pub assistant_count: usize,
     pub model: Model,
     pub default_interface: Option<LocalInterface>,
     pub udp_ports: Vec<u16>,
@@ -57,7 +57,7 @@ impl Default for UdpConfig {
     fn default() -> Self {
         Self {
             main_count: MAX_MAIN_SOCKET_COUNT,
-            sub_count: MAX_SYMMETRIC_SOCKET_COUNT,
+            assistant_count: MAX_SYMMETRIC_SOCKET_COUNT,
             model: Model::Low,
             default_interface: None,
             udp_ports: vec![0, 0],
@@ -71,7 +71,7 @@ impl UdpConfig {
         let port = socket.local_addr().map(|a| a.port()).unwrap_or(0);
         Self {
             main_count: 1,
-            sub_count: MAX_SYMMETRIC_SOCKET_COUNT,
+            assistant_count: MAX_SYMMETRIC_SOCKET_COUNT,
             model: Model::Low,
             default_interface: None,
             udp_ports: vec![port],
@@ -86,7 +86,7 @@ impl UdpConfig {
         if self.main_count > MAX_MAIN_SOCKET_COUNT {
             return Err(io::Error::other("main socket count is too large"));
         }
-        if self.sub_count > MAX_SYMMETRIC_SOCKET_COUNT {
+        if self.assistant_count > MAX_SYMMETRIC_SOCKET_COUNT {
             return Err(io::Error::other(
                 "socket count for symmetric nat is too large",
             ));
@@ -101,8 +101,8 @@ impl UdpConfig {
         self.main_count = count;
         self
     }
-    pub fn sub_count(mut self, count: usize) -> Self {
-        self.sub_count = count;
+    pub fn assistant_count(mut self, count: usize) -> Self {
+        self.assistant_count = count;
         self
     }
     pub fn model(mut self, model: Model) -> Self {
