@@ -203,12 +203,12 @@ impl SocketPool {
         Ok(weak)
     }
 
-    /// Send data through ALL sub UDP sockets (for symmetric NAT probing).
-    pub fn send_sub_udp_all(&self, buf: &[u8]) {
+    /// Send data through ALL sub UDP sockets to a specific address.
+    pub fn send_sub_udp_to(&self, buf: &[u8], addr: SocketAddr) {
         let sockets = self.udp_sockets.blocking_read();
         for entry in sockets.iter() {
             if entry.role == SocketRole::Sub {
-                let _ = entry.socket.try_send_to(buf, "0.0.0.0:0".parse().unwrap());
+                let _ = entry.socket.try_send_to(buf, addr);
             }
         }
     }
