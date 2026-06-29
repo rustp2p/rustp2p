@@ -12,7 +12,7 @@ use rust_p2p_core::idle::IdleRouteManager;
 use rust_p2p_core::nat::NatInfo;
 use rust_p2p_core::punch::{PunchInfo, PunchModel, Puncher};
 use rust_p2p_core::route_table::route_table::RouteTable;
-use rust_p2p_core::route_table::{Protocol, RouteKey};
+use rust_p2p_core::route_table::RouteKey;
 
 /*Demo Protocol
    0                                            15                                              31
@@ -196,19 +196,25 @@ impl ContextHandler {
                 log::info!("peer_list={guard:?}");
             }
             PUNCH_START_1 => {
+                let peer_nat_info: NatInfo =
+                    serde_json::from_str(core::str::from_utf8(&data[12..]).unwrap()).unwrap();
+                log::info!("peer_id={src_id},peer_nat_info={peer_nat_info:?}");
+
+                // Reply to server with our NAT info (server will relay to peer)
                 let mut request = BytesMut::new();
                 request.put_u32(PUNCH_START_2);
                 request.put_u32(self.my_id);
                 request.put_u32(src_id);
-                let peer_nat_info: NatInfo =
-                    serde_json::from_str(core::str::from_utf8(&data[12..]).unwrap()).unwrap();
-                log::info!("peer_id={src_id},peer_nat_info={peer_nat_info:?}");
                 let nat_info = self.nat_info.lock().clone();
                 let nat_data = serde_json::to_string(&nat_info).unwrap();
                 request.extend_from_slice(nat_data.as_bytes());
-                self.sender
-                    .try_send_via_all(request.freeze().as_ref(), addr);
+                received
+                    .transport
+                    .send(request.freeze().as_ref())
+                    .await
+                    .ok();
 
+                // Start punching to the peer
                 {
                     let mut request = BytesMut::new();
                     request.put_u32(PUNCH_REQ);
@@ -241,19 +247,25 @@ impl ContextHandler {
             }
             PUNCH_REQ => {
                 log::info!("======================== PUNCH_REQ ========================");
+                // Reply to peer with PUNCH_RES
                 let mut request = BytesMut::new();
                 request.put_u32(PUNCH_RES);
                 request.put_u32(self.my_id);
                 request.put_u32(src_id);
-                self.sender
-                    .try_send_via_all(request.freeze().as_ref(), addr);
+                received
+                    .transport
+                    .send(request.freeze().as_ref())
+                    .await
+                    .ok();
+                // Add direct route to peer
                 self.route_table
-                    .add_route(src_id, (RouteKey::new(Protocol::UDP, addr), 1));
+                    .add_route(src_id, (RouteKey::from_transport(&received.transport), 0));
             }
             PUNCH_RES => {
                 log::info!("======================== PUNCH_RES ========================");
+                // Punch succeeded, add direct route (metric=0)
                 self.route_table
-                    .add_route(src_id, (RouteKey::new(Protocol::UDP, addr), 1));
+                    .add_route(src_id, (RouteKey::from_transport(&received.transport), 0));
             }
             PUBLIC_ADDR_RES => {
                 let public_addr =
