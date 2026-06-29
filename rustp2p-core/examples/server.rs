@@ -9,7 +9,7 @@ async fn main() {
         .await
         .unwrap();
 
-    log::info!("Server listening on port 3000");
+    log::info!("Server listening on {:?}", ep.local_addr().await);
 
     while let Some(received) = ep.recv().await {
         let data = String::from_utf8_lossy(&received.data);

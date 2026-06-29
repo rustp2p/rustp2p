@@ -204,7 +204,7 @@ impl SocketPool {
     }
 
     /// Send data through ALL assistant UDP sockets to a specific address.
-    pub fn send_assistant_udp_to(&self, buf: &[u8], addr: SocketAddr) {
+    pub fn send_via_assistants(&self, buf: &[u8], addr: SocketAddr) {
         let sockets = self.udp_sockets.blocking_read();
         for entry in sockets.iter() {
             if entry.role == SocketRole::Assistant {
@@ -262,6 +262,16 @@ impl SocketPool {
     /// Get the last TCP connection.
     pub async fn last_tcp(&self) -> Option<Arc<TcpConnection>> {
         self.tcp_conns.read().await.last().cloned()
+    }
+
+    /// Get a TCP connection by index.
+    pub async fn tcp_connection(&self, index: usize) -> Option<Arc<TcpConnection>> {
+        self.tcp_conns.read().await.get(index).cloned()
+    }
+
+    /// Get all TCP connections.
+    pub async fn tcp_connections(&self) -> Vec<Arc<TcpConnection>> {
+        self.tcp_conns.read().await.clone()
     }
 
     /// Get a UDP socket by index.
