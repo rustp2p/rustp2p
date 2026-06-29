@@ -9,18 +9,7 @@ pub(crate) const MAX_SYMMETRIC_SOCKET_COUNT: usize = 200;
 pub(crate) const MAX_MAIN_SOCKET_COUNT: usize = 10;
 pub(crate) const ROUTE_IDLE_TIME: Duration = Duration::from_secs(10);
 
-#[derive(Clone, Copy, Eq, PartialEq, Debug, Default)]
-pub enum LoadBalance {
-    /// Use the route with the lowest latency among those with the fewest hops.
-    #[default]
-    MinHopLowestLatency,
-    /// Round-robin the route list.
-    RoundRobin,
-    /// Use the most recently added route.
-    MostRecent,
-    /// Use the route with the lowest latency.
-    LowestLatency,
-}
+pub use crate::endpoint::LoadBalance;
 #[derive(Clone)]
 pub struct TunnelConfig {
     pub major_socket_count: usize,
@@ -49,7 +38,7 @@ impl TunnelConfig {
     /// # Examples
     ///
     /// ```rust
-    /// use rust_p2p_core::tunnel::config::TunnelConfig;
+    /// use crate::tunnel::config::TunnelConfig;
     /// let config = TunnelConfig::simple(3000, 3000);
     /// ```
     pub fn simple(udp_port: u16, tcp_port: u16) -> Self {

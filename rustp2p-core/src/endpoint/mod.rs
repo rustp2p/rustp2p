@@ -26,7 +26,9 @@ pub mod pool;
 mod transport;
 
 pub use codec::{BytesInitCodec, Decoder, Encoder, InitCodec, LengthPrefixedInitCodec};
-pub use config::{Config, LoadBalance, Model, TcpConfig, UdpConfig};
+pub use config::{
+    Config, LoadBalance, Model, TcpConfig, UdpConfig, DEFAULT_ADDRESS_V4, DEFAULT_ADDRESS_V6,
+};
 pub use endpoint::{EndPoint, Received};
 pub use pool::{Protocol, SocketPool};
 pub use transport::Transport;

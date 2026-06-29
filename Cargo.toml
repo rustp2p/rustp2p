@@ -28,8 +28,12 @@ dns-parser = "0.8"
 openssl = { version = "0.10", optional = true }
 ring = { version = "0.17", optional = true }
 sha2 = "0.10"
-
 futures = "0.3.31"
+async-lock = "3.4"
+dyn-clone = "1.0"
+tachyonix = "0.3"
+async-broadcast = "0.7"
+socket2 = { version = "0.5", features = ["all"] }
 
 [dev-dependencies]
 rustp2p = { path = "../rustp2p", features = ["aes-gcm-ring"] }

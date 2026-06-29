@@ -1,8 +1,8 @@
 /// Primary API for P2P networking.
 pub mod endpoint;
 
-/// Transport layer (deprecated, use `endpoint` module instead).
-#[deprecated(note = "Use `endpoint` module instead")]
+/// Transport layer (available but not recommended for direct use).
+/// Use `endpoint` module instead.
 pub mod transport;
 
 pub mod idle;

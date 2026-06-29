@@ -1,8 +1,17 @@
 use std::io;
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 use std::time::Duration;
 
 use crate::endpoint::codec::{BytesInitCodec, InitCodec};
 use crate::socket::LocalInterface;
+
+/// Default IPv4 address (0.0.0.0:0).
+pub const DEFAULT_ADDRESS_V4: SocketAddr =
+    SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0));
+
+/// Default IPv6 address ([::]:0).
+pub const DEFAULT_ADDRESS_V6: SocketAddr =
+    SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, 0));
 
 const MAX_SYMMETRIC_SOCKET_COUNT: usize = 200;
 const MAX_MAIN_SOCKET_COUNT: usize = 10;

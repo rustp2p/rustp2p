@@ -6,7 +6,7 @@
 //! # Quick Start
 //!
 //! ```rust,no_run
-//! use rust_p2p_core::transport::{Transport, TunnelConfig};
+//! use crate::transport::{Transport, TunnelConfig};
 //!
 //! # #[tokio::main]
 //! # async fn main() -> std::io::Result<()> {
@@ -64,7 +64,7 @@ pub type Transport = TunnelDispatcher;
 /// # Examples
 ///
 /// ```rust,no_run
-/// use rust_p2p_core::tunnel::{TunnelConfig, new_tunnel_component};
+/// use crate::tunnel::{TunnelConfig, new_tunnel_component};
 ///
 /// # fn main() -> std::io::Result<()> {
 /// let config = TunnelConfig::default();
@@ -112,7 +112,7 @@ impl TunnelDispatcher {
     /// # Examples
     ///
     /// ```rust,no_run
-    /// use rust_p2p_core::tunnel::{Transport, TunnelConfig};
+    /// use crate::tunnel::{Transport, TunnelConfig};
     ///
     /// # fn main() -> std::io::Result<()> {
     /// let (mut transport, puncher) = Transport::new(TunnelConfig::default())?;
@@ -131,7 +131,7 @@ impl TunnelDispatcher {
     /// # Examples
     ///
     /// ```rust,no_run
-    /// use rust_p2p_core::tunnel::Transport;
+    /// use crate::tunnel::Transport;
     ///
     /// # fn main() -> std::io::Result<()> {
     /// let socket = std::net::UdpSocket::bind("0.0.0.0:0")?;
@@ -166,7 +166,7 @@ impl TunnelDispatcher {
 /// # Examples
 ///
 /// ```rust,no_run
-/// use rust_p2p_core::tunnel::Tunnel;
+/// use crate::tunnel::Tunnel;
 ///
 /// # async fn example(tunnel: Tunnel) {
 /// match tunnel {
@@ -196,7 +196,7 @@ impl TunnelDispatcher {
     /// # Examples
     ///
     /// ```rust,no_run
-    /// # use rust_p2p_core::tunnel::TunnelDispatcher;
+    /// # use crate::tunnel::TunnelDispatcher;
     /// # async fn example(mut dispatcher: TunnelDispatcher) -> std::io::Result<()> {
     /// loop {
     ///     let tunnel = dispatcher.accept().await?;

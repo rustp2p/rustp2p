@@ -21,7 +21,21 @@ pub use route_table::Route;
 
 pub const DEFAULT_RTT: u32 = 9999;
 
-use crate::transport::udp::UDPIndex;
+/// UDP socket index variants.
+#[derive(Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash, Debug)]
+pub enum UDPIndex {
+    MainV4(usize),
+    MainV6(usize),
+    SubV4(usize),
+}
+
+impl UDPIndex {
+    pub(crate) fn index(&self) -> usize {
+        match self {
+            UDPIndex::MainV4(i) | UDPIndex::MainV6(i) | UDPIndex::SubV4(i) => *i,
+        }
+    }
+}
 
 /// Socket index identifying a specific socket in a socket manager.
 #[non_exhaustive]

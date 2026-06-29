@@ -49,22 +49,7 @@ impl Model {
     }
 }
 
-#[derive(Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash, Debug)]
-pub enum UDPIndex {
-    MainV4(usize),
-    MainV6(usize),
-    SubV4(usize),
-}
-
-impl UDPIndex {
-    pub(crate) fn index(&self) -> usize {
-        match self {
-            UDPIndex::MainV4(i) => *i,
-            UDPIndex::MainV6(i) => *i,
-            UDPIndex::SubV4(i) => *i,
-        }
-    }
-}
+pub use crate::route_table::UDPIndex;
 
 pub trait ToRouteKeyForUdp<T> {
     fn route_key(socket_manager: &UdpSocketManager, dest: Self) -> io::Result<RouteKey>;
