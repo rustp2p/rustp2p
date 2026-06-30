@@ -59,9 +59,13 @@ async fn main() {
     env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
     log::info!("my_id:{my_id},server:{server}");
 
-    let mut ep = EndPoint::bind(Config::new().udp_port(0).tcp_port(0))
-        .await
-        .unwrap();
+    let mut ep = EndPoint::bind(Config::new().udp_port(0).tcp_port(0).stun_servers(vec![
+        "stun.miwifi.com:3478".to_string(),
+        "stun.chat.bilibili.com:3478".to_string(),
+        "stun.hitv.com:3478".to_string(),
+    ]))
+    .await
+    .unwrap();
     let sender = ep.sender();
     let puncher = ep.puncher();
     let route_table: RouteTable<u32> = RouteTable::default();
