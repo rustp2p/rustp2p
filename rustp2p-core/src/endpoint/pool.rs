@@ -191,8 +191,8 @@ impl SocketPool {
     }
 
     /// Send data through ALL assistant UDP sockets to a specific address.
-    pub fn send_via_assistants(&self, buf: &[u8], addr: SocketAddr) {
-        let sockets = self.udp_sockets.blocking_read();
+    pub async fn send_via_assistants(&self, buf: &[u8], addr: SocketAddr) {
+        let sockets = self.udp_sockets.read().await;
         for entry in sockets.iter() {
             if entry.role == SocketRole::Assistant {
                 let _ = entry.socket.try_send_to(buf, addr);
@@ -201,8 +201,8 @@ impl SocketPool {
     }
 
     /// Send data to an address via the main UDP socket.
-    pub fn send_to(&self, buf: &[u8], addr: SocketAddr) -> io::Result<()> {
-        let sockets = self.udp_sockets.blocking_read();
+    pub async fn send_to(&self, buf: &[u8], addr: SocketAddr) -> io::Result<()> {
+        let sockets = self.udp_sockets.read().await;
         let main_socket = sockets
             .iter()
             .find(|e| e.role == SocketRole::Main)
@@ -215,8 +215,8 @@ impl SocketPool {
     }
 
     /// Send data through ALL UDP sockets (main + assistant) to a specific address.
-    pub fn try_send_via_all(&self, buf: &[u8], addr: SocketAddr) {
-        let sockets = self.udp_sockets.blocking_read();
+    pub async fn try_send_via_all(&self, buf: &[u8], addr: SocketAddr) {
+        let sockets = self.udp_sockets.read().await;
         for entry in sockets.iter() {
             let _ = entry.socket.try_send_to(buf, addr);
         }
@@ -335,7 +335,7 @@ impl SocketPool {
 /// let sender = ep.sender();
 ///
 /// // Send to a known address
-/// sender.try_send_via_all(b"hello", "127.0.0.1:4000".parse().unwrap());
+/// sender.try_send_via_all(b"hello", "127.0.0.1:4000".parse().unwrap()).await;
 ///
 /// // Query local address
 /// println!("Listening on: {:?}", sender.local_addr().await);
@@ -349,18 +349,18 @@ impl Sender {
     // === Send methods ===
 
     /// Send data through ALL UDP sockets (main + assistant) to a specific address.
-    pub fn try_send_via_all(&self, buf: &[u8], addr: SocketAddr) {
-        self.0.try_send_via_all(buf, addr);
+    pub async fn try_send_via_all(&self, buf: &[u8], addr: SocketAddr) {
+        self.0.try_send_via_all(buf, addr).await;
     }
 
     /// Send data to an address via the main UDP socket.
-    pub fn send_to(&self, buf: &[u8], addr: SocketAddr) -> io::Result<()> {
-        self.0.send_to(buf, addr)
+    pub async fn send_to(&self, buf: &[u8], addr: SocketAddr) -> io::Result<()> {
+        self.0.send_to(buf, addr).await
     }
 
     /// Send data through ALL assistant UDP sockets to a specific address.
-    pub fn send_via_assistants(&self, buf: &[u8], addr: SocketAddr) {
-        self.0.send_via_assistants(buf, addr);
+    pub async fn send_via_assistants(&self, buf: &[u8], addr: SocketAddr) {
+        self.0.send_via_assistants(buf, addr).await;
     }
 
     // === Read-only query methods ===

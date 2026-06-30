@@ -91,7 +91,8 @@ impl Puncher {
         let punch_model = punch_info.punch_model;
 
         // UDP punch
-        self.punch_udp(count, udp_buf, &peer_nat_info, &punch_model);
+        self.punch_udp(count, udp_buf, &peer_nat_info, &punch_model)
+            .await;
 
         // TCP punch
         let mut tcp_tasks = Vec::new();
@@ -167,7 +168,7 @@ impl Puncher {
         }
     }
 
-    fn punch_udp(
+    async fn punch_udp(
         &self,
         count: usize,
         buf: &[u8],
@@ -183,13 +184,13 @@ impl Puncher {
                 .copied()
                 .collect();
             for addr in &addrs {
-                let _ = self.pool.send_to(buf, *addr);
+                let _ = self.pool.send_to(buf, *addr).await;
             }
         }
         if !peer_nat_info.local_ipv4_addrs().is_empty() {
             let addrs = peer_nat_info.local_ipv4_addrs();
             for addr in &addrs {
-                let _ = self.pool.send_to(buf, *addr);
+                let _ = self.pool.send_to(buf, *addr).await;
             }
         }
 
@@ -232,7 +233,8 @@ impl Puncher {
                             .first()
                             .copied()
                             .unwrap_or(std::net::Ipv4Addr::UNSPECIFIED);
-                        self.punch_symmetric(&valid_ports, buf, &[pub_ip], max_k1 as usize);
+                        self.punch_symmetric(&valid_ports, buf, &[pub_ip], max_k1 as usize)
+                            .await;
                     }
                 }
                 let default_addr =
@@ -245,12 +247,14 @@ impl Puncher {
                 let start = self.port_cursor.lock().get(&pub_addr).copied().unwrap_or(0);
                 let end = (start + max_k2).min(self.shuffled_ports.len());
                 let mut index = start
-                    + self.punch_symmetric(
-                        &self.shuffled_ports[start..end],
-                        buf,
-                        &peer_nat_info.public_ips,
-                        max_k2,
-                    );
+                    + self
+                        .punch_symmetric(
+                            &self.shuffled_ports[start..end],
+                            buf,
+                            &peer_nat_info.public_ips,
+                            max_k2,
+                        )
+                        .await;
                 if index >= self.shuffled_ports.len() {
                     index = 0;
                 }
@@ -260,13 +264,13 @@ impl Puncher {
             }
             NatType::Cone => {
                 if let Some(addr) = peer_nat_info.public_ipv4_addr().into_iter().next() {
-                    self.pool.try_send_via_all(buf, addr);
+                    self.pool.try_send_via_all(buf, addr).await;
                 }
             }
         }
     }
 
-    fn punch_symmetric(
+    async fn punch_symmetric(
         &self,
         ports: &[u16],
         buf: &[u8],
@@ -281,8 +285,8 @@ impl Puncher {
                     return index;
                 }
                 let addr = SocketAddr::V4(SocketAddrV4::new(*pub_ip, *port));
-                let _ = self.pool.try_send_via_all(buf, addr);
-                std::thread::sleep(Duration::from_millis(2));
+                let _ = self.pool.try_send_via_all(buf, addr).await;
+                tokio::time::sleep(Duration::from_millis(2)).await;
             }
         }
         ports.len()
