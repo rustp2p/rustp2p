@@ -148,7 +148,7 @@ impl EndPoint {
         crate::punch::Puncher::new(self.pool.clone())
     }
 
-    /// Get local UDP ports (for building NatInfo).
+    /// Get local UDP ports.
     pub async fn local_udp_ports(&self) -> Vec<u16> {
         self.pool
             .udp_sockets()
@@ -158,13 +158,48 @@ impl EndPoint {
             .collect()
     }
 
-    /// Get local TCP port (for building NatInfo).
+    /// Get local TCP port.
     pub async fn local_tcp_port(&self) -> u16 {
         self.pool
             .last_tcp()
             .await
             .map(|c| c.peer_addr.port())
             .unwrap_or(0)
+    }
+
+    /// Get NAT information using configured STUN servers.
+    ///
+    /// Uses the stun servers from Config to detect NAT type and public addresses.
+    pub async fn nat_info(&self) -> io::Result<crate::nat::NatInfo> {
+        let stun_servers = self.config.stun_servers.clone();
+        let (nat_type, public_ips, port_range) =
+            crate::stun::stun_test_nat(stun_servers, None).await?;
+        log::info!("nat_type:{nat_type:?},public_ips:{public_ips:?},port_range={port_range}");
+
+        let local_ipv4 = crate::util::addr::local_ipv4()
+            .await
+            .unwrap_or(std::net::Ipv4Addr::UNSPECIFIED);
+
+        let local_udp_ports = self.local_udp_ports().await;
+        let local_tcp_port = self.local_tcp_port().await;
+
+        let mut public_ports = local_udp_ports.clone();
+        public_ports.fill(0);
+
+        Ok(crate::nat::NatInfo {
+            nat_type,
+            public_ips,
+            public_udp_ports: public_ports,
+            mapping_tcp_addr: vec![],
+            mapping_udp_addr: vec![],
+            public_port_range: port_range,
+            local_ipv4,
+            local_ipv4s: vec![],
+            ipv6: None,
+            local_udp_ports,
+            local_tcp_port,
+            public_tcp_port: 0,
+        })
     }
 }
 

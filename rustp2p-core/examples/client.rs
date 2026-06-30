@@ -67,8 +67,8 @@ async fn main() {
     let route_table: RouteTable<u32> = RouteTable::default();
     let idle_route_manager = IdleRouteManager::new(Duration::from_secs(12), route_table.clone());
 
-    // Get NAT info using endpoint helpers
-    let nat_info = my_nat_info(&ep).await;
+    // Get NAT info
+    let nat_info = Arc::new(Mutex::new(ep.nat_info().await.unwrap()));
 
     // Register with server (use main socket only)
     {
@@ -285,42 +285,4 @@ impl ContextHandler {
         }
         Ok(())
     }
-}
-
-async fn my_nat_info(ep: &EndPoint) -> Arc<Mutex<NatInfo>> {
-    let stun_server = vec![
-        "stun.miwifi.com:3478".to_string(),
-        "stun.chat.bilibili.com:3478".to_string(),
-        "stun.hitv.com:3478".to_string(),
-    ];
-    let (nat_type, public_ips, port_range) = rust_p2p_core::stun::stun_test_nat(stun_server, None)
-        .await
-        .unwrap();
-    log::info!("nat_type:{nat_type:?},public_ips:{public_ips:?},port_range={port_range}");
-
-    let local_ipv4 = rust_p2p_core::util::addr::local_ipv4()
-        .await
-        .unwrap_or(std::net::Ipv4Addr::UNSPECIFIED);
-
-    let local_udp_ports = ep.local_udp_ports().await;
-    let local_tcp_port = ep.local_tcp_port().await;
-
-    let mut public_ports = local_udp_ports.clone();
-    public_ports.fill(0);
-
-    let nat_info = NatInfo {
-        nat_type,
-        public_ips,
-        public_udp_ports: public_ports,
-        mapping_tcp_addr: vec![],
-        mapping_udp_addr: vec![],
-        public_port_range: port_range,
-        local_ipv4,
-        local_ipv4s: vec![],
-        ipv6: None,
-        local_udp_ports,
-        local_tcp_port,
-        public_tcp_port: 0,
-    };
-    Arc::new(Mutex::new(nat_info))
 }
