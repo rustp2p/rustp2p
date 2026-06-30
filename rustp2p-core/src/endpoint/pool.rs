@@ -18,8 +18,8 @@ pub(crate) enum SocketRole {
 struct UdpEntry {
     socket: Arc<UdpSocket>,
     role: SocketRole,
-    /// Per-socket shutdown sender. Dropping this signals the reader to exit.
-    _shutdown: broadcast::Sender<()>,
+    /// Per-socket shutdown sender for assistant sockets. None for main socket.
+    _shutdown: Option<broadcast::Sender<()>>,
 }
 
 /// A TCP connection with Encoder for writing.
@@ -53,10 +53,7 @@ impl SocketPool {
         let (global_shutdown, _) = broadcast::channel(4);
         let socket = Arc::new(socket);
 
-        // Per-socket shutdown for main socket
-        let (_socket_shutdown, _socket_shutdown_rx) = broadcast::channel(4);
         let mut shutdown_rx = global_shutdown.subscribe();
-        // Merge: listener will exit on either signal
         let socket_weak = Arc::downgrade(&socket);
         let data_tx_clone = data_tx.clone();
         let s = socket.clone();
@@ -67,7 +64,7 @@ impl SocketPool {
         let entry = UdpEntry {
             socket,
             role: SocketRole::Main,
-            _shutdown: _socket_shutdown,
+            _shutdown: None,
         };
 
         let pool = Self {
@@ -88,20 +85,17 @@ impl SocketPool {
 
         // Per-socket shutdown for this assistant socket
         let (socket_shutdown, mut socket_shutdown_rx) = broadcast::channel(4);
-        let mut global_rx = self.global_shutdown.subscribe();
         let data_tx = self.data_tx.clone();
         let s = socket.clone();
 
         tokio::spawn(async move {
             Self::run_udp_reader(s, socket_weak, data_tx, &mut socket_shutdown_rx).await;
-            // Also listen for global shutdown - but per-socket shutdown is enough
-            let _ = global_rx.recv().await;
         });
 
         let entry = UdpEntry {
             socket,
             role: SocketRole::Assistant,
-            _shutdown: socket_shutdown,
+            _shutdown: Some(socket_shutdown),
         };
 
         let mut sockets = self.udp_sockets.write().await;
