@@ -27,9 +27,7 @@ pub(crate) mod transport;
 
 pub use crate::route_table::Protocol;
 pub use codec::{BytesInitCodec, Decoder, Encoder, InitCodec, LengthPrefixedInitCodec};
-pub use config::{
-    Config, LoadBalance, Model, TcpConfig, UdpConfig, DEFAULT_ADDRESS_V4, DEFAULT_ADDRESS_V6,
-};
+pub use config::{Config, LoadBalance};
 pub use endpoint::{EndPoint, Received};
 pub use pool::Sender;
 pub use transport::Transport;

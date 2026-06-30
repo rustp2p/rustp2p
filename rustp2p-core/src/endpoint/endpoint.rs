@@ -208,6 +208,42 @@ impl EndPoint {
             public_tcp_port: 0,
         })
     }
+
+    /// Apply NAT model based on detected NAT type.
+    ///
+    /// - Symmetric NAT: Add assistant sockets up to configured limit
+    /// - Cone NAT: Clean all assistant sockets
+    pub async fn apply_nat_model(&self) -> io::Result<crate::nat::NatInfo> {
+        let nat_info = self.nat_info().await?;
+
+        match nat_info.nat_type {
+            crate::nat::NatType::Symmetric => {
+                let current = self.pool.assistant_count().await;
+                let target = self.config.max_assistant_sockets;
+                if target > current {
+                    log::info!(
+                        "Symmetric NAT detected, adding {} assistant sockets",
+                        target - current
+                    );
+                    for _ in current..target {
+                        let socket = crate::socket::bind_udp("0.0.0.0:0".parse().unwrap(), None)?;
+                        let std_socket: std::net::UdpSocket = socket.into();
+                        let tokio_socket = tokio::net::UdpSocket::from_std(std_socket)?;
+                        self.pool.add_assistant_udp(tokio_socket).await;
+                    }
+                }
+            }
+            crate::nat::NatType::Cone => {
+                let count = self.pool.assistant_count().await;
+                if count > 0 {
+                    log::info!("Cone NAT detected, cleaning {} assistant sockets", count);
+                    self.pool.clean_assistant_udp();
+                }
+            }
+        }
+
+        Ok(nat_info)
+    }
 }
 
 impl std::fmt::Debug for EndPoint {
