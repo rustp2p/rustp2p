@@ -261,13 +261,10 @@ impl ContextHandler {
                     .send(request.freeze().as_ref())
                     .await
                     .ok();
-                // Add direct route to peer
-                self.route_table
-                    .add_route(src_id, (RouteKey::from_transport(&received.transport), 0));
             }
             PUNCH_RES => {
                 log::info!("======================== PUNCH_RES ========================");
-                // Punch succeeded, add direct route (metric=0)
+                // Punch succeeded (bidirectional), add direct route (metric=0)
                 self.route_table
                     .add_route(src_id, (RouteKey::from_transport(&received.transport), 0));
             }

@@ -72,22 +72,6 @@ impl Transport {
         }
     }
 
-    /// Send data to a specific address through this transport's UDP socket.
-    pub async fn send_to(&self, data: &[u8], addr: SocketAddr) -> io::Result<()> {
-        match &self.inner {
-            TransportInner::Udp(weak) => {
-                let socket = weak
-                    .upgrade()
-                    .ok_or_else(|| io::Error::other("UDP socket dropped"))?;
-                socket.send_to(data, addr).await?;
-                Ok(())
-            }
-            TransportInner::Tcp(_) => {
-                Err(io::Error::other("send_to not supported for TCP transports"))
-            }
-        }
-    }
-
     /// Returns the protocol (UDP or TCP).
     pub fn protocol(&self) -> Protocol {
         match self.inner {
