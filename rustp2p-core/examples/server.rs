@@ -1,4 +1,5 @@
 use bytes::{BufMut, BytesMut};
+use clap::Parser;
 use env_logger::Env;
 use rust_p2p_core::endpoint::{Config, EndPoint, Sender};
 use rust_p2p_core::route_table::route_table::RouteTable;
@@ -28,11 +29,20 @@ pub const PUBLIC_ADDR_REQ: u32 = 7;
 pub const PUBLIC_ADDR_RES: u32 = 8;
 pub const MY_SERVER_ID: u32 = 0;
 
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Args {
+    /// Listen port
+    #[arg(short, long, default_value_t = 3000)]
+    port: u16,
+}
+
 #[tokio::main]
 async fn main() {
+    let args = Args::parse();
     env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
 
-    let mut ep = EndPoint::bind(Config::new().udp_port(3000).tcp_port(3000))
+    let mut ep = EndPoint::bind(Config::new().udp_port(args.port).tcp_port(args.port))
         .await
         .unwrap();
 

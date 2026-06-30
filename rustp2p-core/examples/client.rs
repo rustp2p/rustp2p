@@ -73,6 +73,7 @@ async fn main() {
 
     // Get NAT info
     let nat_info = Arc::new(Mutex::new(ep.nat_info().await.unwrap()));
+    log::info!("NAT info: {:?}", nat_info.lock());
 
     // Register with server (use main socket only)
     {
