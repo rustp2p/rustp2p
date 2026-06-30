@@ -32,5 +32,4 @@ pub use config::{
 };
 pub use endpoint::{EndPoint, Received};
 pub use pool::Sender;
-pub(crate) use pool::{SocketPool, TcpConnection};
 pub use transport::Transport;

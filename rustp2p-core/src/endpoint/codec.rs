@@ -2,7 +2,6 @@ use std::io;
 use std::net::SocketAddr;
 
 use async_trait::async_trait;
-use bytes::Buf;
 use dyn_clone::DynClone;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};

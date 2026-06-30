@@ -4,13 +4,11 @@ use std::net::{SocketAddr, SocketAddrV4};
 use std::sync::Arc;
 use std::time::Duration;
 
-use bytes::Bytes;
 use parking_lot::Mutex;
 use rand::seq::SliceRandom;
 use rand::Rng;
 
 use crate::endpoint::pool::SocketPool;
-use crate::endpoint::Config;
 use crate::nat::{NatInfo, NatType};
 
 pub use config::*;
@@ -174,7 +172,7 @@ impl Puncher {
         count: usize,
         buf: &[u8],
         peer_nat_info: &NatInfo,
-        punch_model: &PunchModel,
+        _punch_model: &PunchModel,
     ) {
         // Send to mapped addresses
         if !peer_nat_info.mapping_udp_addr.is_empty() {

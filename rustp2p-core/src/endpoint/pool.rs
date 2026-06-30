@@ -54,7 +54,7 @@ impl SocketPool {
         let socket = Arc::new(socket);
 
         // Per-socket shutdown for main socket
-        let (_socket_shutdown, socket_shutdown_rx) = broadcast::channel(4);
+        let (_socket_shutdown, _socket_shutdown_rx) = broadcast::channel(4);
         let mut shutdown_rx = global_shutdown.subscribe();
         // Merge: listener will exit on either signal
         let socket_weak = Arc::downgrade(&socket);

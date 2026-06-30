@@ -27,44 +27,6 @@ pub use route_table::Route;
 
 pub const DEFAULT_RTT: u32 = 9999;
 
-/// UDP socket index variants (internal use only).
-#[derive(Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash, Debug)]
-pub(crate) enum UDPIndex {
-    MainV4(usize),
-    MainV6(usize),
-    SubV4(usize),
-}
-
-impl UDPIndex {
-    pub(crate) fn index(&self) -> usize {
-        match self {
-            UDPIndex::MainV4(i) | UDPIndex::MainV6(i) | UDPIndex::SubV4(i) => *i,
-        }
-    }
-}
-
-/// Socket index identifying a specific socket (internal use only).
-#[non_exhaustive]
-#[derive(Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash, Debug)]
-pub(crate) enum Index {
-    Udp(UDPIndex),
-    Tcp(usize),
-}
-impl Index {
-    pub(crate) fn index(&self) -> usize {
-        match self {
-            Index::Udp(index) => index.index(),
-            Index::Tcp(index) => *index,
-        }
-    }
-    pub(crate) fn protocol(&self) -> Protocol {
-        match self {
-            Index::Tcp(_) => Protocol::TCP,
-            Index::Udp(_) => Protocol::UDP,
-        }
-    }
-}
-
 /// Identifies a specific route to a peer.
 ///
 /// `RouteKey` uniquely identifies a path by combining the

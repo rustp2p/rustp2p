@@ -172,6 +172,7 @@ struct ContextHandler {
     route_table: RouteTable<u32>,
     #[allow(dead_code)]
     server: SocketAddr,
+    #[allow(dead_code)]
     sender: Sender,
 }
 

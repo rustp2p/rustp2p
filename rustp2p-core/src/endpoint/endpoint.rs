@@ -8,8 +8,6 @@ use std::sync::Arc;
 use tokio::net::{TcpListener, UdpSocket};
 use tokio::sync::mpsc;
 
-use crate::endpoint::codec::InitCodec;
-
 /// A received message with data and source transport.
 pub struct Received {
     /// The received data (already framed for TCP).
