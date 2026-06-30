@@ -206,8 +206,8 @@ impl SocketPool {
         }
     }
 
-    /// Send data through the first main UDP socket to an address.
-    pub fn send_via_main(&self, buf: &[u8], addr: SocketAddr) -> io::Result<()> {
+    /// Send data to an address via the main UDP socket.
+    pub fn send_to(&self, buf: &[u8], addr: SocketAddr) -> io::Result<()> {
         let sockets = self.udp_sockets.blocking_read();
         let main_socket = sockets
             .iter()
@@ -269,7 +269,7 @@ impl SocketPool {
     }
 
     /// Get all UDP sockets.
-    pub async fn all_udp_sockets(&self) -> Vec<Arc<UdpSocket>> {
+    pub async fn udp_sockets(&self) -> Vec<Arc<UdpSocket>> {
         self.udp_sockets
             .read()
             .await
@@ -359,9 +359,9 @@ impl Sender {
         self.0.try_send_via_all(buf, addr);
     }
 
-    /// Send data through the first main UDP socket to an address.
-    pub fn send_via_main(&self, buf: &[u8], addr: SocketAddr) -> io::Result<()> {
-        self.0.send_via_main(buf, addr)
+    /// Send data to an address via the main UDP socket.
+    pub fn send_to(&self, buf: &[u8], addr: SocketAddr) -> io::Result<()> {
+        self.0.send_to(buf, addr)
     }
 
     /// Send data through ALL assistant UDP sockets to a specific address.
@@ -382,8 +382,8 @@ impl Sender {
     }
 
     /// Get all UDP sockets.
-    pub async fn all_udp_sockets(&self) -> Vec<Arc<UdpSocket>> {
-        self.0.all_udp_sockets().await
+    pub async fn udp_sockets(&self) -> Vec<Arc<UdpSocket>> {
+        self.0.udp_sockets().await
     }
 
     /// Get a UDP socket by index.

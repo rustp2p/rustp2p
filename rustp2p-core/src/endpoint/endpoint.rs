@@ -151,7 +151,7 @@ impl EndPoint {
     /// Get local UDP ports (for building NatInfo).
     pub async fn local_udp_ports(&self) -> Vec<u16> {
         self.pool
-            .all_udp_sockets()
+            .udp_sockets()
             .await
             .iter()
             .map(|s| s.local_addr().unwrap().port())

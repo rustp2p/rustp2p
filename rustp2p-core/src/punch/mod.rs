@@ -185,13 +185,13 @@ impl Puncher {
                 .copied()
                 .collect();
             for addr in &addrs {
-                let _ = self.pool.send_via_main(buf, *addr);
+                let _ = self.pool.send_to(buf, *addr);
             }
         }
         if !peer_nat_info.local_ipv4_addrs().is_empty() {
             let addrs = peer_nat_info.local_ipv4_addrs();
             for addr in &addrs {
-                let _ = self.pool.send_via_main(buf, *addr);
+                let _ = self.pool.send_to(buf, *addr);
             }
         }
 
