@@ -145,11 +145,11 @@ impl Puncher {
         pool: &SocketPool,
         buf: Option<&[u8]>,
         addr: SocketAddr,
-        _ttl: Option<u8>,
+        ttl: Option<u8>,
         timeout: Duration,
     ) {
         match tokio::time::timeout(timeout, async {
-            let stream = tokio::net::TcpStream::connect(addr).await?;
+            let stream = crate::socket::connect_tcp(addr, 0, None, ttl).await?;
             let _weak = pool
                 .add_tcp(stream, addr, &crate::endpoint::LengthPrefixedInitCodec)
                 .await;

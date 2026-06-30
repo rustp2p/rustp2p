@@ -125,6 +125,13 @@ impl SocketPool {
         let data_tx = self.data_tx.clone();
         let mut shutdown_rx = self.global_shutdown.subscribe();
 
+        // Create Arc<TcpConnection> first so we can get a real Weak reference
+        let conn = Arc::new(TcpConnection {
+            peer_addr,
+            write_tx,
+        });
+        let conn_weak = Arc::downgrade(&conn);
+
         // Read loop using Decoder
         tokio::spawn(async move {
             let mut read = read_half;
@@ -135,7 +142,7 @@ impl SocketPool {
                         match result {
                             Ok(len) => {
                                 let data = Bytes::copy_from_slice(&data_buf[..len]);
-                                let route = super::transport::Transport::tcp(Weak::new(), peer_addr);
+                                let route = super::transport::Transport::tcp(conn_weak.clone(), peer_addr);
                                 let _ = data_tx.send((route, data)).await;
                             }
                             Err(e) => {
@@ -180,10 +187,6 @@ impl SocketPool {
             }
         });
 
-        let conn = Arc::new(TcpConnection {
-            peer_addr,
-            write_tx,
-        });
         let weak = Arc::downgrade(&conn);
         let mut conns = self.tcp_conns.write().await;
         conns.push(conn);
