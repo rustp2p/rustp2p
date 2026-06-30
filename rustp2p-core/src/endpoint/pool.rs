@@ -230,6 +230,11 @@ impl SocketPool {
         let _ = self.global_shutdown.send(());
     }
 
+    /// Get a shutdown receiver to listen for shutdown signals.
+    pub fn shutdown_rx(&self) -> broadcast::Receiver<()> {
+        self.global_shutdown.subscribe()
+    }
+
     /// Get local address of first UDP socket.
     pub async fn local_addr(&self) -> io::Result<SocketAddr> {
         self.udp_sockets

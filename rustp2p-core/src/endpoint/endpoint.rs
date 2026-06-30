@@ -85,17 +85,26 @@ impl EndPoint {
         // Start TCP accept loop
         if let Some(listener) = tcp_listener {
             let pool = ep.pool.clone();
+            let mut shutdown_rx = pool.shutdown_rx();
             tokio::spawn(async move {
                 loop {
-                    match listener.accept().await {
-                        Ok((stream, peer_addr)) => {
-                            log::debug!("TCP connection from {peer_addr}");
-                            if let Err(e) = pool.add_tcp(stream, peer_addr, codec.as_ref()).await {
-                                log::warn!("TCP setup error: {e}");
+                    tokio::select! {
+                        result = listener.accept() => {
+                            match result {
+                                Ok((stream, peer_addr)) => {
+                                    log::debug!("TCP connection from {peer_addr}");
+                                    if let Err(e) = pool.add_tcp(stream, peer_addr, codec.as_ref()).await {
+                                        log::warn!("TCP setup error: {e}");
+                                    }
+                                }
+                                Err(e) => {
+                                    log::warn!("TCP accept error: {e}");
+                                }
                             }
                         }
-                        Err(e) => {
-                            log::warn!("TCP accept error: {e}");
+                        _ = shutdown_rx.recv() => {
+                            log::debug!("TCP accept loop shutting down");
+                            break;
                         }
                     }
                 }
@@ -204,5 +213,11 @@ impl EndPoint {
 impl std::fmt::Debug for EndPoint {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("EndPoint").finish_non_exhaustive()
+    }
+}
+
+impl Drop for EndPoint {
+    fn drop(&mut self) {
+        self.pool.shutdown();
     }
 }
