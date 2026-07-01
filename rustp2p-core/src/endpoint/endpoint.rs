@@ -39,6 +39,7 @@ pub struct EndPoint {
     pool: Arc<SocketPool>,
     data_rx: mpsc::Receiver<(Transport, Bytes)>,
     config: Config,
+    local_tcp_port: u16,
 }
 
 impl EndPoint {
@@ -67,6 +68,12 @@ impl EndPoint {
             None
         };
 
+        let local_tcp_port = tcp_listener
+            .as_ref()
+            .and_then(|l| l.local_addr().ok())
+            .map(|a| a.port())
+            .unwrap_or(0);
+
         let (pool, data_rx) = match pool_opt {
             Some(p) => (p, data_rx_opt.unwrap()),
             None => {
@@ -80,6 +87,7 @@ impl EndPoint {
             pool,
             data_rx,
             config,
+            local_tcp_port,
         };
 
         // Start TCP accept loop
@@ -123,6 +131,7 @@ impl EndPoint {
             pool: Arc::new(pool),
             data_rx,
             config: Config::default(),
+            local_tcp_port: 0,
         })
     }
 
@@ -167,9 +176,9 @@ impl EndPoint {
             .collect()
     }
 
-    /// Get local TCP port from config.
+    /// Get local TCP port (the actual bound port, not config value).
     pub fn local_tcp_port(&self) -> u16 {
-        self.config.tcp_port.unwrap_or(0)
+        self.local_tcp_port
     }
 
     /// Get NAT information using configured STUN servers.
