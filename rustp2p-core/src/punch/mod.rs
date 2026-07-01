@@ -150,9 +150,7 @@ impl Puncher {
     ) {
         match tokio::time::timeout(timeout, async {
             let stream = crate::socket::connect_tcp(addr, 0, None, ttl).await?;
-            let weak = pool
-                .add_tcp(stream, addr, &crate::endpoint::LengthPrefixedInitCodec)
-                .await?;
+            let weak = pool.add_tcp(stream, addr).await?;
             if let Some(data) = buf {
                 if let Some(conn) = weak.upgrade() {
                     let _ = conn.send(data).await;

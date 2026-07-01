@@ -44,13 +44,18 @@ pub struct EndPoint {
 impl EndPoint {
     /// Binds an endpoint with the given configuration.
     pub async fn bind(mut config: Config) -> io::Result<Self> {
+        let codec: Box<dyn crate::endpoint::codec::InitCodec> = config
+            .tcp_codec
+            .take()
+            .unwrap_or_else(|| Box::new(crate::endpoint::codec::LengthPrefixedInitCodec));
+
         let mut pool_opt = None;
         let mut data_rx_opt = None;
 
         if let Some(port) = config.udp_port {
             let addr = format!("0.0.0.0:{port}");
             let socket = UdpSocket::bind(&addr).await?;
-            let (pool, data_rx) = SocketPool::new(socket);
+            let (pool, data_rx) = SocketPool::new(socket, codec.clone());
             pool_opt = Some(Arc::new(pool));
             data_rx_opt = Some(data_rx);
         }
@@ -66,15 +71,10 @@ impl EndPoint {
             Some(p) => (p, data_rx_opt.unwrap()),
             None => {
                 let socket = UdpSocket::bind("0.0.0.0:0").await?;
-                let (pool, data_rx) = SocketPool::new(socket);
+                let (pool, data_rx) = SocketPool::new(socket, codec.clone());
                 (Arc::new(pool), data_rx)
             }
         };
-
-        let codec: Box<dyn crate::endpoint::codec::InitCodec> = config
-            .tcp_codec
-            .take()
-            .unwrap_or_else(|| Box::new(crate::endpoint::codec::LengthPrefixedInitCodec));
 
         let ep = Self {
             pool,
@@ -93,7 +93,7 @@ impl EndPoint {
                             match result {
                                 Ok((stream, peer_addr)) => {
                                     log::debug!("TCP connection from {peer_addr}");
-                                    if let Err(e) = pool.add_tcp(stream, peer_addr, codec.as_ref()).await {
+                                    if let Err(e) = pool.add_tcp(stream, peer_addr).await {
                                         log::warn!("TCP setup error: {e}");
                                     }
                                 }
@@ -116,7 +116,9 @@ impl EndPoint {
 
     /// Creates an endpoint from an existing UDP socket.
     pub async fn from_socket(socket: UdpSocket) -> io::Result<Self> {
-        let (pool, data_rx) = SocketPool::new(socket);
+        let codec: Box<dyn crate::endpoint::codec::InitCodec> =
+            Box::new(crate::endpoint::codec::LengthPrefixedInitCodec);
+        let (pool, data_rx) = SocketPool::new(socket, codec);
         Ok(Self {
             pool: Arc::new(pool),
             data_rx,
@@ -165,13 +167,9 @@ impl EndPoint {
             .collect()
     }
 
-    /// Get local TCP port.
-    pub async fn local_tcp_port(&self) -> u16 {
-        self.pool
-            .last_tcp()
-            .await
-            .map(|c| c.peer_addr.port())
-            .unwrap_or(0)
+    /// Get local TCP port from config.
+    pub fn local_tcp_port(&self) -> u16 {
+        self.config.tcp_port.unwrap_or(0)
     }
 
     /// Get NAT information using configured STUN servers.
@@ -197,7 +195,7 @@ impl EndPoint {
             .unwrap_or(std::net::Ipv4Addr::UNSPECIFIED);
 
         let local_udp_ports = self.local_udp_ports().await;
-        let local_tcp_port = self.local_tcp_port().await;
+        let local_tcp_port = self.local_tcp_port();
 
         let mut public_udp_ports = local_udp_ports.clone();
         public_udp_ports.fill(0);

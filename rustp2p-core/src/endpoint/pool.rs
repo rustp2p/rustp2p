@@ -1,4 +1,5 @@
 use bytes::Bytes;
+use std::collections::HashMap;
 use std::io;
 use std::net::SocketAddr;
 use std::sync::{Arc, Weak};
@@ -40,15 +41,20 @@ impl TcpConnection {
 /// A shared pool of sockets. Owns all Arcs.
 pub struct SocketPool {
     udp_sockets: RwLock<Vec<UdpEntry>>,
-    tcp_conns: RwLock<Vec<Arc<TcpConnection>>>,
+    tcp_conns: RwLock<HashMap<SocketAddr, Arc<TcpConnection>>>,
     data_tx: mpsc::Sender<(super::transport::Transport, Bytes)>,
     /// Global shutdown - kills ALL tasks (main + sub)
     global_shutdown: broadcast::Sender<()>,
+    init_codec: Box<dyn InitCodec>,
+    connect_lock: tokio::sync::Mutex<()>,
 }
 
 impl SocketPool {
     /// Create a pool from a UDP socket.
-    pub fn new(socket: UdpSocket) -> (Self, mpsc::Receiver<(super::transport::Transport, Bytes)>) {
+    pub fn new(
+        socket: UdpSocket,
+        init_codec: Box<dyn InitCodec>,
+    ) -> (Self, mpsc::Receiver<(super::transport::Transport, Bytes)>) {
         let (data_tx, data_rx) = mpsc::channel(512);
         let (global_shutdown, _) = broadcast::channel(4);
         let socket = Arc::new(socket);
@@ -69,9 +75,11 @@ impl SocketPool {
 
         let pool = Self {
             udp_sockets: RwLock::new(vec![entry]),
-            tcp_conns: RwLock::new(Vec::new()),
+            tcp_conns: RwLock::new(HashMap::new()),
             data_tx,
             global_shutdown,
+            init_codec,
+            connect_lock: tokio::sync::Mutex::new(()),
         };
         (pool, data_rx)
     }
@@ -112,10 +120,9 @@ impl SocketPool {
         sockets.retain(|e| e.role == SocketRole::Main);
     }
 
-    /// Remove a TCP connection from the pool by its Weak reference.
-    pub(crate) async fn remove_tcp(&self, weak: &Weak<TcpConnection>) {
-        let mut conns = self.tcp_conns.write().await;
-        conns.retain(|c| !Weak::ptr_eq(&Arc::downgrade(c), weak));
+    /// Remove a TCP connection from the pool by peer address.
+    pub(crate) async fn remove_tcp(&self, addr: SocketAddr) {
+        self.tcp_conns.write().await.remove(&addr);
     }
 
     /// Add a TCP connection with Decoder/Encoder.
@@ -123,10 +130,9 @@ impl SocketPool {
         self: &Arc<Self>,
         stream: tokio::net::TcpStream,
         peer_addr: SocketAddr,
-        init_codec: &dyn InitCodec,
     ) -> io::Result<Weak<TcpConnection>> {
         let (read_half, mut write_half) = stream.into_split();
-        let (mut decoder, _encoder) = init_codec.codec(peer_addr)?;
+        let (mut decoder, _encoder) = self.init_codec.codec(peer_addr)?;
         let (write_tx, mut write_rx) = mpsc::channel::<Vec<u8>>(64);
         let data_tx = self.data_tx.clone();
         let mut shutdown_rx = self.global_shutdown.subscribe();
@@ -167,12 +173,11 @@ impl SocketPool {
                     }
                 }
             }
-            pool_for_read.remove_tcp(&conn_weak_for_read).await;
+            pool_for_read.remove_tcp(peer_addr).await;
         });
 
         // Write loop using Encoder
         let pool_for_write = self.clone();
-        let conn_weak_for_write = conn_weak.clone();
         let mut shutdown_rx = self.global_shutdown.subscribe();
         let enc = Arc::new(tokio::sync::Mutex::new(_encoder));
         tokio::spawn(async move {
@@ -196,12 +201,11 @@ impl SocketPool {
                     }
                 }
             }
-            pool_for_write.remove_tcp(&conn_weak_for_write).await;
+            pool_for_write.remove_tcp(peer_addr).await;
         });
 
         let weak = Arc::downgrade(&conn);
-        let mut conns = self.tcp_conns.write().await;
-        conns.push(conn);
+        self.tcp_conns.write().await.insert(peer_addr, conn);
         Ok(weak)
     }
 
@@ -258,19 +262,32 @@ impl SocketPool {
             .local_addr()
     }
 
-    /// Get the last TCP connection.
-    pub async fn last_tcp(&self) -> Option<Arc<TcpConnection>> {
-        self.tcp_conns.read().await.last().cloned()
+    /// Find a TCP connection by peer address.
+    pub async fn find_tcp(&self, addr: SocketAddr) -> Option<Arc<TcpConnection>> {
+        self.tcp_conns.read().await.get(&addr).cloned()
     }
 
-    /// Get a TCP connection by index.
-    pub async fn tcp_connection(&self, index: usize) -> Option<Arc<TcpConnection>> {
-        self.tcp_conns.read().await.get(index).cloned()
+    /// Get or create a TCP connection to the given address (with concurrency protection).
+    pub async fn connect_tcp_internal(
+        self: &Arc<Self>,
+        addr: SocketAddr,
+    ) -> io::Result<Arc<TcpConnection>> {
+        if let Some(conn) = self.find_tcp(addr).await {
+            return Ok(conn);
+        }
+        let _guard = self.connect_lock.lock().await;
+        if let Some(conn) = self.find_tcp(addr).await {
+            return Ok(conn);
+        }
+        let stream = crate::socket::connect_tcp(addr, 0, None, None).await?;
+        let weak = self.add_tcp(stream, addr).await?;
+        weak.upgrade()
+            .ok_or_else(|| io::Error::other("connection dropped immediately"))
     }
 
     /// Get all TCP connections.
     pub async fn tcp_connections(&self) -> Vec<Arc<TcpConnection>> {
-        self.tcp_conns.read().await.clone()
+        self.tcp_conns.read().await.values().cloned().collect()
     }
 
     /// Get a UDP socket by index.
@@ -415,18 +432,29 @@ impl Sender {
         self.0.udp_socket(index).await
     }
 
-    /// Get the last TCP connection.
-    pub async fn last_tcp(&self) -> Option<Arc<TcpConnection>> {
-        self.0.last_tcp().await
-    }
-
-    /// Get a TCP connection by index.
-    pub async fn tcp_connection(&self, index: usize) -> Option<Arc<TcpConnection>> {
-        self.0.tcp_connection(index).await
+    /// Find a TCP connection by peer address.
+    pub async fn find_tcp(&self, addr: SocketAddr) -> Option<Arc<TcpConnection>> {
+        self.0.find_tcp(addr).await
     }
 
     /// Get all TCP connections.
     pub async fn tcp_connections(&self) -> Vec<Arc<TcpConnection>> {
         self.0.tcp_connections().await
+    }
+
+    // === TCP connection methods ===
+
+    /// Establish a TCP connection to the given address.
+    /// If a connection already exists, returns immediately.
+    pub async fn connect(&self, addr: SocketAddr) -> io::Result<()> {
+        self.0.connect_tcp_internal(addr).await?;
+        Ok(())
+    }
+
+    /// Send data to the given address via TCP.
+    /// Automatically establishes a connection if none exists.
+    pub async fn write_to(&self, data: &[u8], addr: SocketAddr) -> io::Result<()> {
+        let conn = self.0.connect_tcp_internal(addr).await?;
+        conn.send(data).await
     }
 }
