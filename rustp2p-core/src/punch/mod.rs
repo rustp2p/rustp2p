@@ -142,7 +142,7 @@ impl Puncher {
     }
 
     async fn connect_tcp(
-        pool: &SocketPool,
+        pool: &Arc<SocketPool>,
         buf: Option<&[u8]>,
         addr: SocketAddr,
         ttl: Option<u8>,

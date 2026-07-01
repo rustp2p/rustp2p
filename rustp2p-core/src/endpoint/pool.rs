@@ -112,9 +112,15 @@ impl SocketPool {
         sockets.retain(|e| e.role == SocketRole::Main);
     }
 
+    /// Remove a TCP connection from the pool by its Weak reference.
+    pub(crate) async fn remove_tcp(&self, weak: &Weak<TcpConnection>) {
+        let mut conns = self.tcp_conns.write().await;
+        conns.retain(|c| !Weak::ptr_eq(&Arc::downgrade(c), weak));
+    }
+
     /// Add a TCP connection with Decoder/Encoder.
     pub async fn add_tcp(
-        &self,
+        self: &Arc<Self>,
         stream: tokio::net::TcpStream,
         peer_addr: SocketAddr,
         init_codec: &dyn InitCodec,
@@ -133,6 +139,8 @@ impl SocketPool {
         let conn_weak = Arc::downgrade(&conn);
 
         // Read loop using Decoder
+        let pool_for_read = self.clone();
+        let conn_weak_for_read = conn_weak.clone();
         tokio::spawn(async move {
             let mut read = read_half;
             let mut data_buf = vec![0u8; 65536];
@@ -142,7 +150,7 @@ impl SocketPool {
                         match result {
                             Ok(len) => {
                                 let data = Bytes::copy_from_slice(&data_buf[..len]);
-                                let route = super::transport::Transport::tcp(conn_weak.clone(), peer_addr);
+                                let route = super::transport::Transport::tcp(conn_weak_for_read.clone(), peer_addr);
                                 let _ = data_tx.send((route, data)).await;
                             }
                             Err(e) => {
@@ -159,9 +167,12 @@ impl SocketPool {
                     }
                 }
             }
+            pool_for_read.remove_tcp(&conn_weak_for_read).await;
         });
 
         // Write loop using Encoder
+        let pool_for_write = self.clone();
+        let conn_weak_for_write = conn_weak.clone();
         let mut shutdown_rx = self.global_shutdown.subscribe();
         let enc = Arc::new(tokio::sync::Mutex::new(_encoder));
         tokio::spawn(async move {
@@ -185,6 +196,7 @@ impl SocketPool {
                     }
                 }
             }
+            pool_for_write.remove_tcp(&conn_weak_for_write).await;
         });
 
         let weak = Arc::downgrade(&conn);
