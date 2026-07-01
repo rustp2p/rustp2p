@@ -176,17 +176,12 @@ impl EndPoint {
 
     /// Get NAT information using configured STUN servers.
     ///
-    /// Uses the main UDP socket and stun servers to detect NAT type and public addresses.
+    /// Uses the stun servers from Config to detect NAT type and public addresses.
     pub async fn nat_info(&self) -> io::Result<crate::nat::NatInfo> {
         let stun_servers = self.config.stun_servers.clone();
         let default_interface = self.config.default_interface.as_ref();
 
-        // Use the main UDP socket for STUN testing to get accurate public port
-        let stun_result = if let Some(socket) = self.pool.main_socket().await {
-            crate::stun::stun_test_nat_with_socket(&socket, stun_servers).await?
-        } else {
-            crate::stun::stun_test_nat(stun_servers, default_interface).await?
-        };
+        let stun_result = crate::stun::stun_test_nat(stun_servers, default_interface).await?;
 
         log::debug!(
             "nat_type:{:?},public_ipv4:{:?},public_ipv6:{:?},public_udp_ports:{:?},port_range:{}",
