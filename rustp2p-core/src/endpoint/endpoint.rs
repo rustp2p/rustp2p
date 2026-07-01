@@ -199,16 +199,19 @@ impl EndPoint {
         let local_udp_ports = self.local_udp_ports().await;
         let local_tcp_port = self.local_tcp_port().await;
 
+        let mut public_udp_ports = local_udp_ports.clone();
+        public_udp_ports.fill(0);
+
         Ok(crate::nat::NatInfo {
             nat_type: stun_result.nat_type,
             public_ips: stun_result.public_ipv4,
-            public_udp_ports: stun_result.public_udp_ports,
+            public_udp_ports,
             mapping_tcp_addr: self.config.mapping_tcp_addr.clone(),
             mapping_udp_addr: self.config.mapping_udp_addr.clone(),
             public_port_range: stun_result.port_range,
             local_ipv4,
             local_ipv4s: vec![],
-            ipv6: stun_result.public_ipv6,
+            ipv6: None,
             local_udp_ports,
             local_tcp_port,
             public_tcp_port: 0,
