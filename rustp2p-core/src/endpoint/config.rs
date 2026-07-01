@@ -1,3 +1,4 @@
+use std::net::SocketAddr;
 use std::time::Duration;
 
 use crate::endpoint::codec::InitCodec;
@@ -21,6 +22,8 @@ pub struct Config {
     pub(crate) load_balance: LoadBalance,
     pub(crate) route_idle_timeout: Duration,
     pub(crate) max_assistant_sockets: usize,
+    pub(crate) mapping_tcp_addr: Vec<SocketAddr>,
+    pub(crate) mapping_udp_addr: Vec<SocketAddr>,
 }
 
 impl Default for Config {
@@ -36,6 +39,8 @@ impl Default for Config {
             load_balance: LoadBalance::MinHopLowestLatency,
             route_idle_timeout: Duration::from_secs(12),
             max_assistant_sockets: 0,
+            mapping_tcp_addr: vec![],
+            mapping_udp_addr: vec![],
         }
     }
 }
@@ -93,6 +98,16 @@ impl Config {
 
     pub fn max_assistant_sockets(mut self, max: usize) -> Self {
         self.max_assistant_sockets = max;
+        self
+    }
+
+    pub fn mapping_tcp_addr(mut self, addrs: Vec<SocketAddr>) -> Self {
+        self.mapping_tcp_addr = addrs;
+        self
+    }
+
+    pub fn mapping_udp_addr(mut self, addrs: Vec<SocketAddr>) -> Self {
+        self.mapping_udp_addr = addrs;
         self
     }
 }
