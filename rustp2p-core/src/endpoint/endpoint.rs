@@ -176,12 +176,26 @@ impl EndPoint {
 
     /// Get NAT information using configured STUN servers.
     ///
-    /// Uses the stun servers from Config to detect NAT type and public addresses.
+    /// Uses the main UDP socket and stun servers to detect NAT type and public addresses.
     pub async fn nat_info(&self) -> io::Result<crate::nat::NatInfo> {
         let stun_servers = self.config.stun_servers.clone();
-        let (nat_type, public_ips, port_range) =
-            crate::stun::stun_test_nat(stun_servers, None).await?;
-        log::info!("nat_type:{nat_type:?},public_ips:{public_ips:?},port_range={port_range}");
+        let default_interface = self.config.default_interface.as_ref();
+
+        // Use the main UDP socket for STUN testing to get accurate public port
+        let stun_result = if let Some(socket) = self.pool.main_socket().await {
+            crate::stun::stun_test_nat_with_socket(&socket, stun_servers).await?
+        } else {
+            crate::stun::stun_test_nat(stun_servers, default_interface).await?
+        };
+
+        log::debug!(
+            "nat_type:{:?},public_ipv4:{:?},public_ipv6:{:?},public_udp_ports:{:?},port_range:{}",
+            stun_result.nat_type,
+            stun_result.public_ipv4,
+            stun_result.public_ipv6,
+            stun_result.public_udp_ports,
+            stun_result.port_range
+        );
 
         let local_ipv4 = crate::util::addr::local_ipv4()
             .await
@@ -190,19 +204,16 @@ impl EndPoint {
         let local_udp_ports = self.local_udp_ports().await;
         let local_tcp_port = self.local_tcp_port().await;
 
-        let mut public_ports = local_udp_ports.clone();
-        public_ports.fill(0);
-
         Ok(crate::nat::NatInfo {
-            nat_type,
-            public_ips,
-            public_udp_ports: public_ports,
+            nat_type: stun_result.nat_type,
+            public_ips: stun_result.public_ipv4,
+            public_udp_ports: stun_result.public_udp_ports,
             mapping_tcp_addr: self.config.mapping_tcp_addr.clone(),
             mapping_udp_addr: self.config.mapping_udp_addr.clone(),
-            public_port_range: port_range,
+            public_port_range: stun_result.port_range,
             local_ipv4,
             local_ipv4s: vec![],
-            ipv6: None,
+            ipv6: stun_result.public_ipv6,
             local_udp_ports,
             local_tcp_port,
             public_tcp_port: 0,

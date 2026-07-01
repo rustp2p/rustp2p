@@ -2,6 +2,7 @@ use std::net::SocketAddr;
 use std::time::Duration;
 
 use crate::endpoint::codec::InitCodec;
+use crate::socket::LocalInterface;
 
 /// Load balance strategy for route selection.
 #[derive(Clone, Copy, Eq, PartialEq, Debug, Default)]
@@ -24,6 +25,7 @@ pub struct Config {
     pub(crate) max_assistant_sockets: usize,
     pub(crate) mapping_tcp_addr: Vec<SocketAddr>,
     pub(crate) mapping_udp_addr: Vec<SocketAddr>,
+    pub(crate) default_interface: Option<LocalInterface>,
 }
 
 impl Default for Config {
@@ -41,6 +43,7 @@ impl Default for Config {
             max_assistant_sockets: 0,
             mapping_tcp_addr: vec![],
             mapping_udp_addr: vec![],
+            default_interface: None,
         }
     }
 }
@@ -108,6 +111,11 @@ impl Config {
 
     pub fn mapping_udp_addr(mut self, addrs: Vec<SocketAddr>) -> Self {
         self.mapping_udp_addr = addrs;
+        self
+    }
+
+    pub fn default_interface(mut self, interface: LocalInterface) -> Self {
+        self.default_interface = Some(interface);
         self
     }
 }

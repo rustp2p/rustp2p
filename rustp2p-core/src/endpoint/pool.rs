@@ -290,6 +290,16 @@ impl SocketPool {
             .count()
     }
 
+    /// Get the main UDP socket.
+    pub async fn main_socket(&self) -> Option<Arc<UdpSocket>> {
+        self.udp_sockets
+            .read()
+            .await
+            .iter()
+            .find(|e| e.role == SocketRole::Main)
+            .map(|e| e.socket.clone())
+    }
+
     async fn run_udp_reader(
         socket: Arc<UdpSocket>,
         weak: Weak<UdpSocket>,

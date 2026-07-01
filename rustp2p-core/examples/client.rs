@@ -47,6 +47,8 @@ struct Args {
     server: SocketAddr,
     #[arg(short, long)]
     id: u32,
+    #[arg(short = 'P', long, default_value_t = 0)]
+    port: u16,
 }
 
 #[tokio::main]
@@ -55,15 +57,21 @@ async fn main() {
         server,
         id: my_id,
         tcp: _,
+        port,
     } = Args::parse();
     env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
-    log::info!("my_id:{my_id},server:{server}");
+    log::info!("my_id:{my_id},server:{server},port:{port}");
 
-    let mut ep = EndPoint::bind(Config::new().udp_port(0).tcp_port(0).stun_servers(vec![
-        "stun.miwifi.com:3478".to_string(),
-        "stun.chat.bilibili.com:3478".to_string(),
-        "stun.hitv.com:3478".to_string(),
-    ]))
+    let mut ep = EndPoint::bind(
+        Config::new()
+            .udp_port(port)
+            .tcp_port(port)
+            .stun_servers(vec![
+                "stun.miwifi.com:3478".to_string(),
+                "stun.chat.bilibili.com:3478".to_string(),
+                "stun.hitv.com:3478".to_string(),
+            ]),
+    )
     .await
     .unwrap();
     let sender = ep.sender();
