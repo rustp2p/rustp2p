@@ -229,20 +229,28 @@ pub struct RouteEntry {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct TimestampPayload {
-    pub millis: u64,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct PunchPayload {
-    pub peer: PeerInfo,
-    pub nat_info: Option<rust_p2p_core::nat::NatInfo>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct StreamHeader {
     pub src: PeerId,
     pub dest: PeerId,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum StreamFrame {
+    User(StreamHeader),
+    HelloRequest { src: PeerId },
+    HelloReply(HelloPayload),
+    RouteQuery { src: PeerId },
+    RouteReply(RouteReplyPayload),
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum DatagramFrame {
+    User {
+        id: u64,
+        src: PeerId,
+        dest: PeerId,
+        payload: Vec<u8>,
+    },
 }
 
 pub fn now_millis() -> u64 {

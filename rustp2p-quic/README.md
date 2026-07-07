@@ -17,6 +17,8 @@ between `A` and `C`. Reliable traffic is still end-to-end QUIC:
 - `B` forwards QUIC UDP datagrams inside rustp2p overlay relay packets.
 - `B` does not terminate QUIC streams.
 - `B` cannot read reliable stream payloads.
+- High-level user messages, discovery, route sync, and streams all run over QUIC.
+- Bare UDP overlay packets only carry relayed QUIC ciphertext.
 
 There is no group concept in `rustp2p-quic`. A discovered peer can relay for any other reachable
 peer.
@@ -98,6 +100,10 @@ let msg = endpoint.recv().await?;
 println!("from={} {:?}", msg.src, msg.payload);
 ```
 
+`send_to` uses QUIC application datagrams. The implementation sends a small number of duplicate
+datagram envelopes with a message id and deduplicates on receive, so normal local and LAN usage is
+stable while preserving datagram semantics at the transport layer.
+
 ### Open a reliable bidirectional stream
 
 ```rust
@@ -131,7 +137,7 @@ For request/response protocols, prefer explicit framing such as a length-prefixe
 
 ### Discovery
 
-Nodes exchange known peers through `Hello` and `IDRouteQuery/IDRouteReply`.
+Nodes exchange known peers through QUIC control streams (`Hello`, `RouteQuery`, and `RouteReply`).
 
 For a chain like:
 

@@ -12,6 +12,7 @@ async fn node(id: &str) -> Endpoint {
     Endpoint::builder()
         .identity(Identity::new(id, format!("{id}-seed")).unwrap())
         .bind(loopback())
+        .stun_servers(Vec::new())
         .build()
         .await
         .unwrap()
@@ -29,6 +30,13 @@ async fn wait_for_peer(endpoint: &Endpoint, peer_id: &str) {
     })
     .await
     .unwrap();
+}
+
+async fn close_all(nodes: &[&Endpoint]) {
+    for node in nodes {
+        node.close().await;
+    }
+    tokio::time::sleep(Duration::from_millis(20)).await;
 }
 
 #[tokio::test]
@@ -49,6 +57,7 @@ async fn bootstrap_addr_discovers_peer_id_then_datagram_uses_peer_id_only() {
     assert_eq!(msg.src, a.peer_id());
     assert_eq!(msg.dest, b.peer_id());
     assert_eq!(msg.payload.as_ref(), b"hello");
+    close_all(&[&a, &b]).await;
 }
 
 #[tokio::test]
@@ -73,6 +82,7 @@ async fn direct_reliable_stream_returns_source_info() {
     let mut buf = [0u8; 32];
     let n = inbound.recv.read(&mut buf).await.unwrap().unwrap();
     assert_eq!(&buf[..n], b"secret");
+    close_all(&[&a, &b]).await;
 }
 
 #[tokio::test]
@@ -117,6 +127,7 @@ async fn three_nodes_discover_and_relay_by_peer_id_only() {
         relay_stream.is_err(),
         "relay must not terminate the QUIC stream"
     );
+    close_all(&[&a, &b, &c]).await;
 }
 
 #[tokio::test]
@@ -143,6 +154,7 @@ async fn four_node_chain_discovers_tail_peer() {
         .unwrap();
     assert_eq!(msg.src, a.peer_id());
     assert_eq!(msg.payload.as_ref(), b"hello d");
+    close_all(&[&a, &b, &c, &d]).await;
 }
 
 #[derive(Debug)]
@@ -165,16 +177,61 @@ impl CertificateVerifier for RejectVerifier {
 
 #[tokio::test]
 #[serial]
-async fn custom_certificate_verifier_can_reject_reliable_connection() {
+async fn custom_certificate_verifier_can_reject_bootstrap_server_cert() {
     let a = Endpoint::builder()
         .identity(Identity::new("verify-a", "verify-a-seed").unwrap())
         .certificate_verifier(Arc::new(RejectVerifier))
         .bind(loopback())
+        .stun_servers(Vec::new())
         .build()
         .await
         .unwrap();
     let b = node("verify-b").await;
 
-    a.add_bootstrap(b.local_addr().unwrap()).await.unwrap();
-    assert!(a.open_bi(b.peer_id()).await.is_err());
+    assert!(a.add_bootstrap(b.local_addr().unwrap()).await.is_err());
+    close_all(&[&a, &b]).await;
+}
+
+#[derive(Debug)]
+struct RejectClientVerifier;
+
+impl CertificateVerifier for RejectClientVerifier {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &rustls::pki_types::CertificateDer<'_>,
+        _intermediates: &[rustls::pki_types::CertificateDer<'_>],
+        _server_name: &rustls::pki_types::ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: rustls::pki_types::UnixTime,
+    ) -> Result<(), rustls::Error> {
+        Ok(())
+    }
+
+    fn verify_client_cert(
+        &self,
+        _end_entity: &rustls::pki_types::CertificateDer<'_>,
+        _intermediates: &[rustls::pki_types::CertificateDer<'_>],
+        _now: rustls::pki_types::UnixTime,
+    ) -> Result<(), rustls::Error> {
+        Err(rustls::Error::General(
+            "client rejected by test verifier".to_string(),
+        ))
+    }
+}
+
+#[tokio::test]
+#[serial]
+async fn custom_certificate_verifier_can_reject_client_cert() {
+    let a = node("verify-client-a").await;
+    let b = Endpoint::builder()
+        .identity(Identity::new("verify-client-b", "verify-client-b-seed").unwrap())
+        .certificate_verifier(Arc::new(RejectClientVerifier))
+        .bind(loopback())
+        .stun_servers(Vec::new())
+        .build()
+        .await
+        .unwrap();
+
+    assert!(a.add_bootstrap(b.local_addr().unwrap()).await.is_err());
+    close_all(&[&a, &b]).await;
 }
