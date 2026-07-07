@@ -1,4 +1,4 @@
-use rustp2p_quic::{Endpoint, Identity, PeerId};
+use rustp2p_quic::{Endpoint, Identity, PeerId, ReliableRecvStream, ReliableSendStream};
 use std::env;
 use std::io;
 use std::net::SocketAddr;
@@ -53,7 +53,7 @@ async fn main() -> rustp2p_quic::Result<()> {
             match stream_endpoint.accept_bi().await {
                 Ok(mut stream) => {
                     tokio::spawn(async move {
-                        match stream.recv.read_to_end(1024 * 1024).await {
+                        match read_frame(&mut stream.recv, 1024 * 1024).await {
                             Ok(data) => {
                                 println!(
                                     "[stream] from={} relay={} {}",
@@ -61,8 +61,9 @@ async fn main() -> rustp2p_quic::Result<()> {
                                     stream.is_relay,
                                     String::from_utf8_lossy(&data)
                                 );
-                                let _ = stream.send.write_all(b"echo: ").await;
-                                let _ = stream.send.write_all(&data).await;
+                                let mut response = b"echo: ".to_vec();
+                                response.extend_from_slice(&data);
+                                let _ = write_frame(&mut stream.send, &response).await;
                                 let _ = stream.send.finish();
                             }
                             Err(e) => eprintln!("read stream failed: {e}"),
@@ -129,9 +130,9 @@ async fn handle_command(endpoint: &Endpoint, line: &str) -> rustp2p_quic::Result
                 .next()
                 .ok_or_else(|| invalid("usage: stream <peer_id> <message>"))?;
             let (mut send, mut recv) = endpoint.open_bi(peer.clone()).await?;
-            send.write_all(payload.as_bytes()).await?;
+            write_frame(&mut send, payload.as_bytes()).await?;
             send.finish()?;
-            let response = recv.read_to_end(1024 * 1024).await?;
+            let response = read_frame(&mut recv, 1024 * 1024).await?;
             println!(
                 "[stream response from {peer}] {}",
                 String::from_utf8_lossy(&response)
@@ -224,6 +225,45 @@ impl Args {
 
 fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, message.into())
+}
+
+async fn write_frame(send: &mut ReliableSendStream, payload: &[u8]) -> io::Result<()> {
+    if payload.len() > u32::MAX as usize {
+        return Err(invalid("frame too large"));
+    }
+    send.write_all(&(payload.len() as u32).to_be_bytes())
+        .await?;
+    send.write_all(payload).await
+}
+
+async fn read_frame(recv: &mut ReliableRecvStream, max_size: usize) -> io::Result<Vec<u8>> {
+    let mut len = [0u8; 4];
+    read_exact(recv, &mut len).await?;
+    let len = u32::from_be_bytes(len) as usize;
+    if len > max_size {
+        return Err(invalid("frame exceeds max size"));
+    }
+    let mut payload = vec![0u8; len];
+    read_exact(recv, &mut payload).await?;
+    Ok(payload)
+}
+
+async fn read_exact(recv: &mut ReliableRecvStream, mut out: &mut [u8]) -> io::Result<()> {
+    while !out.is_empty() {
+        match recv.read(out).await? {
+            Some(0) | None => {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "stream closed",
+                ))
+            }
+            Some(n) => {
+                let tmp = out;
+                out = &mut tmp[n..];
+            }
+        }
+    }
+    Ok(())
 }
 
 fn print_usage() {

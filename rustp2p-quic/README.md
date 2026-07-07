@@ -111,8 +111,10 @@ let (mut send, mut recv) = endpoint.open_bi(peer_id).await?;
 send.write_all(b"ping").await?;
 send.finish()?;
 
-let response = recv.read_to_end(1024 * 1024).await?;
-println!("response={:?}", response);
+let mut response = [0u8; 1024];
+if let Some(n) = recv.read(&mut response).await? {
+    println!("response={:?}", &response[..n]);
+}
 # Ok(())
 # }
 ```
@@ -124,13 +126,19 @@ On the receiving side, `accept_bi` returns source information:
 let mut stream = endpoint.accept_bi().await?;
 println!("from={} relay={}", stream.peer_id, stream.is_relay);
 
-let request = stream.recv.read_to_end(1024 * 1024).await?;
-stream.send.write_all(b"echo: ").await?;
-stream.send.write_all(&request).await?;
-stream.send.finish()?;
+let mut request = [0u8; 1024];
+if let Some(n) = stream.recv.read(&mut request).await? {
+    stream.send.write_all(b"echo: ").await?;
+    stream.send.write_all(&request[..n]).await?;
+    stream.send.finish()?;
+}
 # Ok(())
 # }
 ```
+
+`read_to_end(max_size)` is still available, but it waits until the peer finishes the send stream.
+For request/response protocols, prefer explicit framing such as a length-prefixed message. The
+`node` example uses length-prefixed frames for this reason.
 
 ### Discovery
 
