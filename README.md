@@ -27,20 +27,20 @@ cargo check --workspace
 ```rust
 use rustp2p_quic::{Endpoint, Identity};
 
-# #[tokio::main]
-# async fn main() -> std::io::Result<()> {
-let identity = Identity::new("node-a", "seed-a")?;
-let endpoint = Endpoint::builder()
-    .identity(identity)
-    .bind("0.0.0.0:0".parse().unwrap())
-    .build()
-    .await?;
+#[tokio::main]
+async fn main() -> rustp2p_quic::Result<()> {
+    let identity = Identity::new("node-a", "seed-a")?;
+    let endpoint = Endpoint::builder()
+        .identity(identity)
+        .bind("0.0.0.0:0".parse().unwrap())
+        .build()
+        .await?;
 
-// Bootstrap with `endpoint.add_bootstrap(addr).await?`.
-// Then send unreliable messages:
-// endpoint.send_to(peer_id, b"hello").await?;
-// Or open an end-to-end reliable bidirectional QUIC stream:
-// let (mut send, mut recv) = endpoint.open_bi(peer_id).await?;
-# Ok(())
-# }
+    // Bootstrap with `endpoint.add_bootstrap(addr).await?`.
+    // Then send unreliable messages:
+    // endpoint.send_to(peer_id, b"hello").await?;
+    // Or open an end-to-end reliable bidirectional QUIC stream:
+    // let (mut send, mut recv) = endpoint.open_bi(peer_id).await?;
+    Ok(())
+}
 ```

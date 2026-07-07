@@ -28,8 +28,7 @@ peer.
 ```rust
 use rustp2p_quic::Identity;
 
-let identity = Identity::new("node-a", "seed-a")?;
-# Ok::<(), std::io::Error>(())
+let identity = Identity::new("node-a", "seed-a").unwrap();
 ```
 
 The first argument is the node id. The second argument is a seed used to deterministically generate
@@ -41,16 +40,17 @@ Certificate verification is controlled through `CertificateVerifier`:
 use rustp2p_quic::{Endpoint, Identity, SkipCertificateVerification};
 use std::sync::Arc;
 
-# #[tokio::main]
-# async fn main() -> rustp2p_quic::Result<()> {
-let endpoint = Endpoint::builder()
-    .identity(Identity::new("node-a", "seed-a")?)
-    .certificate_verifier(Arc::new(SkipCertificateVerification))
-    .bind("127.0.0.1:7001".parse().unwrap())
-    .build()
-    .await?;
-# Ok(())
-# }
+#[tokio::main]
+async fn main() -> rustp2p_quic::Result<()> {
+    let endpoint = Endpoint::builder()
+        .identity(Identity::new("node-a", "seed-a")?)
+        .certificate_verifier(Arc::new(SkipCertificateVerification))
+        .bind("127.0.0.1:7001".parse().unwrap())
+        .build()
+        .await?;
+
+    Ok(())
+}
 ```
 
 `SkipCertificateVerification` is the default. Applications that need stricter TLS trust can provide
@@ -63,18 +63,19 @@ their own verifier.
 ```rust
 use rustp2p_quic::{Endpoint, Identity};
 
-# #[tokio::main]
-# async fn main() -> rustp2p_quic::Result<()> {
-let endpoint = Endpoint::builder()
-    .identity(Identity::new("node-a", "seed-a")?)
-    .bind("0.0.0.0:0".parse().unwrap())
-    .build()
-    .await?;
+#[tokio::main]
+async fn main() -> rustp2p_quic::Result<()> {
+    let endpoint = Endpoint::builder()
+        .identity(Identity::new("node-a", "seed-a")?)
+        .bind("0.0.0.0:0".parse().unwrap())
+        .build()
+        .await?;
 
-println!("peer_id={}", endpoint.peer_id());
-println!("addr={}", endpoint.local_addr().unwrap());
-# Ok(())
-# }
+    println!("peer_id={}", endpoint.peer_id());
+    println!("addr={}", endpoint.local_addr().unwrap());
+
+    Ok(())
+}
 ```
 
 ### Bootstrap by address
@@ -82,11 +83,8 @@ println!("addr={}", endpoint.local_addr().unwrap());
 Bootstrap addresses are only entry points. The remote peer id is learned through hello discovery.
 
 ```rust
-# async fn example(endpoint: rustp2p_quic::Endpoint) -> rustp2p_quic::Result<()> {
 let peer_id = endpoint.add_bootstrap("127.0.0.1:7001".parse().unwrap()).await?;
 println!("connected to {peer_id}");
-# Ok(())
-# }
 ```
 
 After bootstrap, send and connect by `PeerId` only.
@@ -94,19 +92,15 @@ After bootstrap, send and connect by `PeerId` only.
 ### Send an unreliable message
 
 ```rust
-# async fn example(endpoint: rustp2p_quic::Endpoint, peer_id: rustp2p_quic::PeerId) -> rustp2p_quic::Result<()> {
 endpoint.send_to(peer_id, b"hello").await?;
 
 let msg = endpoint.recv().await?;
 println!("from={} {:?}", msg.src, msg.payload);
-# Ok(())
-# }
 ```
 
 ### Open a reliable bidirectional stream
 
 ```rust
-# async fn example(endpoint: rustp2p_quic::Endpoint, peer_id: rustp2p_quic::PeerId) -> rustp2p_quic::Result<()> {
 let (mut send, mut recv) = endpoint.open_bi(peer_id).await?;
 send.write_all(b"ping").await?;
 send.finish()?;
@@ -115,14 +109,11 @@ let mut response = [0u8; 1024];
 if let Some(n) = recv.read(&mut response).await? {
     println!("response={:?}", &response[..n]);
 }
-# Ok(())
-# }
 ```
 
 On the receiving side, `accept_bi` returns source information:
 
 ```rust
-# async fn example(endpoint: rustp2p_quic::Endpoint) -> rustp2p_quic::Result<()> {
 let mut stream = endpoint.accept_bi().await?;
 println!("from={} relay={}", stream.peer_id, stream.is_relay);
 
@@ -132,8 +123,6 @@ if let Some(n) = stream.recv.read(&mut request).await? {
     stream.send.write_all(&request[..n]).await?;
     stream.send.finish()?;
 }
-# Ok(())
-# }
 ```
 
 `read_to_end(max_size)` is still available, but it waits until the peer finishes the send stream.
@@ -154,10 +143,7 @@ A bootstraps to B, B bootstraps to C, and C bootstraps to D. Discovery then prop
 so A eventually learns D's `PeerId` and a relay route to D. A can then call:
 
 ```rust
-# async fn example(endpoint: rustp2p_quic::Endpoint) -> rustp2p_quic::Result<()> {
 endpoint.send_to("node-d".into(), b"hello d").await?;
-# Ok(())
-# }
 ```
 
 ## Low-Level Escape Hatches
