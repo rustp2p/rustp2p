@@ -20,7 +20,7 @@ cargo check --workspace
 - direct non-QUIC UDP datagrams through `Endpoint::send_direct_datagram` and `Endpoint::recv_direct_datagram`;
 - rustp2p-style packet demuxing that keeps `0x80..0xbf` protocol packets out of the QUIC path;
 - high-level `PeerId`, `GroupCode`, route discovery, message relay, broadcast, and reliable streams;
-- end-to-end encrypted reliable streams using Noise over direct or relayed QUIC streams.
+- reliable streams over end-to-end QUIC, including packet-level QUIC relay through reachable peers.
 
 ## High-Level API
 
@@ -40,8 +40,8 @@ let endpoint = Endpoint::builder()
 // Add peers with `endpoint.add_peer(PeerAddr::new(peer_id, addrs)).await?`.
 // Then send unreliable messages:
 // endpoint.send_to(peer_id, b"hello").await?;
-// Or open an end-to-end encrypted reliable stream:
-// let mut stream = endpoint.open_stream_to(peer_id).await?;
+// Or open an end-to-end reliable bidirectional QUIC stream:
+// let (mut send, mut recv) = endpoint.open_bi(peer_id).await?;
 # Ok(())
 # }
 ```
