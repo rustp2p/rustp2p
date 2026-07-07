@@ -53,7 +53,7 @@ async fn main() {
 
     // Send to server
     let addr = "127.0.0.1:3000".parse().unwrap();
-    sender.try_send_via_all(b"hello", addr);
+    sender.send_to(b"hello", addr);
 
     // Receive responses
     while let Some(received) = ep.recv().await {
