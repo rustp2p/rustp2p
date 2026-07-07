@@ -32,9 +32,5 @@ env_logger = "0.11.5"
 serial_test = "3"
 
 [[example]]
-name = "echo_server"
-path = "examples/echo_server.rs"
-
-[[example]]
-name = "echo_client"
-path = "examples/echo_client.rs"
+name = "node"
+path = "examples/node.rs"

@@ -2,8 +2,7 @@ use bytes::{BufMut, BytesMut};
 use clap::Parser;
 use env_logger::Env;
 use rust_p2p_core::endpoint::{Config, EndPoint, Sender};
-use rust_p2p_core::route_table::route_table::RouteTable;
-use rust_p2p_core::route_table::RouteKey;
+use rust_p2p_core::route_table::{RouteKey, RouteTable};
 
 /*Demo Protocol
    0                                            15                                              31

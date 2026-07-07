@@ -52,7 +52,7 @@ pub use connection::{Connection, RecvStream, SendStream};
 pub use demux::{classify_packet, PacketType, ReceivedPacket};
 pub use endpoint::{Builder, Endpoint, NodeAddr, PeerAddr, ReceivedMessage};
 pub use identity::{GroupCode, Identity, PeerId};
-pub use reliable::ReliableStream;
+pub use reliable::{ReliableRecvStream, ReliableSendStream, ReliableStream};
 pub use rust_p2p_core::nat::NatInfo;
 
 /// Re-exported result type.

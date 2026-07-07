@@ -21,9 +21,9 @@ use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 
 use crate::endpoint::transport::Transport;
 
-pub mod route_table;
+mod table;
 
-pub use route_table::Route;
+pub use table::{Route, RouteTable};
 
 pub const DEFAULT_RTT: u32 = 9999;
 

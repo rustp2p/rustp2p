@@ -21,13 +21,13 @@
 
 mod codec;
 mod config;
-mod endpoint;
 pub(crate) mod pool;
+mod service;
 pub(crate) mod transport;
 
 pub use crate::route_table::Protocol;
 pub use codec::{BytesInitCodec, Decoder, Encoder, InitCodec, LengthPrefixedInitCodec};
 pub use config::{Config, LoadBalance};
-pub use endpoint::{EndPoint, Received};
 pub use pool::Sender;
+pub use service::{EndPoint, Received};
 pub use transport::Transport;

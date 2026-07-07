@@ -4,12 +4,11 @@ use crate::demux::{ReceivedPacket, SharedUdpSocket};
 use crate::protocol::{
     now_millis, Packet, ProtocolType, RouteEntry, RouteReplyPayload, TimestampPayload,
 };
-use crate::reliable::ReliableStream;
+use crate::reliable::{ReliableRecvStream, ReliableSendStream, ReliableStream};
 use crate::{GroupCode, Identity, NatInfo, PeerId};
 use bytes::Bytes;
 use dashmap::DashMap;
-use rust_p2p_core::route_table::route_table::RouteTable;
-use rust_p2p_core::route_table::{Protocol, Route, RouteKey};
+use rust_p2p_core::route_table::{Protocol, Route, RouteKey, RouteTable};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use serde::{Deserialize, Serialize};
 use std::io;
@@ -99,8 +98,10 @@ pub struct Builder {
 
 impl Builder {
     pub fn new() -> Self {
-        let mut config = Config::default();
-        config.high_level = true;
+        let config = Config {
+            high_level: true,
+            ..Default::default()
+        };
         Self { config }
     }
 
@@ -418,6 +419,13 @@ impl Endpoint {
         Err(last_err.unwrap_or_else(|| io::Error::other("open reliable stream failed")))
     }
 
+    pub async fn open_bi(
+        &self,
+        peer_id: PeerId,
+    ) -> crate::Result<(ReliableSendStream, ReliableRecvStream)> {
+        Ok(self.open_stream_to(peer_id).await?.into_split())
+    }
+
     async fn open_stream_to_once(&self, peer_id: PeerId) -> crate::Result<ReliableStream> {
         let rt = self.runtime()?;
         let route = self.route_for(peer_id)?;
@@ -443,6 +451,10 @@ impl Endpoint {
         rx.recv()
             .await
             .ok_or_else(|| io::Error::new(io::ErrorKind::UnexpectedEof, "endpoint closed"))
+    }
+
+    pub async fn accept_bi(&self) -> crate::Result<(ReliableSendStream, ReliableRecvStream)> {
+        Ok(self.accept_stream().await?.into_split())
     }
 
     /// Connects to a remote peer using the low-level QUIC API.

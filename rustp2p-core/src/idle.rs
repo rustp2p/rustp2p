@@ -1,8 +1,8 @@
 use std::hash::Hash;
 use std::time::{Duration, Instant};
 
-use crate::route_table::route_table::{Route, RouteTable};
 use crate::route_table::RouteKey;
+use crate::route_table::{Route, RouteTable};
 
 pub struct IdleRouteManager<PeerID> {
     read_idle: Duration,

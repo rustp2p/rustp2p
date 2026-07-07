@@ -73,10 +73,10 @@ async fn direct_reliable_stream_send_recv() {
     a.add_peer(peer_addr(&b, &id_b)).await.unwrap();
     b.add_peer(peer_addr(&a, &id_a)).await.unwrap();
 
-    let mut out = a.open_stream_to(b.peer_id()).await.unwrap();
+    let (mut out, _) = a.open_bi(b.peer_id()).await.unwrap();
     out.write_all(b"secret").await.unwrap();
 
-    let mut inbound = tokio::time::timeout(Duration::from_secs(15), b.accept_stream())
+    let (_, mut inbound) = tokio::time::timeout(Duration::from_secs(15), b.accept_bi())
         .await
         .unwrap()
         .unwrap();
@@ -125,10 +125,10 @@ async fn reliable_stream_can_relay_through_middle_peer() {
         .with_relay_hint(b.peer_id());
     a.add_peer(c_via_b).await.unwrap();
 
-    let mut out = a.open_stream_to(c.peer_id()).await.unwrap();
+    let (mut out, _) = a.open_bi(c.peer_id()).await.unwrap();
     out.write_all(b"through relay").await.unwrap();
 
-    let mut inbound = tokio::time::timeout(Duration::from_secs(15), c.accept_stream())
+    let (_, mut inbound) = tokio::time::timeout(Duration::from_secs(15), c.accept_bi())
         .await
         .unwrap()
         .unwrap();
@@ -230,10 +230,10 @@ async fn reliable_quic_relay_through_different_group_peer_is_not_accepted_by_rel
         .with_relay_hint(b.peer_id());
     a.add_peer(c_via_b).await.unwrap();
 
-    let mut out = a.open_stream_to(c.peer_id()).await.unwrap();
+    let (mut out, _) = a.open_bi(c.peer_id()).await.unwrap();
     out.write_all(b"end to end quic").await.unwrap();
 
-    let mut inbound = tokio::time::timeout(Duration::from_secs(15), c.accept_stream())
+    let (_, mut inbound) = tokio::time::timeout(Duration::from_secs(15), c.accept_bi())
         .await
         .unwrap()
         .unwrap();
@@ -241,7 +241,7 @@ async fn reliable_quic_relay_through_different_group_peer_is_not_accepted_by_rel
     let n = inbound.read(&mut buf).await.unwrap().unwrap();
     assert_eq!(&buf[..n], b"end to end quic");
 
-    let relay_stream = tokio::time::timeout(Duration::from_millis(300), b.accept_stream()).await;
+    let relay_stream = tokio::time::timeout(Duration::from_millis(300), b.accept_bi()).await;
     assert!(
         relay_stream.is_err(),
         "relay must not terminate the QUIC stream"

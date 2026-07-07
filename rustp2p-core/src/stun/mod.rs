@@ -225,11 +225,7 @@ pub(crate) async fn stun_test_nat0(
         public_ipv4: ipv4_set.into_iter().collect(),
         public_ipv6: ipv6_addr,
         public_udp_ports: public_ports.into_iter().collect(),
-        port_range: if max_port > min_port {
-            max_port - min_port
-        } else {
-            0
-        },
+        port_range: max_port.saturating_sub(min_port),
     })
 }
 
@@ -282,11 +278,7 @@ pub(crate) async fn stun_test_nat_with_socket0(
         public_ipv4: ipv4_set.into_iter().collect(),
         public_ipv6: ipv6_addr,
         public_udp_ports: public_ports.into_iter().collect(),
-        port_range: if max_port > min_port {
-            max_port - min_port
-        } else {
-            0
-        },
+        port_range: max_port.saturating_sub(min_port),
     })
 }
 
