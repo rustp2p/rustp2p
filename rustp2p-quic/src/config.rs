@@ -1,3 +1,4 @@
+use crate::{GroupCode, Identity, PeerAddr};
 use std::net::SocketAddr;
 use std::time::Duration;
 
@@ -12,6 +13,20 @@ pub struct Config {
     pub stun_timeout: Duration,
     /// ALPN protocols to accept.
     pub alpns: Vec<Vec<u8>>,
+    /// QUIC application datagram receive buffer size. `None` disables QUIC datagrams.
+    pub datagram_receive_buffer_size: Option<usize>,
+    /// QUIC application datagram send buffer size.
+    pub datagram_send_buffer_size: usize,
+    /// Local high-level P2P identity.
+    pub identity: Option<Identity>,
+    /// Overlay group code.
+    pub group_code: GroupCode,
+    /// Initial peers used for high-level route discovery.
+    pub bootstrap: Vec<PeerAddr>,
+    /// Maximum forwarding TTL for high-level packets.
+    pub max_ttl: u8,
+    /// Whether to start high-level P2P dispatch/maintenance tasks.
+    pub high_level: bool,
 }
 
 impl Default for Config {
@@ -25,6 +40,13 @@ impl Default for Config {
             ],
             stun_timeout: Duration::from_secs(10),
             alpns: vec![b"rustp2p-quic".to_vec()],
+            datagram_receive_buffer_size: Some(1024 * 1024),
+            datagram_send_buffer_size: 1024 * 1024,
+            identity: None,
+            group_code: GroupCode::unspecified(),
+            bootstrap: Vec::new(),
+            max_ttl: 8,
+            high_level: false,
         }
     }
 }
