@@ -51,38 +51,3 @@ impl ReliableRecvStream {
         Ok(Bytes::from(data))
     }
 }
-
-/// A reliable end-to-end QUIC bidirectional stream.
-pub struct ReliableStream {
-    send: ReliableSendStream,
-    recv: ReliableRecvStream,
-}
-
-impl ReliableStream {
-    pub(crate) fn new(send: quinn::SendStream, recv: quinn::RecvStream) -> Self {
-        Self {
-            send: ReliableSendStream::new(send),
-            recv: ReliableRecvStream::new(recv),
-        }
-    }
-
-    pub fn into_split(self) -> (ReliableSendStream, ReliableRecvStream) {
-        (self.send, self.recv)
-    }
-
-    pub async fn write_all(&mut self, data: &[u8]) -> io::Result<()> {
-        self.send.write_all(data).await
-    }
-
-    pub async fn read(&mut self, buf: &mut [u8]) -> io::Result<Option<usize>> {
-        self.recv.read(buf).await
-    }
-
-    pub async fn read_to_end(&mut self, max_size: usize) -> io::Result<Bytes> {
-        self.recv.read_to_end(max_size).await
-    }
-
-    pub fn finish(&mut self) -> io::Result<()> {
-        self.send.finish()
-    }
-}

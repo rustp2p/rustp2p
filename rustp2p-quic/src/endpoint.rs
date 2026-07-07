@@ -1,49 +1,49 @@
+use crate::cert::RustlsCertificateVerifier;
 use crate::config::Config;
 use crate::connection::Connection;
 use crate::demux::{ReceivedPacket, SharedUdpSocket};
 use crate::protocol::{
-    now_millis, Packet, ProtocolType, RouteEntry, RouteReplyPayload, TimestampPayload,
+    now_millis, HelloPayload, Packet, ProtocolType, RouteEntry, RouteReplyPayload, StreamHeader,
+    TimestampPayload,
 };
-use crate::reliable::{ReliableRecvStream, ReliableSendStream, ReliableStream};
-use crate::{GroupCode, Identity, NatInfo, PeerId};
+use crate::reliable::{ReliableRecvStream, ReliableSendStream};
+use crate::{Identity, NatInfo, PeerId};
 use bytes::Bytes;
 use dashmap::DashMap;
 use rust_p2p_core::route_table::{Protocol, Route, RouteKey, RouteTable};
-use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use serde::{Deserialize, Serialize};
 use std::io;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::UdpSocket;
 use tokio::sync::{mpsc, Mutex};
 
-/// A peer node address containing peer identity and direct addresses.
+/// Read-only peer information discovered by the high-level P2P layer.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct PeerAddr {
+pub struct PeerInfo {
     pub peer_id: PeerId,
-    pub public_key: Option<[u8; 32]>,
     pub addrs: Vec<SocketAddr>,
     pub relay_hint: Option<PeerId>,
+    pub last_seen: u64,
+    pub is_direct: bool,
 }
 
-impl PeerAddr {
-    pub fn new(peer_id: PeerId, addrs: Vec<SocketAddr>) -> Self {
+impl PeerInfo {
+    pub fn new(peer_id: PeerId) -> Self {
         Self {
             peer_id,
-            public_key: None,
-            addrs,
+            addrs: Vec::new(),
             relay_hint: None,
+            last_seen: now_millis(),
+            is_direct: false,
         }
     }
 
-    pub fn with_public_key(mut self, public_key: [u8; 32]) -> Self {
-        self.public_key = Some(public_key);
-        self
-    }
-
-    pub fn with_relay_hint(mut self, relay: PeerId) -> Self {
-        self.relay_hint = Some(relay);
+    pub fn with_addr(mut self, addr: SocketAddr) -> Self {
+        self.addrs.push(addr);
+        self.is_direct = true;
         self
     }
 }
@@ -51,31 +51,22 @@ impl PeerAddr {
 /// Backwards-compatible low-level node address.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct NodeAddr {
-    pub node_id: [u8; 32],
+    pub node_id: PeerId,
     pub direct_addresses: Vec<SocketAddr>,
 }
 
 impl NodeAddr {
-    pub fn new(node_id: [u8; 32], direct_addresses: Vec<SocketAddr>) -> Self {
+    pub fn new(node_id: impl Into<PeerId>, direct_addresses: Vec<SocketAddr>) -> Self {
         Self {
-            node_id,
+            node_id: node_id.into(),
             direct_addresses,
         }
     }
 
-    pub fn from_id(node_id: [u8; 32]) -> Self {
+    pub fn from_id(node_id: impl Into<PeerId>) -> Self {
         Self {
-            node_id,
+            node_id: node_id.into(),
             direct_addresses: Vec::new(),
-        }
-    }
-}
-
-impl From<PeerAddr> for NodeAddr {
-    fn from(value: PeerAddr) -> Self {
-        Self {
-            node_id: value.peer_id.into(),
-            direct_addresses: value.addrs,
         }
     }
 }
@@ -90,6 +81,14 @@ pub struct ReceivedMessage {
     pub max_ttl: u8,
     pub is_relay: bool,
     pub is_broadcast: bool,
+}
+
+pub struct IncomingBiStream {
+    pub peer_id: PeerId,
+    pub remote_addr: SocketAddr,
+    pub is_relay: bool,
+    pub send: ReliableSendStream,
+    pub recv: ReliableRecvStream,
 }
 
 pub struct Builder {
@@ -115,13 +114,13 @@ impl Builder {
         self
     }
 
-    pub fn group(mut self, group_code: GroupCode) -> Self {
-        self.config.group_code = group_code;
+    pub fn bootstrap(mut self, peers: Vec<SocketAddr>) -> Self {
+        self.config.bootstrap = peers;
         self
     }
 
-    pub fn bootstrap(mut self, peers: Vec<PeerAddr>) -> Self {
-        self.config.bootstrap = peers;
+    pub fn certificate_verifier(mut self, verifier: Arc<dyn crate::CertificateVerifier>) -> Self {
+        self.config.certificate_verifier = verifier;
         self
     }
 
@@ -147,23 +146,23 @@ impl Default for Builder {
 }
 
 struct RuntimeState {
-    identity: Identity,
     peer_id: PeerId,
-    group_code: GroupCode,
     max_ttl: u8,
-    peers: DashMap<PeerId, PeerAddr>,
+    peers: DashMap<PeerId, PeerInfo>,
     routes: RouteTable<PeerId>,
     connections: DashMap<PeerId, Connection>,
     inbox_tx: mpsc::Sender<ReceivedMessage>,
     inbox_rx: Mutex<mpsc::Receiver<ReceivedMessage>>,
-    stream_tx: mpsc::Sender<ReliableStream>,
-    stream_rx: Mutex<mpsc::Receiver<ReliableStream>>,
+    stream_tx: mpsc::Sender<IncomingBiStream>,
+    stream_rx: Mutex<mpsc::Receiver<IncomingBiStream>>,
+    hello_tx: mpsc::Sender<(SocketAddr, PeerId)>,
+    hello_rx: Mutex<mpsc::Receiver<(SocketAddr, PeerId)>>,
 }
 
 /// The main QUIC endpoint for low-level QUIC and high-level P2P APIs.
 pub struct Endpoint {
     quinn_endpoint: quinn::Endpoint,
-    node_id: [u8; 32],
+    node_id: PeerId,
     stun_servers: Vec<String>,
     nat_info: Arc<parking_lot::RwLock<NatInfo>>,
     shared_socket: Arc<SharedUdpSocket>,
@@ -180,6 +179,10 @@ impl Endpoint {
     pub async fn bind(bind_addr: SocketAddr) -> crate::Result<Self> {
         Self::bind_with_config(Config {
             bind_addr,
+            identity: Some(Identity::new(
+                format!("node-{bind_addr}"),
+                rand::random::<[u8; 32]>(),
+            )?),
             ..Default::default()
         })
         .await
@@ -187,25 +190,17 @@ impl Endpoint {
 
     /// Binds a new endpoint with custom configuration.
     pub async fn bind_with_config(mut config: Config) -> crate::Result<Self> {
-        use rcgen::KeyPair;
-        use rustls::pki_types::{PrivateKeyDer, PrivatePkcs8KeyDer};
-
         let identity = match config.identity.take() {
             Some(identity) => identity,
-            None => Identity::generate()?,
+            None => Identity::new(
+                format!("node-{}", rand::random::<u64>()),
+                rand::random::<[u8; 32]>(),
+            )?,
         };
-        let node_id: [u8; 32] = identity.peer_id().into();
+        let node_id = identity.peer_id();
 
-        let key_pair = KeyPair::generate().map_err(|e| io::Error::other(e.to_string()))?;
-        let mut params = rcgen::CertificateParams::new(vec!["localhost".to_string()])
-            .map_err(|e| io::Error::other(e.to_string()))?;
-        params.distinguished_name = rcgen::DistinguishedName::new();
-        let cert = params
-            .self_signed(&key_pair)
-            .map_err(|e| io::Error::other(e.to_string()))?;
-
-        let cert_der = cert.der().clone();
-        let key_der = PrivatePkcs8KeyDer::from(key_pair.serialize_der());
+        let cert_der = CertificateDer::from(identity.certificate_der().to_vec());
+        let key_der = PrivatePkcs8KeyDer::from(identity.private_key_der().to_vec());
 
         let transport_config = Arc::new({
             let mut transport = quinn::TransportConfig::default();
@@ -220,7 +215,7 @@ impl Endpoint {
                 .with_safe_default_protocol_versions()
                 .map_err(|e| io::Error::other(e.to_string()))?
                 .with_no_client_auth()
-                .with_single_cert(vec![cert_der], PrivateKeyDer::Pkcs8(key_der.clone_key()))
+                .with_single_cert(vec![cert_der], PrivateKeyDer::Pkcs8(key_der))
                 .map_err(|e| io::Error::other(e.to_string()))?;
         server_crypto.alpn_protocols = config.alpns.clone();
 
@@ -232,7 +227,9 @@ impl Endpoint {
             .with_safe_default_protocol_versions()
             .map_err(|e| io::Error::other(e.to_string()))?
             .dangerous()
-            .with_custom_certificate_verifier(SkipServerVerification::new())
+            .with_custom_certificate_verifier(RustlsCertificateVerifier::new(
+                config.certificate_verifier.clone(),
+            ))
             .with_no_client_auth();
         client_crypto.alpn_protocols = config.alpns.clone();
 
@@ -262,11 +259,10 @@ impl Endpoint {
 
         let (inbox_tx, inbox_rx) = mpsc::channel(512);
         let (stream_tx, stream_rx) = mpsc::channel(128);
+        let (hello_tx, hello_rx) = mpsc::channel(128);
         let runtime = if config.high_level {
             Some(Arc::new(RuntimeState {
-                identity: identity.clone(),
                 peer_id: identity.peer_id(),
-                group_code: config.group_code,
                 max_ttl: config.max_ttl.max(1),
                 peers: DashMap::new(),
                 routes: RouteTable::new(Default::default()),
@@ -275,6 +271,8 @@ impl Endpoint {
                 inbox_rx: Mutex::new(inbox_rx),
                 stream_tx,
                 stream_rx: Mutex::new(stream_rx),
+                hello_tx,
+                hello_rx: Mutex::new(hello_rx),
             }))
         } else {
             None
@@ -293,30 +291,23 @@ impl Endpoint {
         endpoint.start_nat_detection(config.stun_timeout);
         if endpoint.runtime.is_some() {
             endpoint.start_high_level_tasks();
-            for peer in config.bootstrap {
-                endpoint.add_peer(peer).await?;
+            for addr in config.bootstrap {
+                endpoint.add_bootstrap(addr).await?;
             }
         }
 
         Ok(endpoint)
     }
 
-    pub fn node_id(&self) -> [u8; 32] {
-        self.node_id
+    pub fn node_id(&self) -> PeerId {
+        self.node_id.clone()
     }
 
     pub fn peer_id(&self) -> PeerId {
         self.runtime
             .as_ref()
-            .map(|rt| rt.peer_id)
-            .unwrap_or(PeerId(self.node_id))
-    }
-
-    pub fn group_code(&self) -> GroupCode {
-        self.runtime
-            .as_ref()
-            .map(|rt| rt.group_code)
-            .unwrap_or_default()
+            .map(|rt| rt.peer_id.clone())
+            .unwrap_or_else(|| self.node_id.clone())
     }
 
     pub fn addr(&self) -> Option<SocketAddr> {
@@ -331,7 +322,7 @@ impl Endpoint {
         self.nat_info.read().clone()
     }
 
-    pub fn known_peers(&self) -> Vec<PeerAddr> {
+    pub fn known_peers(&self) -> Vec<PeerInfo> {
         self.runtime
             .as_ref()
             .map(|rt| rt.peers.iter().map(|v| v.value().clone()).collect())
@@ -345,18 +336,31 @@ impl Endpoint {
             .unwrap_or_default()
     }
 
-    pub async fn add_peer(&self, mut peer: PeerAddr) -> crate::Result<()> {
+    pub async fn add_bootstrap(&self, addr: SocketAddr) -> crate::Result<PeerId> {
         let rt = self.runtime()?;
-        if peer.public_key.is_none() && peer.peer_id == rt.peer_id {
-            peer.public_key = Some(rt.identity.public_key());
+        let packet = self.build_packet_to(ProtocolType::HelloRequest, PeerId::broadcast(), &[])?;
+        self.shared_socket.send_raw(packet.as_bytes(), addr).await?;
+
+        let deadline = tokio::time::sleep(Duration::from_secs(5));
+        tokio::pin!(deadline);
+        loop {
+            tokio::select! {
+                _ = &mut deadline => {
+                    return Err(io::Error::new(io::ErrorKind::TimedOut, "bootstrap hello timed out"));
+                }
+                item = async {
+                    let mut rx = rt.hello_rx.lock().await;
+                    rx.recv().await
+                } => {
+                    let Some((seen_addr, peer_id)) = item else {
+                        return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "endpoint closed"));
+                    };
+                    if seen_addr == addr {
+                        return Ok(peer_id);
+                    }
+                }
+            }
         }
-        self.store_peer_routes(peer.clone(), 0);
-        self.send_control(peer.peer_id, ProtocolType::IDRouteQuery, &[])
-            .await?;
-        let _ = self
-            .send_control(peer.peer_id, ProtocolType::PunchConsultRequest, &[])
-            .await;
-        Ok(())
     }
 
     pub async fn send_to(&self, peer_id: PeerId, payload: &[u8]) -> crate::Result<()> {
@@ -365,7 +369,7 @@ impl Endpoint {
     }
 
     pub fn try_send_to(&self, peer_id: PeerId, payload: &[u8]) -> crate::Result<()> {
-        let packet = self.build_packet(ProtocolType::MessageData, peer_id, payload)?;
+        let packet = self.build_packet_to(ProtocolType::MessageData, peer_id.clone(), payload)?;
         let route = self.route_for(peer_id)?;
         self.shared_socket
             .try_send_raw(packet.as_bytes(), route.route_key().addr())
@@ -402,10 +406,13 @@ impl Endpoint {
         })
     }
 
-    pub async fn open_stream_to(&self, peer_id: PeerId) -> crate::Result<ReliableStream> {
+    pub async fn open_bi(
+        &self,
+        peer_id: PeerId,
+    ) -> crate::Result<(ReliableSendStream, ReliableRecvStream)> {
         let mut last_err = None;
         for _ in 0..2 {
-            match self.open_stream_to_once(peer_id).await {
+            match self.open_bi_once(peer_id.clone()).await {
                 Ok(stream) => return Ok(stream),
                 Err(e) => {
                     last_err = Some(e);
@@ -419,42 +426,42 @@ impl Endpoint {
         Err(last_err.unwrap_or_else(|| io::Error::other("open reliable stream failed")))
     }
 
-    pub async fn open_bi(
+    async fn open_bi_once(
         &self,
         peer_id: PeerId,
     ) -> crate::Result<(ReliableSendStream, ReliableRecvStream)> {
-        Ok(self.open_stream_to(peer_id).await?.into_split())
-    }
-
-    async fn open_stream_to_once(&self, peer_id: PeerId) -> crate::Result<ReliableStream> {
         let rt = self.runtime()?;
-        let route = self.route_for(peer_id)?;
+        let route = self.route_for(peer_id.clone())?;
         let addr = if route.metric() > 0 {
             self.shared_socket.register_virtual_peer(
-                rt.peer_id,
-                peer_id,
-                rt.group_code,
+                rt.peer_id.clone(),
+                peer_id.clone(),
                 rt.max_ttl,
                 route.route_key().addr(),
             )
         } else {
             route.route_key().addr()
         };
-        let conn = self.connection_to(peer_id, addr).await?;
-        let (send, recv) = conn.quinn().open_bi().await?;
-        Ok(ReliableStream::new(send, recv))
+        let conn = self.connection_to(peer_id.clone(), addr).await?;
+        let (mut send, recv) = conn.quinn().open_bi().await?;
+        write_frame(
+            &mut send,
+            &bincode::serialize(&StreamHeader {
+                src: rt.peer_id.clone(),
+                dest: peer_id,
+            })
+            .map_err(bin_err)?,
+        )
+        .await?;
+        Ok((ReliableSendStream::new(send), ReliableRecvStream::new(recv)))
     }
 
-    pub async fn accept_stream(&self) -> crate::Result<ReliableStream> {
+    pub async fn accept_bi(&self) -> crate::Result<IncomingBiStream> {
         let rt = self.runtime()?;
         let mut rx = rt.stream_rx.lock().await;
         rx.recv()
             .await
             .ok_or_else(|| io::Error::new(io::ErrorKind::UnexpectedEof, "endpoint closed"))
-    }
-
-    pub async fn accept_bi(&self) -> crate::Result<(ReliableSendStream, ReliableRecvStream)> {
-        Ok(self.accept_stream().await?.into_split())
     }
 
     /// Connects to a remote peer using the low-level QUIC API.
@@ -551,15 +558,17 @@ impl Endpoint {
             return Ok(route);
         }
         if let Some(peer) = rt.peers.get(&peer_id) {
-            if let Some(addr) = peer.addrs.first().copied() {
-                let route = Route::from_default_rt(RouteKey::new(Protocol::UDP, addr), 0);
-                rt.routes.add_route(peer_id, route);
-                return Ok(route);
+            if peer.is_direct {
+                if let Some(addr) = peer.addrs.first().copied() {
+                    let route = Route::from_default_rt(RouteKey::new(Protocol::UDP, addr), 0);
+                    rt.routes.add_route(peer_id, route);
+                    return Ok(route);
+                }
             }
-            if let Some(relay) = peer.relay_hint {
-                if let Ok(route) = rt.routes.get_route_by_id(&relay) {
+            if let Some(relay) = &peer.relay_hint {
+                if let Ok(route) = rt.routes.get_route_by_id(relay) {
                     rt.routes.add_route(
-                        peer_id,
+                        peer_id.clone(),
                         Route::from_default_rt(route.route_key(), route.metric().saturating_add(1)),
                     );
                     return rt.routes.get_route_by_id(&peer_id);
@@ -572,21 +581,14 @@ impl Endpoint {
         ))
     }
 
-    fn build_packet(
+    fn build_packet_to(
         &self,
         protocol: ProtocolType,
         dest: PeerId,
         payload: &[u8],
     ) -> crate::Result<Packet> {
         let rt = self.runtime()?;
-        Packet::build(
-            protocol,
-            rt.group_code,
-            rt.peer_id,
-            dest,
-            rt.max_ttl,
-            payload,
-        )
+        Packet::build(protocol, rt.peer_id.clone(), dest, rt.max_ttl, payload)
     }
 
     async fn send_control(
@@ -595,7 +597,7 @@ impl Endpoint {
         protocol: ProtocolType,
         payload: &[u8],
     ) -> crate::Result<()> {
-        let packet = self.build_packet(protocol, dest, payload)?;
+        let packet = self.build_packet_to(protocol, dest.clone(), payload)?;
         let route = self.route_for(dest)?;
         self.shared_socket
             .send_raw(packet.as_bytes(), route.route_key().addr())
@@ -610,7 +612,7 @@ impl Endpoint {
             }
         }
         let conn = self
-            .connect(NodeAddr::new(peer_id.into(), vec![addr]))
+            .connect(NodeAddr::new(peer_id.clone(), vec![addr]))
             .await?;
         rt.connections.insert(peer_id, conn.clone());
         Ok(conn)
@@ -645,13 +647,29 @@ impl Endpoint {
         if src == rt.peer_id || src.is_unspecified() {
             return Ok(());
         }
+
         let route_key = RouteKey::new(Protocol::UDP, received.addr);
         let metric = packet.max_ttl().saturating_sub(packet.ttl());
-        rt.routes
-            .add_route(src, Route::from_default_rt(route_key, metric));
-        rt.peers
-            .entry(src)
-            .or_insert_with(|| PeerAddr::new(src, vec![received.addr]));
+        let relay_hint = if metric > 0 {
+            rt.routes.route_to_id(&route_key)
+        } else {
+            None
+        };
+        self.upsert_peer(
+            PeerInfo {
+                peer_id: src.clone(),
+                addrs: if metric == 0 {
+                    vec![received.addr]
+                } else {
+                    Vec::new()
+                },
+                relay_hint,
+                last_seen: now_millis(),
+                is_direct: metric == 0,
+            },
+            route_key,
+            metric,
+        );
 
         let dest = packet.dest();
         if dest != rt.peer_id && !dest.is_broadcast() {
@@ -659,21 +677,28 @@ impl Endpoint {
             return Ok(());
         }
 
-        let protocol = packet.protocol()?;
-        if packet.group() != rt.group_code {
-            return Ok(());
-        }
-
-        match protocol {
+        match packet.protocol()? {
+            ProtocolType::HelloRequest => {
+                let payload = self.discovery_payload(&src).await?;
+                self.send_control(src, ProtocolType::HelloReply, &payload)
+                    .await?;
+            }
+            ProtocolType::HelloReply => {
+                let hello: HelloPayload =
+                    bincode::deserialize(packet.payload()).map_err(bin_err)?;
+                let peer_id = hello.peer.peer_id.clone();
+                self.upsert_peer(hello.peer, route_key, metric);
+                let _ = rt.hello_tx.send((received.addr, peer_id)).await;
+                self.ingest_route_entries(hello.peers, route_key).await?;
+            }
             ProtocolType::QuicRelay => {
                 let next_hop = self
-                    .route_for(src)
+                    .route_for(src.clone())
                     .map(|route| route.route_key().addr())
                     .unwrap_or(received.addr);
                 let virtual_addr = self.shared_socket.register_virtual_peer(
-                    rt.peer_id,
+                    rt.peer_id.clone(),
                     src,
-                    packet.group(),
                     rt.max_ttl,
                     next_hop,
                 );
@@ -686,7 +711,7 @@ impl Endpoint {
                     .send(ReceivedMessage {
                         payload: Bytes::copy_from_slice(packet.payload()),
                         src,
-                        dest,
+                        dest: dest.clone(),
                         route: route_key,
                         ttl: packet.ttl(),
                         max_ttl: packet.max_ttl(),
@@ -696,42 +721,17 @@ impl Endpoint {
                     .await;
             }
             ProtocolType::IDRouteQuery => {
-                let self_peer = self.self_peer_addr().await;
-                let peers = std::iter::once(RouteEntry {
-                    peer: self_peer,
-                    metric: 0,
+                let payload = bincode::serialize(&RouteReplyPayload {
+                    peers: self.discovery_entries(&src).await?,
                 })
-                .chain(rt.peers.iter().filter_map(|entry| {
-                    let peer = entry.value().clone();
-                    if peer.peer_id == src {
-                        None
-                    } else {
-                        let metric = rt
-                            .routes
-                            .route_one(&peer.peer_id)
-                            .map(|route| route.metric() + 1)
-                            .unwrap_or(1);
-                        Some(RouteEntry { peer, metric })
-                    }
-                }))
-                .collect();
-                let payload = bincode::serialize(&RouteReplyPayload { peers }).map_err(bin_err)?;
+                .map_err(bin_err)?;
                 self.send_control(src, ProtocolType::IDRouteReply, &payload)
                     .await?;
             }
             ProtocolType::IDRouteReply => {
                 let reply: RouteReplyPayload =
                     bincode::deserialize(packet.payload()).map_err(bin_err)?;
-                for item in reply.peers {
-                    if item.peer.peer_id == rt.peer_id {
-                        continue;
-                    }
-                    rt.peers.insert(item.peer.peer_id, item.peer.clone());
-                    rt.routes.add_route(
-                        item.peer.peer_id,
-                        Route::from_default_rt(route_key, item.metric.saturating_add(1)),
-                    );
-                }
+                self.ingest_route_entries(reply.peers, route_key).await?;
             }
             ProtocolType::EchoRequest => {
                 self.send_control(src, ProtocolType::EchoReply, packet.payload())
@@ -750,7 +750,7 @@ impl Endpoint {
             }
             ProtocolType::PunchConsultRequest => {
                 let payload = bincode::serialize(&crate::protocol::PunchPayload {
-                    peer: self.self_peer_addr().await,
+                    peer: self.self_peer_info().await,
                     nat_info: Some(self.nat_info()),
                 })
                 .map_err(bin_err)?;
@@ -761,7 +761,7 @@ impl Endpoint {
                 if let Ok(payload) =
                     bincode::deserialize::<crate::protocol::PunchPayload>(packet.payload())
                 {
-                    self.store_peer_routes(payload.peer, 0);
+                    self.upsert_peer(payload.peer, route_key, metric);
                     self.punch_candidates(src, payload.nat_info).await?;
                 }
             }
@@ -769,12 +769,68 @@ impl Endpoint {
                 self.send_control(src, ProtocolType::PunchReply, &[])
                     .await?;
             }
-            ProtocolType::EchoReply
-            | ProtocolType::PunchReply
-            | ProtocolType::ReliableRelayOpen
-            | ProtocolType::ReliableRelayClose => {}
+            ProtocolType::EchoReply | ProtocolType::PunchReply => {}
         }
         Ok(())
+    }
+
+    async fn ingest_route_entries(
+        &self,
+        entries: Vec<RouteEntry>,
+        via: RouteKey,
+    ) -> crate::Result<()> {
+        let rt = self.runtime()?;
+        let mut newly_seen = Vec::new();
+        for item in entries {
+            if item.peer.peer_id == rt.peer_id || item.peer.peer_id.is_unspecified() {
+                continue;
+            }
+            let existed = rt.peers.contains_key(&item.peer.peer_id);
+            let metric = item.metric.saturating_add(1);
+            self.upsert_peer(item.peer.clone(), via, metric);
+            if !existed {
+                newly_seen.push(item.peer.peer_id);
+            }
+        }
+        for peer_id in newly_seen {
+            let _ = self
+                .send_control(peer_id, ProtocolType::IDRouteQuery, &[])
+                .await;
+        }
+        Ok(())
+    }
+
+    async fn discovery_payload(&self, requester: &PeerId) -> crate::Result<Vec<u8>> {
+        let self_peer = self.self_peer_info().await;
+        bincode::serialize(&HelloPayload {
+            peer: self_peer,
+            peers: self.discovery_entries(requester).await?,
+        })
+        .map_err(bin_err)
+    }
+
+    async fn discovery_entries(&self, requester: &PeerId) -> crate::Result<Vec<RouteEntry>> {
+        let rt = self.runtime()?;
+        let self_peer = self.self_peer_info().await;
+        let peers = std::iter::once(RouteEntry {
+            peer: self_peer.clone(),
+            metric: 0,
+        })
+        .chain(rt.peers.iter().filter_map(|entry| {
+            let peer = entry.value().clone();
+            if &peer.peer_id == requester {
+                None
+            } else {
+                let metric = rt
+                    .routes
+                    .route_one(&peer.peer_id)
+                    .map(|route| route.metric().saturating_add(1))
+                    .unwrap_or(1);
+                Some(RouteEntry { peer, metric })
+            }
+        }))
+        .collect();
+        Ok(peers)
     }
 
     async fn forward_packet(&self, mut packet: Packet) -> crate::Result<()> {
@@ -787,15 +843,35 @@ impl Endpoint {
             .await
     }
 
-    fn store_peer_routes(&self, peer: PeerAddr, metric: u8) {
+    fn upsert_peer(&self, peer: PeerInfo, route_key: RouteKey, metric: u8) {
         let Ok(rt) = self.runtime() else { return };
-        for addr in &peer.addrs {
-            rt.routes.add_route(
-                peer.peer_id,
-                Route::from_default_rt(RouteKey::new(Protocol::UDP, *addr), metric),
-            );
+        if peer.peer_id == rt.peer_id {
+            return;
         }
-        rt.peers.insert(peer.peer_id, peer);
+        let mut merged = peer.clone();
+        merged.last_seen = now_millis();
+        if let Some(existing) = rt.peers.get(&peer.peer_id) {
+            for addr in &existing.addrs {
+                if !merged.addrs.contains(addr) {
+                    merged.addrs.push(*addr);
+                }
+            }
+            merged.is_direct |= existing.is_direct;
+            if merged.relay_hint.is_none() {
+                merged.relay_hint = existing.relay_hint.clone();
+            }
+        }
+        if metric == 0 {
+            merged.is_direct = true;
+            if !merged.addrs.contains(&route_key.addr()) {
+                merged.addrs.push(route_key.addr());
+            }
+        }
+        rt.routes.add_route(
+            merged.peer_id.clone(),
+            Route::from_default_rt(route_key, metric),
+        );
+        rt.peers.insert(merged.peer_id.clone(), merged);
     }
 
     async fn punch_candidates(
@@ -806,7 +882,7 @@ impl Endpoint {
         let Some(nat_info) = nat_info else {
             return Ok(());
         };
-        let packet = self.build_packet(ProtocolType::PunchRequest, peer_id, &[])?;
+        let packet = self.build_packet_to(ProtocolType::PunchRequest, peer_id, &[])?;
         let mut candidates = nat_info.mapping_udp_addr.clone();
         candidates.extend(nat_info.local_ipv4_addrs());
         candidates.extend(nat_info.public_ipv4_addr());
@@ -827,8 +903,12 @@ impl Endpoint {
                 tokio::spawn(async move {
                     while let Ok((send, recv)) = conn.quinn().accept_bi().await {
                         let endpoint = endpoint.clone();
+                        let remote_addr = conn.remote_addr();
                         tokio::spawn(async move {
-                            if let Err(e) = endpoint.handle_incoming_stream(send, recv).await {
+                            if let Err(e) = endpoint
+                                .handle_incoming_stream(remote_addr, send, recv)
+                                .await
+                            {
                                 log::debug!("stream handling failed: {e}");
                             }
                         });
@@ -840,18 +920,40 @@ impl Endpoint {
 
     async fn handle_incoming_stream(
         &self,
+        remote_addr: SocketAddr,
         send: quinn::SendStream,
-        recv: quinn::RecvStream,
+        mut recv: quinn::RecvStream,
     ) -> crate::Result<()> {
         let rt = self.runtime()?;
-        let _ = rt.stream_tx.send(ReliableStream::new(send, recv)).await;
+        let header: StreamHeader =
+            bincode::deserialize(&read_frame(&mut recv).await?).map_err(bin_err)?;
+        if header.dest != rt.peer_id {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "stream destination peer mismatch",
+            ));
+        }
+        let incoming = IncomingBiStream {
+            peer_id: header.src,
+            remote_addr,
+            is_relay: is_virtual_addr(remote_addr),
+            send: ReliableSendStream::new(send),
+            recv: ReliableRecvStream::new(recv),
+        };
+        let _ = rt.stream_tx.send(incoming).await;
         Ok(())
     }
 
-    async fn self_peer_addr(&self) -> PeerAddr {
+    async fn self_peer_info(&self) -> PeerInfo {
         let rt = self.runtime().expect("runtime exists");
         let addrs = self.addr().into_iter().collect();
-        PeerAddr::new(rt.peer_id, addrs).with_public_key(rt.identity.public_key())
+        PeerInfo {
+            peer_id: rt.peer_id.clone(),
+            addrs,
+            relay_hint: None,
+            last_seen: now_millis(),
+            is_direct: true,
+        }
     }
 
     fn start_maintenance_loop(&self) {
@@ -868,7 +970,14 @@ impl Endpoint {
                 for peer in endpoint.known_peers() {
                     if peer.peer_id != rt.peer_id {
                         let _ = endpoint
-                            .send_control(peer.peer_id, ProtocolType::TimestampRequest, &payload)
+                            .send_control(
+                                peer.peer_id.clone(),
+                                ProtocolType::TimestampRequest,
+                                &payload,
+                            )
+                            .await;
+                        let _ = endpoint
+                            .send_control(peer.peer_id, ProtocolType::IDRouteQuery, &[])
                             .await;
                     }
                 }
@@ -901,6 +1010,45 @@ impl Endpoint {
     }
 }
 
+async fn write_frame(send: &mut quinn::SendStream, data: &[u8]) -> io::Result<()> {
+    if data.len() > 64 * 1024 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "stream header too large",
+        ));
+    }
+    send.write_all(&(data.len() as u32).to_be_bytes())
+        .await
+        .map_err(|e| io::Error::other(format!("write stream header: {e}")))?;
+    send.write_all(data)
+        .await
+        .map_err(|e| io::Error::other(format!("write stream header: {e}")))?;
+    Ok(())
+}
+
+async fn read_frame(recv: &mut quinn::RecvStream) -> io::Result<Vec<u8>> {
+    let mut len = [0u8; 4];
+    recv.read_exact(&mut len)
+        .await
+        .map_err(|e| io::Error::new(io::ErrorKind::UnexpectedEof, format!("{e}")))?;
+    let len = u32::from_be_bytes(len) as usize;
+    if len > 64 * 1024 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "stream header too large",
+        ));
+    }
+    let mut data = vec![0u8; len];
+    recv.read_exact(&mut data)
+        .await
+        .map_err(|e| io::Error::new(io::ErrorKind::UnexpectedEof, format!("{e}")))?;
+    Ok(data)
+}
+
+fn is_virtual_addr(addr: SocketAddr) -> bool {
+    matches!(addr.ip(), IpAddr::V4(ip) if ip.octets()[0] == 127 && ip.octets()[1] == 255)
+}
+
 fn bin_err(err: bincode::Error) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, format!("bincode: {err}"))
 }
@@ -909,7 +1057,7 @@ impl Clone for Endpoint {
     fn clone(&self) -> Self {
         Self {
             quinn_endpoint: self.quinn_endpoint.clone(),
-            node_id: self.node_id,
+            node_id: self.node_id.clone(),
             stun_servers: self.stun_servers.clone(),
             nat_info: self.nat_info.clone(),
             shared_socket: self.shared_socket.clone(),
@@ -925,59 +1073,5 @@ impl std::fmt::Debug for Endpoint {
             .field("peer_id", &self.peer_id())
             .field("addr", &self.addr())
             .finish()
-    }
-}
-
-#[derive(Debug)]
-struct SkipServerVerification(Arc<rustls::crypto::CryptoProvider>);
-
-impl SkipServerVerification {
-    fn new() -> Arc<Self> {
-        Arc::new(Self(Arc::new(rustls::crypto::ring::default_provider())))
-    }
-}
-
-impl rustls::client::danger::ServerCertVerifier for SkipServerVerification {
-    fn verify_server_cert(
-        &self,
-        _end_entity: &CertificateDer<'_>,
-        _intermediates: &[CertificateDer<'_>],
-        _server_name: &ServerName<'_>,
-        _ocsp_response: &[u8],
-        _now: UnixTime,
-    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
-        Ok(rustls::client::danger::ServerCertVerified::assertion())
-    }
-
-    fn verify_tls12_signature(
-        &self,
-        message: &[u8],
-        cert: &CertificateDer<'_>,
-        dss: &rustls::DigitallySignedStruct,
-    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        rustls::crypto::verify_tls12_signature(
-            message,
-            cert,
-            dss,
-            &self.0.signature_verification_algorithms,
-        )
-    }
-
-    fn verify_tls13_signature(
-        &self,
-        message: &[u8],
-        cert: &CertificateDer<'_>,
-        dss: &rustls::DigitallySignedStruct,
-    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        rustls::crypto::verify_tls13_signature(
-            message,
-            cert,
-            dss,
-            &self.0.signature_verification_algorithms,
-        )
-    }
-
-    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-        self.0.signature_verification_algorithms.supported_schemes()
     }
 }

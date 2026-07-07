@@ -1,4 +1,4 @@
-use rustp2p_quic::{Endpoint, GroupCode, Identity, PeerAddr, PeerId};
+use rustp2p_quic::{Endpoint, Identity, PeerId};
 use std::env;
 use std::io;
 use std::net::SocketAddr;
@@ -10,20 +10,17 @@ async fn main() -> rustp2p_quic::Result<()> {
     env_logger::init();
 
     let args = Args::parse()?;
-    let identity = Identity::generate()?;
     let endpoint = Endpoint::builder()
-        .identity(identity)
-        .group(args.group)
+        .identity(Identity::new(args.id, args.seed)?)
         .bind(args.bind)
-        .bootstrap(args.peers.clone())
+        .bootstrap(args.bootstrap.clone())
         .build()
         .await?;
 
     println!("peer_id={}", endpoint.peer_id());
-    println!("group={:?}", endpoint.group_code());
     println!("addr={}", endpoint.local_addr().unwrap());
     println!("commands:");
-    println!("  add <peer_id>@<addr>");
+    println!("  connect <addr>");
     println!("  send <peer_id> <message>");
     println!("  stream <peer_id> <message>");
     println!("  broadcast <message>");
@@ -54,14 +51,19 @@ async fn main() -> rustp2p_quic::Result<()> {
     tokio::spawn(async move {
         loop {
             match stream_endpoint.accept_bi().await {
-                Ok((mut send, mut recv)) => {
+                Ok(mut stream) => {
                     tokio::spawn(async move {
-                        match recv.read_to_end(1024 * 1024).await {
+                        match stream.recv.read_to_end(1024 * 1024).await {
                             Ok(data) => {
-                                println!("[stream] {}", String::from_utf8_lossy(&data));
-                                let _ = send.write_all(b"echo: ").await;
-                                let _ = send.write_all(&data).await;
-                                let _ = send.finish();
+                                println!(
+                                    "[stream] from={} relay={} {}",
+                                    stream.peer_id,
+                                    stream.is_relay,
+                                    String::from_utf8_lossy(&data)
+                                );
+                                let _ = stream.send.write_all(b"echo: ").await;
+                                let _ = stream.send.write_all(&data).await;
+                                let _ = stream.send.finish();
                             }
                             Err(e) => eprintln!("read stream failed: {e}"),
                         }
@@ -74,10 +76,6 @@ async fn main() -> rustp2p_quic::Result<()> {
             }
         }
     });
-
-    for peer in args.peers {
-        endpoint.add_peer(peer).await?;
-    }
 
     let stdin = BufReader::new(tokio::io::stdin());
     let mut lines = stdin.lines();
@@ -102,38 +100,42 @@ async fn main() -> rustp2p_quic::Result<()> {
 async fn handle_command(endpoint: &Endpoint, line: &str) -> rustp2p_quic::Result<()> {
     let mut parts = line.splitn(3, ' ');
     match parts.next().unwrap_or_default() {
-        "add" => {
-            let peer = parts
+        "connect" => {
+            let addr: SocketAddr = parts
                 .next()
-                .ok_or_else(|| invalid("usage: add <peer_id>@<addr>"))
-                .and_then(parse_peer_addr)?;
-            endpoint.add_peer(peer.clone()).await?;
-            println!("added {}", peer.peer_id);
+                .ok_or_else(|| invalid("usage: connect <addr>"))?
+                .parse()
+                .map_err(|e| invalid(format!("invalid address: {e}")))?;
+            let peer_id = endpoint.add_bootstrap(addr).await?;
+            println!("connected {peer_id} at {addr}");
         }
         "send" => {
             let peer = parts
                 .next()
                 .ok_or_else(|| invalid("usage: send <peer_id> <message>"))
-                .and_then(parse_peer_id)?;
+                .map(PeerId::from)?;
             let payload = parts
                 .next()
                 .ok_or_else(|| invalid("usage: send <peer_id> <message>"))?;
-            endpoint.send_to(peer, payload.as_bytes()).await?;
+            endpoint.send_to(peer.clone(), payload.as_bytes()).await?;
             println!("sent datagram to {peer}");
         }
         "stream" => {
             let peer = parts
                 .next()
                 .ok_or_else(|| invalid("usage: stream <peer_id> <message>"))
-                .and_then(parse_peer_id)?;
+                .map(PeerId::from)?;
             let payload = parts
                 .next()
                 .ok_or_else(|| invalid("usage: stream <peer_id> <message>"))?;
-            let (mut send, mut recv) = endpoint.open_bi(peer).await?;
+            let (mut send, mut recv) = endpoint.open_bi(peer.clone()).await?;
             send.write_all(payload.as_bytes()).await?;
             send.finish()?;
             let response = recv.read_to_end(1024 * 1024).await?;
-            println!("[stream response] {}", String::from_utf8_lossy(&response));
+            println!(
+                "[stream response from {peer}] {}",
+                String::from_utf8_lossy(&response)
+            );
         }
         "broadcast" => {
             let payload = parts
@@ -144,7 +146,10 @@ async fn handle_command(endpoint: &Endpoint, line: &str) -> rustp2p_quic::Result
         }
         "peers" => {
             for peer in endpoint.known_peers() {
-                println!("{} {:?}", peer.peer_id, peer.addrs);
+                println!(
+                    "{} direct={} relay={:?} addrs={:?}",
+                    peer.peer_id, peer.is_direct, peer.relay_hint, peer.addrs
+                );
             }
         }
         _ => {
@@ -155,20 +160,34 @@ async fn handle_command(endpoint: &Endpoint, line: &str) -> rustp2p_quic::Result
 }
 
 struct Args {
+    id: String,
+    seed: String,
     bind: SocketAddr,
-    group: GroupCode,
-    peers: Vec<PeerAddr>,
+    bootstrap: Vec<SocketAddr>,
 }
 
 impl Args {
     fn parse() -> io::Result<Self> {
+        let mut id = None;
+        let mut seed = None;
         let mut bind = "127.0.0.1:0".parse().unwrap();
-        let mut group = GroupCode::try_from("demo")?;
-        let mut peers = Vec::new();
+        let mut bootstrap = Vec::new();
         let mut args = env::args().skip(1);
 
         while let Some(arg) = args.next() {
             match arg.as_str() {
+                "--id" => {
+                    id = Some(
+                        args.next()
+                            .ok_or_else(|| invalid("--id requires a value"))?,
+                    )
+                }
+                "--seed" => {
+                    seed = Some(
+                        args.next()
+                            .ok_or_else(|| invalid("--seed requires a value"))?,
+                    )
+                }
                 "--bind" => {
                     bind = args
                         .next()
@@ -176,19 +195,13 @@ impl Args {
                         .parse()
                         .map_err(|e| invalid(format!("invalid bind address: {e}")))?;
                 }
-                "--group" => {
-                    group = GroupCode::try_from(
+                "--bootstrap" => {
+                    bootstrap.push(
                         args.next()
-                            .ok_or_else(|| invalid("--group requires a value"))?
-                            .as_str(),
-                    )?;
-                }
-                "--peer" => {
-                    peers.push(parse_peer_addr(
-                        &args
-                            .next()
-                            .ok_or_else(|| invalid("--peer requires <peer_id>@<addr>"))?,
-                    )?);
+                            .ok_or_else(|| invalid("--bootstrap requires an address"))?
+                            .parse()
+                            .map_err(|e| invalid(format!("invalid bootstrap address: {e}")))?,
+                    );
                 }
                 "--help" | "-h" => {
                     print_usage();
@@ -198,28 +211,15 @@ impl Args {
             }
         }
 
-        Ok(Self { bind, group, peers })
+        let id = id.ok_or_else(|| invalid("--id is required"))?;
+        let seed = seed.unwrap_or_else(|| format!("{id}-seed"));
+        Ok(Self {
+            id,
+            seed,
+            bind,
+            bootstrap,
+        })
     }
-}
-
-fn parse_peer_addr(value: &str) -> io::Result<PeerAddr> {
-    let (peer, addr) = value
-        .split_once('@')
-        .ok_or_else(|| invalid("peer must be <peer_id>@<addr>"))?;
-    Ok(PeerAddr::new(
-        parse_peer_id(peer)?,
-        vec![addr
-            .parse()
-            .map_err(|e| invalid(format!("invalid peer address: {e}")))?],
-    ))
-}
-
-fn parse_peer_id(value: &str) -> io::Result<PeerId> {
-    let bytes = hex::decode(value).map_err(|e| invalid(format!("invalid peer id hex: {e}")))?;
-    let id: [u8; 32] = bytes
-        .try_into()
-        .map_err(|_| invalid("peer id must be 32 bytes / 64 hex chars"))?;
-    Ok(PeerId(id))
 }
 
 fn invalid(message: impl Into<String>) -> io::Error {
@@ -227,8 +227,6 @@ fn invalid(message: impl Into<String>) -> io::Error {
 }
 
 fn print_usage() {
-    println!("cargo run -p rustp2p-quic --example node -- --bind 127.0.0.1:7001");
-    println!(
-        "cargo run -p rustp2p-quic --example node -- --bind 127.0.0.1:7002 --peer <peer_id>@127.0.0.1:7001"
-    );
+    println!("cargo run -p rustp2p-quic --example node -- --id node-a --seed seed-a --bind 127.0.0.1:7001");
+    println!("cargo run -p rustp2p-quic --example node -- --id node-b --seed seed-b --bind 127.0.0.1:7002 --bootstrap 127.0.0.1:7001");
 }

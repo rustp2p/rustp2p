@@ -26,19 +26,22 @@
 //! ## Quick Start
 //!
 //! ```rust,no_run
-//! use rustp2p_quic::{Endpoint, NodeAddr};
+//! use rustp2p_quic::{Endpoint, Identity, PeerId};
 //!
 //! # #[tokio::main]
 //! # async fn main() -> rustp2p_quic::Result<()> {
-//! let endpoint = Endpoint::bind("0.0.0.0:0".parse().unwrap()).await?;
-//! let node_addr = NodeAddr::new([0u8; 32], vec!["1.2.3.4:4433".parse().unwrap()]);
-//! let connection = endpoint.connect(node_addr).await?;
-//! let (mut send, mut recv) = connection.open_bi().await?;
+//! let endpoint = Endpoint::builder()
+//!     .identity(Identity::new("node-a", "seed-a")?)
+//!     .bind("0.0.0.0:0".parse().unwrap())
+//!     .build()
+//!     .await?;
+//! let (mut send, mut recv) = endpoint.open_bi(PeerId::from("node-b")).await?;
 //! send.write_all(b"hello").await?;
 //! # Ok(())
 //! # }
 //! ```
 
+mod cert;
 mod config;
 mod connection;
 mod demux;
@@ -47,12 +50,13 @@ mod identity;
 mod protocol;
 mod reliable;
 
+pub use cert::{CertificateVerifier, SkipCertificateVerification};
 pub use config::Config;
 pub use connection::{Connection, RecvStream, SendStream};
 pub use demux::{classify_packet, PacketType, ReceivedPacket};
-pub use endpoint::{Builder, Endpoint, NodeAddr, PeerAddr, ReceivedMessage};
-pub use identity::{GroupCode, Identity, PeerId};
-pub use reliable::{ReliableRecvStream, ReliableSendStream, ReliableStream};
+pub use endpoint::{Builder, Endpoint, IncomingBiStream, NodeAddr, PeerInfo, ReceivedMessage};
+pub use identity::{Identity, PeerId};
+pub use reliable::{ReliableRecvStream, ReliableSendStream};
 pub use rust_p2p_core::nat::NatInfo;
 
 /// Re-exported result type.

@@ -3,42 +3,70 @@
 `rustp2p-quic` is the QUIC transport and high-level P2P layer for this workspace.
 It builds on `rustp2p-core` without modifying core APIs.
 
-The crate exposes two layers:
-
-- a low-level QUIC API around `quinn`;
-- a high-level peer API with `PeerId`, `GroupCode`, route discovery, unreliable messages, broadcast, and reliable bidirectional streams.
+The high-level API uses `PeerId` for all application traffic. Socket addresses are only used to
+bootstrap connectivity to a reachable node.
 
 ## Design
 
 Every node is equal. There is no fixed server/client role at the high-level P2P layer.
 
-Any reachable node can forward traffic for any two other reachable nodes. For example, if
-`A <-> B <-> C` are reachable but `A` and `C` cannot connect directly, `B` can forward traffic
-between `A` and `C`.
-
-Reliable traffic is still end-to-end QUIC:
+If `A <-> B <-> C` are reachable but `A` and `C` cannot connect directly, `B` can forward traffic
+between `A` and `C`. Reliable traffic is still end-to-end QUIC:
 
 - `A` and `C` establish one QUIC connection.
 - `B` forwards QUIC UDP datagrams inside rustp2p overlay relay packets.
 - `B` does not terminate QUIC streams.
 - `B` cannot read reliable stream payloads.
 
-`GroupCode` is not a forwarding ACL. A node from another group may still relay packets. Group
-checks are applied when a packet is delivered locally to the final receiver.
+There is no group concept in `rustp2p-quic`. A discovered peer can relay for any other reachable
+peer.
+
+## Identity And Certificates
+
+`PeerId` is supplied by the application:
+
+```rust
+use rustp2p_quic::Identity;
+
+let identity = Identity::new("node-a", "seed-a")?;
+# Ok::<(), std::io::Error>(())
+```
+
+The first argument is the node id. The second argument is a seed used to deterministically generate
+the local QUIC certificate key. The certificate and `PeerId` are intentionally not bound together.
+
+Certificate verification is controlled through `CertificateVerifier`:
+
+```rust
+use rustp2p_quic::{Endpoint, Identity, SkipCertificateVerification};
+use std::sync::Arc;
+
+# #[tokio::main]
+# async fn main() -> rustp2p_quic::Result<()> {
+let endpoint = Endpoint::builder()
+    .identity(Identity::new("node-a", "seed-a")?)
+    .certificate_verifier(Arc::new(SkipCertificateVerification))
+    .bind("127.0.0.1:7001".parse().unwrap())
+    .build()
+    .await?;
+# Ok(())
+# }
+```
+
+`SkipCertificateVerification` is the default. Applications that need stricter TLS trust can provide
+their own verifier.
 
 ## Main APIs
 
 ### Build an endpoint
 
 ```rust
-use rustp2p_quic::{Endpoint, GroupCode, Identity};
+use rustp2p_quic::{Endpoint, Identity};
 
 # #[tokio::main]
 # async fn main() -> rustp2p_quic::Result<()> {
-let identity = Identity::generate()?;
 let endpoint = Endpoint::builder()
-    .identity(identity)
-    .group(GroupCode::try_from("demo")?)
+    .identity(Identity::new("node-a", "seed-a")?)
     .bind("0.0.0.0:0".parse().unwrap())
     .build()
     .await?;
@@ -49,25 +77,26 @@ println!("addr={}", endpoint.local_addr().unwrap());
 # }
 ```
 
-### Add a peer
+### Bootstrap by address
+
+Bootstrap addresses are only entry points. The remote peer id is learned through hello discovery.
 
 ```rust
-use rustp2p_quic::PeerAddr;
-
-# async fn example(endpoint: rustp2p_quic::Endpoint, peer_id: rustp2p_quic::PeerId) -> rustp2p_quic::Result<()> {
-let peer = PeerAddr::new(peer_id, vec!["127.0.0.1:7001".parse().unwrap()]);
-endpoint.add_peer(peer).await?;
+# async fn example(endpoint: rustp2p_quic::Endpoint) -> rustp2p_quic::Result<()> {
+let peer_id = endpoint.add_bootstrap("127.0.0.1:7001".parse().unwrap()).await?;
+println!("connected to {peer_id}");
 # Ok(())
 # }
 ```
 
-### Send an unreliable message
+After bootstrap, send and connect by `PeerId` only.
 
-`send_to` sends a rustp2p overlay datagram. It is unreliable and may be forwarded by relay nodes.
+### Send an unreliable message
 
 ```rust
 # async fn example(endpoint: rustp2p_quic::Endpoint, peer_id: rustp2p_quic::PeerId) -> rustp2p_quic::Result<()> {
 endpoint.send_to(peer_id, b"hello").await?;
+
 let msg = endpoint.recv().await?;
 println!("from={} {:?}", msg.src, msg.payload);
 # Ok(())
@@ -75,8 +104,6 @@ println!("from={} {:?}", msg.src, msg.payload);
 ```
 
 ### Open a reliable bidirectional stream
-
-Use `open_bi` / `accept_bi` for high-level reliable communication.
 
 ```rust
 # async fn example(endpoint: rustp2p_quic::Endpoint, peer_id: rustp2p_quic::PeerId) -> rustp2p_quic::Result<()> {
@@ -90,23 +117,42 @@ println!("response={:?}", response);
 # }
 ```
 
-On the receiving side:
+On the receiving side, `accept_bi` returns source information:
 
 ```rust
 # async fn example(endpoint: rustp2p_quic::Endpoint) -> rustp2p_quic::Result<()> {
-let (mut send, mut recv) = endpoint.accept_bi().await?;
-let request = recv.read_to_end(1024 * 1024).await?;
-send.write_all(b"echo: ").await?;
-send.write_all(&request).await?;
-send.finish()?;
+let mut stream = endpoint.accept_bi().await?;
+println!("from={} relay={}", stream.peer_id, stream.is_relay);
+
+let request = stream.recv.read_to_end(1024 * 1024).await?;
+stream.send.write_all(b"echo: ").await?;
+stream.send.write_all(&request).await?;
+stream.send.finish()?;
 # Ok(())
 # }
 ```
 
-`open_stream_to` and `accept_stream` remain available as compatibility wrappers around the same
-end-to-end QUIC stream behavior.
+### Discovery
 
-### Low-level escape hatches
+Nodes exchange known peers through `Hello` and `IDRouteQuery/IDRouteReply`.
+
+For a chain like:
+
+```text
+A <-> B <-> C <-> D
+```
+
+A bootstraps to B, B bootstraps to C, and C bootstraps to D. Discovery then propagates known peers,
+so A eventually learns D's `PeerId` and a relay route to D. A can then call:
+
+```rust
+# async fn example(endpoint: rustp2p_quic::Endpoint) -> rustp2p_quic::Result<()> {
+endpoint.send_to("node-d".into(), b"hello d").await?;
+# Ok(())
+# }
+```
+
+## Low-Level Escape Hatches
 
 The low-level QUIC API is still available:
 
@@ -122,156 +168,97 @@ Direct raw datagrams on the shared UDP socket are also available:
 - `Endpoint::send_direct_datagram(...)`
 - `Endpoint::recv_direct_datagram()`
 
-## Example: peer node
+## Example: Peer Node
 
-The example is a single peer program. It is not split into server and client. Every instance can:
+The example is a single peer program. It is not split into server and client.
 
-- receive unreliable datagrams;
-- accept reliable bidirectional streams;
-- send unreliable datagrams;
-- open reliable bidirectional streams;
-- add peers at startup or interactively;
-- broadcast to known peers.
-
-Run it with:
+Run node A:
 
 ```bash
-cargo run -p rustp2p-quic --example node -- --bind 127.0.0.1:7001
+cargo run -p rustp2p-quic --example node -- --id node-a --seed seed-a --bind 127.0.0.1:7101
 ```
 
-The node prints:
-
-```text
-peer_id=<64 hex chars>
-group=GroupCode(...)
-addr=127.0.0.1:7001
-commands:
-  add <peer_id>@<addr>
-  send <peer_id> <message>
-  stream <peer_id> <message>
-  broadcast <message>
-  peers
-  quit
-```
-
-Copy the printed `peer_id`; it is needed by other nodes.
-
-### Two-node direct test
-
-Terminal 1:
+Run node B and bootstrap it to A:
 
 ```bash
-cargo run -p rustp2p-quic --example node -- --bind 127.0.0.1:7001
+cargo run -p rustp2p-quic --example node -- --id node-b --seed seed-b --bind 127.0.0.1:7102 --bootstrap 127.0.0.1:7101
 ```
 
-Copy node A's printed `peer_id`.
-
-Terminal 2:
-
-```bash
-cargo run -p rustp2p-quic --example node -- --bind 127.0.0.1:7002 --peer <A_PEER_ID>@127.0.0.1:7001
-```
-
-Copy node B's printed `peer_id`.
-
-In terminal 1, add node B:
+In node A, connect back to B if you want an explicit direct route both ways:
 
 ```text
-add <B_PEER_ID>@127.0.0.1:7002
+connect 127.0.0.1:7102
 ```
 
-Send an unreliable message from A to B:
+Interactive commands:
 
 ```text
-send <B_PEER_ID> hello over datagram
-```
-
-Open a reliable bidirectional stream from A to B:
-
-```text
-stream <B_PEER_ID> hello over quic stream
-```
-
-B prints the incoming stream payload. A prints the echo response.
-
-### Three-node relay test
-
-This verifies the peer-to-peer relay model:
-
-```text
-A <-> B <-> C
-```
-
-Start B first:
-
-```bash
-cargo run -p rustp2p-quic --example node -- --bind 127.0.0.1:7102
-```
-
-Copy `B_PEER_ID`.
-
-Start A and connect it to B:
-
-```bash
-cargo run -p rustp2p-quic --example node -- --bind 127.0.0.1:7101 --peer <B_PEER_ID>@127.0.0.1:7102
-```
-
-Copy `A_PEER_ID`.
-
-Start C and connect it to B:
-
-```bash
-cargo run -p rustp2p-quic --example node -- --bind 127.0.0.1:7103 --peer <B_PEER_ID>@127.0.0.1:7102
-```
-
-Copy `C_PEER_ID`.
-
-In B's terminal, add A and C if they were not already learned:
-
-```text
-add <A_PEER_ID>@127.0.0.1:7101
-add <C_PEER_ID>@127.0.0.1:7103
-```
-
-In A's terminal, refresh route discovery through B:
-
-```text
-add <B_PEER_ID>@127.0.0.1:7102
+connect <addr>
+send <peer_id> <message>
+stream <peer_id> <message>
+broadcast <message>
 peers
+quit
 ```
 
-After route discovery, A should know C. Then send from A to C:
+Send an unreliable message:
 
 ```text
-send <C_PEER_ID> hello through B
-stream <C_PEER_ID> reliable hello through B
+send node-b hello over datagram
 ```
 
-C receives the datagram and stream. B forwards the traffic but does not receive the reliable stream
-through `accept_bi`, because the QUIC connection is end-to-end between A and C.
+Open a reliable bidirectional stream:
 
-### Cross-group relay test
+```text
+stream node-b hello over quic stream
+```
 
-Relay nodes do not need to share the final receiver's group.
+### Relay Example
 
-Start B in a different group:
+Start B:
 
 ```bash
-cargo run -p rustp2p-quic --example node -- --group relay --bind 127.0.0.1:7202
+cargo run -p rustp2p-quic --example node -- --id node-b --seed seed-b --bind 127.0.0.1:7202
 ```
 
-Start A and C in the same group:
+Start A connected to B:
 
 ```bash
-cargo run -p rustp2p-quic --example node -- --group edge --bind 127.0.0.1:7201 --peer <B_PEER_ID>@127.0.0.1:7202
-cargo run -p rustp2p-quic --example node -- --group edge --bind 127.0.0.1:7203 --peer <B_PEER_ID>@127.0.0.1:7202
+cargo run -p rustp2p-quic --example node -- --id node-a --seed seed-a --bind 127.0.0.1:7201 --bootstrap 127.0.0.1:7202
 ```
 
-Add A and C on B, then refresh route discovery on A as shown in the relay test. A can send to C
-through B even though B is in another group.
+Start C connected to B:
 
-If A and C use different groups, B may still forward the packet, but the final receiver drops
-group-scoped unreliable messages instead of delivering them to `recv`.
+```bash
+cargo run -p rustp2p-quic --example node -- --id node-c --seed seed-c --bind 127.0.0.1:7203 --bootstrap 127.0.0.1:7202
+```
+
+After discovery, A can send to C using only C's peer id:
+
+```text
+send node-c hello through B
+stream node-c reliable hello through B
+```
+
+B forwards the traffic but does not receive the reliable stream through `accept_bi`.
+
+### Four-Node Discovery Example
+
+Start a chain:
+
+```text
+node-a -> node-b -> node-c -> node-d
+```
+
+Use `--bootstrap` so each node connects to the next reachable node. After discovery propagation,
+`node-a` can run:
+
+```text
+send node-d hello d
+stream node-d reliable hello d
+```
+
+No address for `node-d` is needed by node A.
 
 ## Validation
 
@@ -280,5 +267,6 @@ Useful commands:
 ```bash
 cargo check --workspace
 cargo test -p rustp2p-quic
+cargo check -p rustp2p-quic --examples
 cargo clippy --workspace --all-targets -- -D warnings
 ```

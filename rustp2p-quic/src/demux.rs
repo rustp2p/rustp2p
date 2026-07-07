@@ -1,5 +1,5 @@
 use crate::protocol::{Packet, ProtocolType};
-use crate::{GroupCode, PeerId};
+use crate::PeerId;
 use bytes::Bytes;
 use dashmap::DashMap;
 use quinn::udp::{RecvMeta, Transmit};
@@ -48,7 +48,6 @@ pub struct ReceivedPacket {
 #[derive(Clone, Debug)]
 struct VirtualPeer {
     peer_id: PeerId,
-    group: GroupCode,
     src: PeerId,
     max_ttl: u8,
     next_hop: SocketAddr,
@@ -101,7 +100,6 @@ impl SharedUdpSocket {
         &self,
         src: PeerId,
         peer_id: PeerId,
-        group: GroupCode,
         max_ttl: u8,
         next_hop: SocketAddr,
     ) -> SocketAddr {
@@ -110,7 +108,6 @@ impl SharedUdpSocket {
                 addr,
                 VirtualPeer {
                     peer_id,
-                    group,
                     src,
                     max_ttl,
                     next_hop,
@@ -121,12 +118,11 @@ impl SharedUdpSocket {
 
         let seq = self.next_virtual.fetch_add(1, Ordering::Relaxed);
         let addr = SocketAddr::from(([127, 255, (seq >> 8) as u8, seq as u8], 4433));
-        self.virtual_by_peer.insert(peer_id, addr);
+        self.virtual_by_peer.insert(peer_id.clone(), addr);
         self.virtual_by_addr.insert(
             addr,
             VirtualPeer {
                 peer_id,
-                group,
                 src,
                 max_ttl,
                 next_hop,
@@ -163,9 +159,8 @@ impl AsyncUdpSocket for SharedUdpSocket {
         if let Some(peer) = self.virtual_by_addr.get(&transmit.destination) {
             let packet = Packet::build(
                 ProtocolType::QuicRelay,
-                peer.group,
-                peer.src,
-                peer.peer_id,
+                peer.src.clone(),
+                peer.peer_id.clone(),
                 peer.max_ttl,
                 transmit.contents,
             )?;

@@ -1,9 +1,9 @@
-use crate::{GroupCode, PeerAddr, PeerId};
+use crate::{PeerId, PeerInfo};
 use serde::{Deserialize, Serialize};
 use std::io;
 
-pub const VERSION: u8 = 1;
-pub const HEADER_LEN: usize = 104;
+pub const VERSION: u8 = 2;
+const FIXED_HEADER_LEN: usize = 13;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[repr(u8)]
@@ -21,8 +21,8 @@ pub enum ProtocolType {
     IDRouteReply = 10,
     RangeBroadcast = 11,
     QuicRelay = 12,
-    ReliableRelayOpen = 13,
-    ReliableRelayClose = 14,
+    HelloRequest = 13,
+    HelloReply = 14,
 }
 
 impl TryFrom<u8> for ProtocolType {
@@ -43,8 +43,8 @@ impl TryFrom<u8> for ProtocolType {
             10 => Ok(Self::IDRouteReply),
             11 => Ok(Self::RangeBroadcast),
             12 => Ok(Self::QuicRelay),
-            13 => Ok(Self::ReliableRelayOpen),
-            14 => Ok(Self::ReliableRelayClose),
+            13 => Ok(Self::HelloRequest),
+            14 => Ok(Self::HelloReply),
             val => Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("invalid protocol type: {val}"),
@@ -62,19 +62,31 @@ impl From<ProtocolType> for u8 {
 #[derive(Clone, Debug)]
 pub struct Packet {
     buf: Vec<u8>,
+    src: PeerId,
+    dest: PeerId,
+    payload_offset: usize,
 }
 
 impl Packet {
     pub fn build(
         protocol: ProtocolType,
-        group: GroupCode,
         src: PeerId,
         dest: PeerId,
         max_ttl: u8,
         payload: &[u8],
     ) -> io::Result<Self> {
-        let len = HEADER_LEN
-            .checked_add(payload.len())
+        let src_bytes = src.as_str().as_bytes();
+        let dest_bytes = dest.as_str().as_bytes();
+        if src_bytes.len() > u16::MAX as usize || dest_bytes.len() > u16::MAX as usize {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "peer id exceeds 65535 bytes",
+            ));
+        }
+        let len = FIXED_HEADER_LEN
+            .checked_add(src_bytes.len())
+            .and_then(|n| n.checked_add(dest_bytes.len()))
+            .and_then(|n| n.checked_add(payload.len()))
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "packet too large"))?;
         if len > u32::MAX as usize {
             return Err(io::Error::new(
@@ -82,23 +94,31 @@ impl Packet {
                 "packet too large",
             ));
         }
-        let mut buf = vec![0u8; len];
-        buf[0] = 0x80 | u8::from(protocol);
-        buf[1] = VERSION;
-        buf[2] = 0;
-        buf[3] = max_ttl;
-        buf[4] = max_ttl;
-        buf[5..9].copy_from_slice(&(len as u32).to_be_bytes());
-        buf[9..24].fill(0);
-        buf[24..40].copy_from_slice(group.as_ref());
-        buf[40..72].copy_from_slice(src.as_ref());
-        buf[72..104].copy_from_slice(dest.as_ref());
-        buf[HEADER_LEN..].copy_from_slice(payload);
-        Ok(Self { buf })
+
+        let mut buf = Vec::with_capacity(len);
+        buf.push(0x80 | u8::from(protocol));
+        buf.push(VERSION);
+        buf.push(0);
+        buf.push(max_ttl);
+        buf.push(max_ttl);
+        buf.extend_from_slice(&(len as u32).to_be_bytes());
+        buf.extend_from_slice(&(src_bytes.len() as u16).to_be_bytes());
+        buf.extend_from_slice(&(dest_bytes.len() as u16).to_be_bytes());
+        buf.extend_from_slice(src_bytes);
+        buf.extend_from_slice(dest_bytes);
+        let payload_offset = buf.len();
+        buf.extend_from_slice(payload);
+
+        Ok(Self {
+            buf,
+            src,
+            dest,
+            payload_offset,
+        })
     }
 
     pub fn parse(buf: Vec<u8>) -> io::Result<Self> {
-        if buf.len() < HEADER_LEN {
+        if buf.len() < FIXED_HEADER_LEN {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "short packet"));
         }
         if buf[0] & 0x80 == 0 {
@@ -120,29 +140,45 @@ impl Packet {
                 "packet length mismatch",
             ));
         }
-        Ok(Self { buf })
+        let src_len = u16::from_be_bytes(buf[9..11].try_into().unwrap()) as usize;
+        let dest_len = u16::from_be_bytes(buf[11..13].try_into().unwrap()) as usize;
+        let src_start = FIXED_HEADER_LEN;
+        let dest_start = src_start
+            .checked_add(src_len)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid src length"))?;
+        let payload_offset = dest_start
+            .checked_add(dest_len)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid dest length"))?;
+        if payload_offset > buf.len() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "peer id length exceeds packet",
+            ));
+        }
+        let src = std::str::from_utf8(&buf[src_start..dest_start])
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("src peer id: {e}")))?
+            .to_string();
+        let dest = std::str::from_utf8(&buf[dest_start..payload_offset])
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("dest peer id: {e}")))?
+            .to_string();
+        Ok(Self {
+            buf,
+            src: PeerId::from(src),
+            dest: PeerId::from(dest),
+            payload_offset,
+        })
     }
 
     pub fn protocol(&self) -> io::Result<ProtocolType> {
         (self.buf[0] & 0x7f).try_into()
     }
 
-    pub fn group(&self) -> GroupCode {
-        let mut out = [0u8; 16];
-        out.copy_from_slice(&self.buf[24..40]);
-        GroupCode(out)
-    }
-
     pub fn src(&self) -> PeerId {
-        let mut out = [0u8; 32];
-        out.copy_from_slice(&self.buf[40..72]);
-        PeerId(out)
+        self.src.clone()
     }
 
     pub fn dest(&self) -> PeerId {
-        let mut out = [0u8; 32];
-        out.copy_from_slice(&self.buf[72..104]);
-        PeerId(out)
+        self.dest.clone()
     }
 
     pub fn ttl(&self) -> u8 {
@@ -162,7 +198,7 @@ impl Packet {
     }
 
     pub fn payload(&self) -> &[u8] {
-        &self.buf[HEADER_LEN..]
+        &self.buf[self.payload_offset..]
     }
 
     pub fn as_bytes(&self) -> &[u8] {
@@ -176,13 +212,19 @@ impl Packet {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct HelloPayload {
+    pub peer: PeerInfo,
+    pub peers: Vec<RouteEntry>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RouteReplyPayload {
     pub peers: Vec<RouteEntry>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RouteEntry {
-    pub peer: PeerAddr,
+    pub peer: PeerInfo,
     pub metric: u8,
 }
 
@@ -193,8 +235,14 @@ pub struct TimestampPayload {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PunchPayload {
-    pub peer: PeerAddr,
+    pub peer: PeerInfo,
     pub nat_info: Option<rust_p2p_core::nat::NatInfo>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct StreamHeader {
+    pub src: PeerId,
+    pub dest: PeerId,
 }
 
 pub fn now_millis() -> u64 {
@@ -206,19 +254,22 @@ pub fn now_millis() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{Packet, ProtocolType, HEADER_LEN};
-    use crate::{GroupCode, PeerId};
+    use super::{Packet, ProtocolType};
+    use crate::PeerId;
 
     #[test]
     fn packet_round_trip() {
-        let src = PeerId([1; 32]);
-        let dest = PeerId([2; 32]);
-        let group = GroupCode([3; 16]);
-        let packet =
-            Packet::build(ProtocolType::MessageData, group, src, dest, 8, b"hello").unwrap();
-        assert_eq!(packet.as_bytes().len(), HEADER_LEN + 5);
+        let src = PeerId::from("node-a");
+        let dest = PeerId::from("node-b");
+        let packet = Packet::build(
+            ProtocolType::MessageData,
+            src.clone(),
+            dest.clone(),
+            8,
+            b"hello",
+        )
+        .unwrap();
         assert_eq!(packet.protocol().unwrap(), ProtocolType::MessageData);
-        assert_eq!(packet.group(), group);
         assert_eq!(packet.src(), src);
         assert_eq!(packet.dest(), dest);
         assert_eq!(packet.payload(), b"hello");

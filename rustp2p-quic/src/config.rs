@@ -1,5 +1,6 @@
-use crate::{GroupCode, Identity, PeerAddr};
+use crate::{CertificateVerifier, Identity, SkipCertificateVerification};
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::Duration;
 
 /// Configuration for the QUIC endpoint.
@@ -19,10 +20,10 @@ pub struct Config {
     pub datagram_send_buffer_size: usize,
     /// Local high-level P2P identity.
     pub identity: Option<Identity>,
-    /// Overlay group code.
-    pub group_code: GroupCode,
-    /// Initial peers used for high-level route discovery.
-    pub bootstrap: Vec<PeerAddr>,
+    /// Initial directly reachable bootstrap addresses.
+    pub bootstrap: Vec<SocketAddr>,
+    /// QUIC server certificate verifier.
+    pub certificate_verifier: Arc<dyn CertificateVerifier>,
     /// Maximum forwarding TTL for high-level packets.
     pub max_ttl: u8,
     /// Whether to start high-level P2P dispatch/maintenance tasks.
@@ -43,8 +44,8 @@ impl Default for Config {
             datagram_receive_buffer_size: Some(1024 * 1024),
             datagram_send_buffer_size: 1024 * 1024,
             identity: None,
-            group_code: GroupCode::unspecified(),
             bootstrap: Vec::new(),
+            certificate_verifier: Arc::new(SkipCertificateVerification),
             max_ttl: 8,
             high_level: false,
         }
