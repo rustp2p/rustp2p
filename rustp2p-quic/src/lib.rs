@@ -10,10 +10,16 @@
 //! application API
 //!       |
 //!       v
-//! quinn over synthetic PeerId addresses
+//! Endpoint public API
 //!       |
 //!       v
-//! CoreTransportLayer (rustp2p-core endpoint + PeerId routes)
+//! quic module (quinn + synthetic PeerId addresses)
+//!       |
+//!       v
+//! protocol module (wire packets + control plane)
+//!       |
+//!       v
+//! transport module (rustp2p-core endpoint + PeerId routes)
 //!       |
 //!       v
 //! real transport links and relay forwarding
@@ -39,22 +45,22 @@
 mod cert;
 mod config;
 mod connection;
-mod demux;
 mod endpoint;
 mod identity;
 mod protocol;
+mod quic;
 mod reliable;
+mod transport;
 
 pub use cert::{CertificateVerifier, SkipCertificateVerification};
 pub use config::Config;
-pub use demux::{classify_packet, PacketType};
-pub use endpoint::{
-    Builder, Endpoint, IncomingBiStream, LinkInfo, LinkMode, PeerInfo, ReceivedMessage,
-    TransportHandle, TransportMessage,
-};
+pub use endpoint::{Builder, Endpoint};
 pub use identity::{Identity, PeerId};
+pub use protocol::{classify_packet, PacketType};
+pub use quic::{IncomingBiStream, ReceivedMessage};
 pub use reliable::{ReliableRecvStream, ReliableSendStream};
 pub use rust_p2p_core::nat::NatInfo;
+pub use transport::{LinkInfo, LinkMode, PeerInfo, TransportHandle, TransportMessage};
 
 /// Re-exported result type.
 pub type Result<T> = std::io::Result<T>;

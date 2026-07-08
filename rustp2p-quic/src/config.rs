@@ -1,4 +1,5 @@
-use crate::{CertificateVerifier, Identity, SkipCertificateVerification};
+use crate::{CertificateVerifier, Identity, PeerId, SkipCertificateVerification};
+use rust_p2p_core::endpoint::LoadBalance;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -22,6 +23,18 @@ pub struct Config {
     pub identity: Option<Identity>,
     /// Initial directly reachable bootstrap addresses.
     pub bootstrap: Vec<SocketAddr>,
+    /// Whether to enable the underlying core TCP transport.
+    pub enable_tcp: bool,
+    /// Optional TCP listen port. `None` reuses the UDP bind port value.
+    pub tcp_port: Option<u16>,
+    /// Externally mapped UDP addresses to advertise and use for punching.
+    pub mapping_udp_addrs: Vec<SocketAddr>,
+    /// Externally mapped TCP addresses to advertise and use for punching.
+    pub mapping_tcp_addrs: Vec<SocketAddr>,
+    /// Route selection strategy for multiple available routes.
+    pub load_balance: LoadBalance,
+    /// Initial peers allowed to perform direct hole punching.
+    pub punch_whitelist: Vec<PeerId>,
     /// QUIC server certificate verifier.
     pub certificate_verifier: Arc<dyn CertificateVerifier>,
     /// Maximum forwarding TTL for high-level packets.
@@ -45,6 +58,12 @@ impl Default for Config {
             datagram_send_buffer_size: 1024 * 1024,
             identity: None,
             bootstrap: Vec::new(),
+            enable_tcp: true,
+            tcp_port: None,
+            mapping_udp_addrs: Vec::new(),
+            mapping_tcp_addrs: Vec::new(),
+            load_balance: LoadBalance::MinHopLowestLatency,
+            punch_whitelist: Vec::new(),
             certificate_verifier: Arc::new(SkipCertificateVerification),
             max_ttl: 8,
             high_level: false,

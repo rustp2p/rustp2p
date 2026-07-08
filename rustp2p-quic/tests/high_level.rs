@@ -237,3 +237,26 @@ async fn custom_certificate_verifier_can_reject_client_cert() {
     assert!(a.open_bi(b.peer_id()).await.is_err());
     close_all(&[&a, &b]).await;
 }
+
+#[tokio::test]
+#[serial]
+async fn punch_whitelist_can_be_changed_at_runtime() {
+    let a = node("punch-api-a").await;
+    let b = node("punch-api-b").await;
+
+    assert!(a.punch_whitelist().is_empty());
+    a.allow_punch(b.peer_id());
+    assert_eq!(a.punch_whitelist(), vec![b.peer_id()]);
+
+    a.deny_punch(b.peer_id());
+    assert!(a.punch_whitelist().is_empty());
+
+    a.set_punch_whitelist(vec![b.peer_id()]);
+    assert_eq!(a.punch_whitelist(), vec![b.peer_id()]);
+
+    a.deny_punch(b.peer_id());
+    let err = a.punch(b.peer_id()).await.unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
+
+    close_all(&[&a, &b]).await;
+}

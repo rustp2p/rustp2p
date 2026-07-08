@@ -17,16 +17,19 @@ between `A` and `C`. Reliable traffic is still end-to-end QUIC:
 - `B` forwards QUIC UDP datagrams inside rustp2p overlay relay packets.
 - `B` does not terminate QUIC streams.
 - `B` cannot read reliable stream payloads.
-- High-level user messages and streams run over end-to-end QUIC.
-- Discovery, route sync, direct transport messages, and QUIC relay packets use the core-backed
-  transport layer.
+- High-level user datagrams and streams run over end-to-end QUIC.
+- Discovery, route sync, punch negotiation, and QUIC relay packets use the protocol/control plane
+  backed by `rustp2p-core` transport I/O.
 
-Internally this is split into two layers:
+Internally this is split into three layers:
 
-- `CoreTransportLayer` owns `rustp2p-core::endpoint::EndPoint`, real reachable addresses, route
-  updates, discovery, and relay forwarding.
-- The QUIC adapter only maps `PeerId` to synthetic addresses required by quinn. It does not keep a
-  real next-hop address; each outgoing QUIC packet is sent through the transport layer by `PeerId`.
+- `transport` owns `rustp2p-core::endpoint::EndPoint`, real reachable addresses, multiple routes
+  per `PeerId`, and raw wire-byte send/receive.
+- `protocol` owns the custom rustp2p packet wire format, control payload encoding, discovery,
+  relay forwarding, NAT candidate exchange, and punch decisions.
+- `quic` owns quinn, certificates, stream/datagram handling, and `PeerId` to synthetic address
+  mapping. It sends encrypted QUIC packets to `protocol`, which wraps them as `QuicRelay` packets
+  before handing them to `transport`.
 
 There is no group concept in `rustp2p-quic`. A discovered peer can relay for any other reachable
 peer.
@@ -108,9 +111,8 @@ let msg = endpoint.recv().await?;
 println!("from={} {:?}", msg.src, msg.payload);
 ```
 
-`send_to` uses QUIC application datagrams. The implementation sends a small number of duplicate
-datagram envelopes with a message id and deduplicates on receive, so normal local and LAN usage is
-stable while preserving datagram semantics at the transport layer.
+`send_to` uses QUIC application datagrams. The payload is encrypted by QUIC/TLS. The rustp2p
+protocol layer only sees and forwards QUIC ciphertext packets.
 
 ### Open a reliable bidirectional stream
 
@@ -167,13 +169,29 @@ endpoint.send_to("node-d".into(), b"hello d").await?;
 
 ## Transport Handle
 
-Real socket addresses are only transport/bootstrap concerns. Use `Endpoint::transport()` when you
-need direct transport access:
+Real socket addresses are only transport/bootstrap concerns. `Endpoint::transport()` is a low-level
+escape hatch for already encoded protocol wire bytes; it does not encrypt user payloads by itself.
+Application data should use `send_to` or `open_bi`.
 
-- `TransportHandle::add_bootstrap(addr)`
 - `TransportHandle::local_addr()`
-- `TransportHandle::send_to_peer(peer_id, bytes)`
-- `TransportHandle::recv_from_peer()`
+- `TransportHandle::send_to_peer(peer_id, wire_bytes)`
+
+Bootstrap uses `Endpoint::add_bootstrap(addr)` so the protocol layer can perform hello discovery and
+learn the remote `PeerId`.
+
+## Hole Punching
+
+Punching is controlled by a dynamic whitelist. A node only starts punch negotiation with peers that
+are currently allowed:
+
+```rust
+endpoint.allow_punch("node-b".into());
+endpoint.punch("node-b".into()).await?;
+endpoint.deny_punch("node-b".into());
+```
+
+Punch negotiation is handled by the protocol layer. The transport layer only supplies core route
+updates and the `rustp2p-core` punch primitive.
 
 ## Example: Peer Node
 

@@ -1,0 +1,533 @@
+use crate::{Config, PeerId};
+use bytes::Bytes;
+use dashmap::DashMap;
+use rust_p2p_core::endpoint::{EndPoint, Sender as CoreSender, Transport};
+use rust_p2p_core::nat::NatInfo;
+use rust_p2p_core::punch::PunchInfo;
+use rust_p2p_core::route_table::{Protocol, Route, RouteKey, RouteTable};
+use serde::{Deserialize, Serialize};
+use std::io;
+use std::net::SocketAddr;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use tokio::sync::mpsc;
+
+/// Read-only peer information discovered by the protocol layer.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PeerInfo {
+    pub peer_id: PeerId,
+    pub addrs: Vec<SocketAddr>,
+    pub relay_hint: Option<PeerId>,
+    pub last_seen: u64,
+    pub is_direct: bool,
+    pub nat_info: Option<NatInfo>,
+}
+
+impl PeerInfo {
+    pub fn new(peer_id: PeerId) -> Self {
+        Self {
+            peer_id,
+            addrs: Vec::new(),
+            relay_hint: None,
+            last_seen: now_millis(),
+            is_direct: false,
+            nat_info: None,
+        }
+    }
+
+    pub fn with_addr(mut self, addr: SocketAddr) -> Self {
+        self.addrs.push(addr);
+        self.is_direct = true;
+        self
+    }
+}
+
+/// Low-level protocol/control message metadata.
+///
+/// User-facing encrypted datagrams are delivered by `Endpoint::recv()`, not this
+/// type. This remains for low-level diagnostics and control-plane escape hatches.
+#[derive(Clone, Debug)]
+pub struct TransportMessage {
+    pub payload: Bytes,
+    pub src: PeerId,
+    pub dest: PeerId,
+    pub route: RouteKey,
+    pub ttl: u8,
+    pub max_ttl: u8,
+    pub is_relay: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LinkMode {
+    Direct,
+    Relay,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LinkInfo {
+    pub peer_id: PeerId,
+    pub mode: LinkMode,
+    pub metric: u8,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct TransportPayload {
+    pub src: PeerId,
+    pub payload: Bytes,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct RawTransportPacket {
+    pub data: Bytes,
+    pub route_key: RouteKey,
+}
+
+enum CoreOutboundPacket {
+    PeerPacket { dest: PeerId, data: Bytes },
+}
+
+struct CoreTransportLayer {
+    sender: CoreSender,
+    puncher: rust_p2p_core::punch::Puncher,
+    local_addr: SocketAddr,
+    local_tcp_port: u16,
+    raw_tx: flume::Sender<RawTransportPacket>,
+    routes: parking_lot::RwLock<Option<RouteTable<PeerId>>>,
+    transports: DashMap<RouteKey, Transport>,
+    outbound_tx: mpsc::UnboundedSender<CoreOutboundPacket>,
+}
+
+impl CoreTransportLayer {
+    async fn bind(
+        config: &Config,
+        raw_tx: flume::Sender<RawTransportPacket>,
+    ) -> io::Result<Arc<Self>> {
+        let udp_port = config.bind_addr.port();
+        let mut core_config = if config.enable_tcp {
+            rust_p2p_core::endpoint::Config::new()
+                .udp_port(udp_port)
+                .tcp_port(config.tcp_port.unwrap_or(udp_port))
+        } else {
+            rust_p2p_core::endpoint::Config::udp(udp_port)
+        };
+        core_config = core_config
+            .stun_servers(config.stun_servers.clone())
+            .mapping_udp_addr(config.mapping_udp_addrs.clone())
+            .mapping_tcp_addr(config.mapping_tcp_addrs.clone())
+            .load_balance(config.load_balance);
+
+        let endpoint = EndPoint::bind(core_config).await?;
+        let sender = endpoint.sender();
+        let puncher = endpoint.puncher();
+        let local_tcp_port = endpoint.local_tcp_port();
+        let local_addr = normalize_local_addr(endpoint.local_addr().await?, config.bind_addr);
+        let (outbound_tx, outbound_rx) = mpsc::unbounded_channel();
+        let layer = Arc::new(Self {
+            sender,
+            puncher,
+            local_addr,
+            local_tcp_port,
+            raw_tx,
+            routes: parking_lot::RwLock::new(None),
+            transports: DashMap::new(),
+            outbound_tx,
+        });
+        layer.start(endpoint, outbound_rx);
+        Ok(layer)
+    }
+
+    fn start(
+        self: &Arc<Self>,
+        endpoint: EndPoint,
+        outbound_rx: mpsc::UnboundedReceiver<CoreOutboundPacket>,
+    ) {
+        self.start_core_receiver(endpoint);
+        self.start_core_sender(outbound_rx);
+    }
+
+    fn set_route_table(&self, routes: RouteTable<PeerId>) {
+        *self.routes.write() = Some(routes);
+    }
+
+    fn local_addr(&self) -> SocketAddr {
+        self.local_addr
+    }
+
+    fn local_tcp_addr(&self) -> Option<SocketAddr> {
+        (self.local_tcp_port != 0)
+            .then(|| SocketAddr::new(self.local_addr.ip(), self.local_tcp_port))
+    }
+
+    async fn send_raw_to_addr(&self, buf: &[u8], addr: SocketAddr) -> io::Result<()> {
+        self.sender.send_to(buf, addr).await
+    }
+
+    fn try_send_packet(&self, dest: PeerId, data: Bytes) -> io::Result<()> {
+        self.outbound_tx
+            .send(CoreOutboundPacket::PeerPacket { dest, data })
+            .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "transport sender closed"))
+    }
+
+    async fn punch(
+        &self,
+        tcp_buf: Option<&[u8]>,
+        udp_buf: &[u8],
+        punch_info: PunchInfo,
+    ) -> io::Result<()> {
+        self.puncher.punch_now(tcp_buf, udp_buf, punch_info).await
+    }
+
+    fn start_core_receiver(self: &Arc<Self>, mut endpoint: EndPoint) {
+        let this = self.clone();
+        tokio::spawn(async move {
+            while let Some(received) = endpoint.recv().await {
+                let route_key = RouteKey::from_transport(&received.transport);
+                this.transports
+                    .insert(route_key, received.transport.clone());
+                if received.data.is_empty() {
+                    continue;
+                }
+                if this
+                    .raw_tx
+                    .send_async(RawTransportPacket {
+                        data: received.data,
+                        route_key,
+                    })
+                    .await
+                    .is_err()
+                {
+                    log::debug!("raw transport receiver closed");
+                    break;
+                }
+            }
+        });
+    }
+
+    fn start_core_sender(
+        self: &Arc<Self>,
+        mut outbound_rx: mpsc::UnboundedReceiver<CoreOutboundPacket>,
+    ) {
+        let this = self.clone();
+        tokio::spawn(async move {
+            while let Some(packet) = outbound_rx.recv().await {
+                let result = match packet {
+                    CoreOutboundPacket::PeerPacket { dest, data } => {
+                        this.send_packet_to_peer(dest, &data).await
+                    }
+                };
+                if let Err(e) = result {
+                    log::debug!("core transport send failed: {e}");
+                }
+            }
+        });
+    }
+
+    async fn send_packet_to_peer(&self, peer_id: PeerId, data: &[u8]) -> io::Result<()> {
+        let route = self
+            .routes
+            .read()
+            .as_ref()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "route table not attached"))?
+            .get_route_by_id(&peer_id)?;
+        self.send_to_route(route.route_key(), data).await
+    }
+
+    async fn send_to_route(&self, route_key: RouteKey, data: &[u8]) -> io::Result<()> {
+        if let Some(transport) = self.transports.get(&route_key) {
+            return transport.send(data).await;
+        }
+        if route_key.protocol().is_tcp() {
+            self.sender.write_to(data, route_key.addr()).await
+        } else {
+            self.sender.send_to(data, route_key.addr()).await
+        }
+    }
+}
+
+struct TransportState {
+    peer_id: PeerId,
+    closed: AtomicBool,
+    peers: DashMap<PeerId, PeerInfo>,
+    routes: RouteTable<PeerId>,
+    raw_rx: flume::Receiver<RawTransportPacket>,
+}
+
+pub(crate) struct TransportLayer {
+    core: Arc<CoreTransportLayer>,
+    state: Arc<TransportState>,
+}
+
+impl TransportLayer {
+    pub(crate) async fn bind(peer_id: PeerId, config: &Config) -> io::Result<Arc<Self>> {
+        let (raw_tx, raw_rx) = flume::bounded(512);
+        let core = CoreTransportLayer::bind(config, raw_tx).await?;
+        let routes = RouteTable::new(config.load_balance);
+        core.set_route_table(routes.clone());
+        Ok(Arc::new(Self {
+            core,
+            state: Arc::new(TransportState {
+                peer_id,
+                closed: AtomicBool::new(false),
+                peers: DashMap::new(),
+                routes,
+                raw_rx,
+            }),
+        }))
+    }
+
+    pub(crate) fn local_addr(&self) -> SocketAddr {
+        self.core.local_addr()
+    }
+
+    pub(crate) fn local_tcp_addr(&self) -> Option<SocketAddr> {
+        self.core.local_tcp_addr()
+    }
+
+    pub(crate) fn close(&self) {
+        self.state.closed.store(true, Ordering::Relaxed);
+    }
+
+    pub(crate) fn known_peers(&self) -> Vec<PeerInfo> {
+        self.state.peers.iter().map(|v| v.value().clone()).collect()
+    }
+
+    pub(crate) fn routes(&self, peer_id: PeerId) -> Vec<Route> {
+        self.state.routes.route(&peer_id).unwrap_or_default()
+    }
+
+    pub(crate) fn link_mode(&self, peer_id: PeerId) -> Option<LinkMode> {
+        self.link_info(peer_id).map(|info| info.mode)
+    }
+
+    pub(crate) fn link_info(&self, peer_id: PeerId) -> Option<LinkInfo> {
+        let route = self.state.routes.route_one(&peer_id)?;
+        Some(LinkInfo {
+            peer_id,
+            mode: if route.metric() == 0 {
+                LinkMode::Direct
+            } else {
+                LinkMode::Relay
+            },
+            metric: route.metric(),
+        })
+    }
+
+    pub(crate) fn route_for(&self, peer_id: &PeerId) -> io::Result<Route> {
+        if let Ok(route) = self.state.routes.get_route_by_id(peer_id) {
+            return Ok(route);
+        }
+        if let Some(peer) = self.state.peers.get(peer_id) {
+            if peer.is_direct {
+                if let Some(addr) = peer.addrs.first().copied() {
+                    let route = Route::from_default_rt(RouteKey::new(Protocol::UDP, addr), 0);
+                    self.state.routes.add_route(peer_id.clone(), route);
+                    return self.state.routes.get_route_by_id(peer_id);
+                }
+            }
+            if let Some(relay) = &peer.relay_hint {
+                if let Ok(route) = self.state.routes.get_route_by_id(relay) {
+                    self.state.routes.add_route(
+                        peer_id.clone(),
+                        Route::from_default_rt(route.route_key(), route.metric().saturating_add(1)),
+                    );
+                    return self.state.routes.get_route_by_id(peer_id);
+                }
+            }
+        }
+        Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "peer route not found",
+        ))
+    }
+
+    pub(crate) fn route_metric_for(&self, peer_id: &PeerId) -> io::Result<(Route, u8)> {
+        let route = self.route_for(peer_id)?;
+        let metric = route.metric();
+        Ok((route, metric))
+    }
+
+    pub(crate) async fn recv_wire(&self) -> io::Result<RawTransportPacket> {
+        self.state
+            .raw_rx
+            .recv_async()
+            .await
+            .map_err(|_| io::Error::new(io::ErrorKind::UnexpectedEof, "transport closed"))
+    }
+
+    pub(crate) async fn send_wire(&self, peer_id: PeerId, wire_bytes: &[u8]) -> io::Result<()> {
+        self.core.send_packet_to_peer(peer_id, wire_bytes).await
+    }
+
+    pub(crate) fn try_send_wire(&self, peer_id: PeerId, wire_bytes: &[u8]) -> io::Result<()> {
+        self.core
+            .try_send_packet(peer_id, Bytes::copy_from_slice(wire_bytes))
+    }
+
+    pub(crate) async fn send_raw_to_addr(
+        &self,
+        wire_bytes: &[u8],
+        addr: SocketAddr,
+    ) -> io::Result<()> {
+        self.core.send_raw_to_addr(wire_bytes, addr).await
+    }
+
+    pub(crate) fn add_route(&self, peer_id: PeerId, route_key: RouteKey, metric: u8) {
+        self.state
+            .routes
+            .add_route(peer_id, Route::from_default_rt(route_key, metric));
+    }
+
+    pub(crate) fn update_route_read_time(&self, peer_id: &PeerId, route_key: &RouteKey) {
+        self.state.routes.update_read_time(peer_id, route_key);
+    }
+
+    pub(crate) fn route_to_id(&self, route_key: &RouteKey) -> Option<PeerId> {
+        self.state.routes.route_to_id(route_key)
+    }
+
+    pub(crate) fn upsert_peer(&self, peer: PeerInfo, route_key: RouteKey, metric: u8) {
+        if peer.peer_id == self.state.peer_id {
+            return;
+        }
+        let mut merged = peer.clone();
+        merged.last_seen = now_millis();
+        if let Some(existing) = self.state.peers.get(&peer.peer_id) {
+            for addr in &existing.addrs {
+                if !merged.addrs.contains(addr) {
+                    merged.addrs.push(*addr);
+                }
+            }
+            merged.is_direct |= existing.is_direct;
+            if merged.relay_hint.is_none() {
+                merged.relay_hint = existing.relay_hint.clone();
+            }
+            if merged.nat_info.is_none() {
+                merged.nat_info = existing.nat_info.clone();
+            }
+        }
+        if metric == 0 {
+            merged.is_direct = true;
+            if !merged.addrs.contains(&route_key.addr()) {
+                merged.addrs.push(route_key.addr());
+            }
+        }
+        self.add_route(merged.peer_id.clone(), route_key, metric);
+        self.state.peers.insert(merged.peer_id.clone(), merged);
+    }
+
+    pub(crate) async fn punch(
+        &self,
+        tcp_buf: Option<&[u8]>,
+        udp_buf: &[u8],
+        punch_info: PunchInfo,
+    ) -> io::Result<()> {
+        self.core.punch(tcp_buf, udp_buf, punch_info).await
+    }
+}
+
+#[derive(Clone)]
+pub struct TransportHandle {
+    transport: Arc<TransportLayer>,
+}
+
+impl TransportHandle {
+    pub(crate) fn new(transport: Arc<TransportLayer>) -> Self {
+        Self { transport }
+    }
+
+    pub fn local_addr(&self) -> Option<SocketAddr> {
+        Some(self.transport.local_addr())
+    }
+
+    /// Sends already encoded protocol wire bytes to a peer.
+    ///
+    /// This is a low-level escape hatch. It does not encrypt user data by itself.
+    /// Application data should use `Endpoint::send_to` or `Endpoint::open_bi`.
+    pub async fn send_to_peer(&self, peer_id: PeerId, wire_bytes: &[u8]) -> io::Result<()> {
+        self.transport.send_wire(peer_id, wire_bytes).await
+    }
+}
+
+fn normalize_local_addr(actual: SocketAddr, requested: SocketAddr) -> SocketAddr {
+    if requested.ip().is_unspecified() || !actual.ip().is_unspecified() {
+        actual
+    } else {
+        SocketAddr::new(requested.ip(), actual.port())
+    }
+}
+
+pub(crate) fn now_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{LinkMode, TransportLayer};
+    use crate::{Config, Identity, PeerId};
+    use std::io;
+
+    #[tokio::test]
+    async fn unknown_route_returns_not_found() {
+        let transport = test_transport("route-a").await;
+        let err = transport.route_for(&PeerId::from("route-b")).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
+        transport.close();
+    }
+
+    #[tokio::test]
+    async fn route_table_supports_multiple_routes_for_a_peer() {
+        let transport = test_transport("route-multi-a").await;
+        let peer = PeerId::from("route-multi-b");
+        transport.add_route(
+            peer.clone(),
+            rust_p2p_core::route_table::RouteKey::new(
+                rust_p2p_core::route_table::Protocol::UDP,
+                "127.0.0.1:1111".parse().unwrap(),
+            ),
+            1,
+        );
+        transport.add_route(
+            peer.clone(),
+            rust_p2p_core::route_table::RouteKey::new(
+                rust_p2p_core::route_table::Protocol::TCP,
+                "127.0.0.1:2222".parse().unwrap(),
+            ),
+            1,
+        );
+
+        assert_eq!(transport.routes(peer).len(), 2);
+        transport.close();
+    }
+
+    #[tokio::test]
+    async fn direct_route_reports_direct_link_mode() {
+        let transport = test_transport("transport-a").await;
+        let peer = PeerId::from("transport-b");
+        transport.add_route(
+            peer.clone(),
+            rust_p2p_core::route_table::RouteKey::new(
+                rust_p2p_core::route_table::Protocol::UDP,
+                "127.0.0.1:3333".parse().unwrap(),
+            ),
+            0,
+        );
+
+        assert_eq!(transport.link_mode(peer), Some(LinkMode::Direct));
+        transport.close();
+    }
+
+    async fn test_transport(id: &str) -> std::sync::Arc<TransportLayer> {
+        let config = Config {
+            identity: Some(Identity::new(id, format!("{id}-seed")).unwrap()),
+            bind_addr: "127.0.0.1:0".parse().unwrap(),
+            stun_servers: Vec::new(),
+            ..Default::default()
+        };
+        TransportLayer::bind(PeerId::from(id), &config)
+            .await
+            .unwrap()
+    }
+}
