@@ -1,7 +1,7 @@
 use crate::cert::{RustlsCertificateVerifier, RustlsClientCertificateVerifier};
 use crate::config::Config;
 use crate::connection::Connection;
-use crate::demux::{ReceivedPacket, SharedUdpSocket};
+use crate::demux::{CoreTransportLayer, PacketType, QuicPeerSocket, ReceivedPacket};
 use crate::protocol::{
     now_millis, DatagramFrame, HelloPayload, Packet, ProtocolType, RouteEntry, RouteReplyPayload,
     StreamFrame, StreamHeader,
@@ -18,7 +18,6 @@ use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::net::UdpSocket;
 use tokio::sync::{mpsc, Mutex};
 
 /// Read-only peer information discovered by the high-level P2P layer.
@@ -49,29 +48,6 @@ impl PeerInfo {
     }
 }
 
-/// Backwards-compatible low-level node address.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct NodeAddr {
-    pub node_id: PeerId,
-    pub direct_addresses: Vec<SocketAddr>,
-}
-
-impl NodeAddr {
-    pub fn new(node_id: impl Into<PeerId>, direct_addresses: Vec<SocketAddr>) -> Self {
-        Self {
-            node_id: node_id.into(),
-            direct_addresses,
-        }
-    }
-
-    pub fn from_id(node_id: impl Into<PeerId>) -> Self {
-        Self {
-            node_id: node_id.into(),
-            direct_addresses: Vec::new(),
-        }
-    }
-}
-
 #[derive(Clone, Debug)]
 pub struct ReceivedMessage {
     pub payload: Bytes,
@@ -88,6 +64,22 @@ pub struct IncomingBiStream {
     pub peer_id: PeerId,
     pub send: ReliableSendStream,
     pub recv: ReliableRecvStream,
+}
+
+#[derive(Clone, Debug)]
+pub struct TransportMessage {
+    pub payload: Bytes,
+    pub src: PeerId,
+    pub dest: PeerId,
+    pub route: RouteKey,
+    pub ttl: u8,
+    pub max_ttl: u8,
+    pub is_relay: bool,
+}
+
+#[derive(Clone)]
+pub struct TransportHandle {
+    endpoint: Endpoint,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -157,6 +149,30 @@ impl Default for Builder {
     }
 }
 
+impl TransportHandle {
+    pub async fn add_bootstrap(&self, addr: SocketAddr) -> crate::Result<PeerId> {
+        self.endpoint.add_bootstrap(addr).await
+    }
+
+    pub fn local_addr(&self) -> Option<SocketAddr> {
+        self.endpoint.local_addr()
+    }
+
+    pub async fn send_to_peer(&self, peer_id: PeerId, bytes: &[u8]) -> crate::Result<()> {
+        self.endpoint
+            .send_control(peer_id, ProtocolType::MessageData, bytes)
+            .await
+    }
+
+    pub async fn recv_from_peer(&self) -> crate::Result<TransportMessage> {
+        let rt = self.endpoint.runtime()?;
+        rt.transport_rx
+            .recv_async()
+            .await
+            .map_err(|_| io::Error::new(io::ErrorKind::UnexpectedEof, "endpoint closed"))
+    }
+}
+
 struct RuntimeState {
     peer_id: PeerId,
     max_ttl: u8,
@@ -170,6 +186,10 @@ struct RuntimeState {
     inbox_rx: flume::Receiver<ReceivedMessage>,
     stream_tx: flume::Sender<IncomingBiStream>,
     stream_rx: flume::Receiver<IncomingBiStream>,
+    hello_tx: flume::Sender<(SocketAddr, PeerId)>,
+    hello_rx: flume::Receiver<(SocketAddr, PeerId)>,
+    transport_tx: flume::Sender<TransportMessage>,
+    transport_rx: flume::Receiver<TransportMessage>,
 }
 
 /// The main QUIC endpoint for low-level QUIC and high-level P2P APIs.
@@ -178,8 +198,9 @@ pub struct Endpoint {
     node_id: PeerId,
     stun_servers: Vec<String>,
     nat_info: Arc<parking_lot::RwLock<NatInfo>>,
-    shared_socket: Arc<SharedUdpSocket>,
-    direct_rx: Arc<Mutex<mpsc::Receiver<ReceivedPacket>>>,
+    core_transport: Arc<CoreTransportLayer>,
+    quic_socket: Arc<QuicPeerSocket>,
+    core_rx: Arc<Mutex<mpsc::Receiver<ReceivedPacket>>>,
     runtime: Option<Arc<RuntimeState>>,
 }
 
@@ -261,12 +282,11 @@ impl Endpoint {
         let mut client_config = quinn::ClientConfig::new(Arc::new(quic_client_config));
         client_config.transport_config(transport_config.clone());
 
-        let std_socket = std::net::UdpSocket::bind(config.bind_addr)?;
-        std_socket.set_nonblocking(true)?;
-        let tokio_socket = Arc::new(UdpSocket::from_std(std_socket)?);
-
         let (non_quic_tx, non_quic_rx) = mpsc::channel(512);
-        let shared_socket = SharedUdpSocket::new(tokio_socket, non_quic_tx);
+        let core_transport =
+            CoreTransportLayer::bind(config.bind_addr, config.stun_servers.clone(), non_quic_tx)
+                .await?;
+        let quic_socket = QuicPeerSocket::new(core_transport.clone());
 
         let endpoint_config = quinn::EndpointConfig::default();
         let mut server_config = quinn::ServerConfig::with_crypto(Arc::new(quic_server_config));
@@ -274,15 +294,17 @@ impl Endpoint {
         let mut quinn_endpoint = quinn::Endpoint::new_with_abstract_socket(
             endpoint_config,
             Some(server_config),
-            shared_socket.clone(),
+            quic_socket.clone(),
             Arc::new(quinn::TokioRuntime),
         )?;
         quinn_endpoint.set_default_client_config(client_config);
 
         let (inbox_tx, inbox_rx) = flume::bounded(512);
         let (stream_tx, stream_rx) = flume::bounded(128);
+        let (hello_tx, hello_rx) = flume::bounded(128);
+        let (transport_tx, transport_rx) = flume::bounded(512);
         let routes = RouteTable::new(Default::default());
-        shared_socket.set_route_table(routes.clone());
+        core_transport.set_route_table(routes.clone());
         let runtime = if config.high_level {
             Some(Arc::new(RuntimeState {
                 peer_id: identity.peer_id(),
@@ -297,6 +319,10 @@ impl Endpoint {
                 inbox_rx,
                 stream_tx,
                 stream_rx,
+                hello_tx,
+                hello_rx,
+                transport_tx,
+                transport_rx,
             }))
         } else {
             None
@@ -307,8 +333,9 @@ impl Endpoint {
             node_id,
             stun_servers: config.stun_servers.clone(),
             nat_info: Arc::new(parking_lot::RwLock::new(NatInfo::default())),
-            shared_socket,
-            direct_rx: Arc::new(Mutex::new(non_quic_rx)),
+            core_transport,
+            quic_socket,
+            core_rx: Arc::new(Mutex::new(non_quic_rx)),
             runtime,
         };
 
@@ -360,6 +387,12 @@ impl Endpoint {
             .unwrap_or_default()
     }
 
+    pub fn transport(&self) -> TransportHandle {
+        TransportHandle {
+            endpoint: self.clone(),
+        }
+    }
+
     pub fn link_mode(&self, peer_id: PeerId) -> Option<LinkMode> {
         self.link_info(peer_id).map(|info| info.mode)
     }
@@ -404,47 +437,30 @@ impl Endpoint {
 
     async fn add_bootstrap_once(&self, addr: SocketAddr) -> crate::Result<PeerId> {
         let rt = self.runtime()?;
-        let conn = tokio::time::timeout(Duration::from_secs(30), self.connect_addr(addr))
-            .await
-            .map_err(|_| {
-                io::Error::new(io::ErrorKind::TimedOut, "bootstrap connect timed out")
-            })??;
-        let reply = match self
-            .control_round_trip_on_conn(
-                &conn,
-                StreamFrame::HelloRequest {
-                    src: rt.peer_id.clone(),
-                },
-            )
-            .await
-        {
-            Ok(reply) => reply,
-            Err(e) => {
-                conn.quinn().close(0u32.into(), b"bootstrap failed");
-                return Err(e);
-            }
-        };
-        let StreamFrame::HelloReply(hello) = reply else {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "bootstrap peer returned unexpected control frame",
-            ));
-        };
-
-        let peer_id = hello.peer.peer_id.clone();
-        self.upsert_peer(
-            PeerInfo {
-                is_direct: true,
-                addrs: vec![addr],
-                ..hello.peer
-            },
-            RouteKey::new(Protocol::UDP, addr),
-            0,
-        );
-        self.ingest_route_entries(hello.peers, RouteKey::new(Protocol::UDP, addr))
+        let packet = Packet::build(
+            ProtocolType::HelloRequest,
+            rt.peer_id.clone(),
+            PeerId::broadcast(),
+            rt.max_ttl,
+            &[],
+        )?;
+        self.core_transport
+            .send_raw(packet.as_bytes(), addr)
             .await?;
-        conn.quinn().close(0u32.into(), b"bootstrap complete");
-        Ok(peer_id)
+
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                let (seen_addr, peer_id) =
+                    rt.hello_rx.recv_async().await.map_err(|_| {
+                        io::Error::new(io::ErrorKind::UnexpectedEof, "endpoint closed")
+                    })?;
+                if seen_addr == addr {
+                    return Ok(peer_id);
+                }
+            }
+        })
+        .await
+        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "bootstrap hello timed out"))?
     }
 
     pub async fn send_to(&self, peer_id: PeerId, payload: &[u8]) -> crate::Result<()> {
@@ -527,7 +543,7 @@ impl Endpoint {
                     if let Ok(rt) = self.runtime() {
                         rt.connections.remove(&peer_id);
                     }
-                    self.shared_socket.release_virtual_peer(&peer_id);
+                    self.quic_socket.release_virtual_peer(&peer_id);
                     tokio::time::sleep(Duration::from_millis(50)).await;
                 }
             }
@@ -561,89 +577,11 @@ impl Endpoint {
             .map_err(|_| io::Error::new(io::ErrorKind::UnexpectedEof, "endpoint closed"))
     }
 
-    /// Connects to a remote peer using the low-level QUIC API.
-    pub async fn connect(&self, node_addr: NodeAddr) -> crate::Result<Connection> {
-        let mut last_err = None;
-        for addr in &node_addr.direct_addresses {
-            match self.quinn_endpoint.connect(*addr, "localhost") {
-                Ok(connecting) => match connecting.await {
-                    Ok(conn) => return Ok(Connection::new(conn)),
-                    Err(e) => {
-                        log::debug!("Handshake failed with {addr}: {e}");
-                        last_err = Some(io::Error::other(format!("handshake: {e}")));
-                    }
-                },
-                Err(e) => {
-                    log::debug!("Connect failed to {addr}: {e}");
-                    last_err = Some(io::Error::other(format!("connect: {e}")));
-                }
-            }
-        }
-        Err(last_err.unwrap_or_else(|| io::Error::other("no addresses to connect to")))
-    }
-
-    /// Accepts an incoming low-level QUIC connection.
-    pub async fn accept(&self) -> Option<Connection> {
-        let incoming = self.quinn_endpoint.accept().await?;
-        match incoming.await {
-            Ok(conn) => Some(Connection::new(conn)),
-            Err(e) => {
-                log::warn!("Failed to accept connection: {e}");
-                None
-            }
-        }
-    }
-
-    pub fn accept_channel(&self) -> mpsc::Receiver<Connection> {
-        let (tx, rx) = mpsc::channel(64);
-        let endpoint = self.clone();
-        tokio::spawn(async move {
-            while let Some(conn) = endpoint.accept().await {
-                if tx.send(conn).await.is_err() {
-                    break;
-                }
-            }
-        });
-        rx
-    }
-
-    pub async fn send_raw(&self, buf: &[u8], addr: SocketAddr) -> crate::Result<()> {
-        self.shared_socket.send_raw(buf, addr).await
-    }
-
-    pub async fn send_direct_datagram(
-        &self,
-        data: impl AsRef<[u8]>,
-        addr: SocketAddr,
-    ) -> crate::Result<()> {
-        self.shared_socket.send_raw(data.as_ref(), addr).await
-    }
-
-    pub async fn recv_direct_datagram(&self) -> Option<ReceivedPacket> {
-        self.direct_rx.lock().await.recv().await
-    }
-
-    pub fn try_send_raw(&self, buf: &[u8], addr: SocketAddr) -> crate::Result<()> {
-        self.shared_socket.try_send_raw(buf, addr)
-    }
-
-    pub fn try_send_direct_datagram(
-        &self,
-        data: impl AsRef<[u8]>,
-        addr: SocketAddr,
-    ) -> crate::Result<()> {
-        self.shared_socket.try_send_raw(data.as_ref(), addr)
-    }
-
     pub async fn close(&self) {
         if let Some(rt) = &self.runtime {
             rt.closed.store(true, Ordering::Relaxed);
         }
         self.quinn_endpoint.close(0u32.into(), b"shutdown");
-    }
-
-    pub fn quinn(&self) -> &quinn::Endpoint {
-        &self.quinn_endpoint
     }
 
     fn runtime(&self) -> crate::Result<Arc<RuntimeState>> {
@@ -681,14 +619,35 @@ impl Endpoint {
         ))
     }
 
+    fn build_packet_to(
+        &self,
+        protocol: ProtocolType,
+        dest: PeerId,
+        payload: &[u8],
+    ) -> crate::Result<Packet> {
+        let rt = self.runtime()?;
+        Packet::build(protocol, rt.peer_id.clone(), dest, rt.max_ttl, payload)
+    }
+
+    async fn send_control(
+        &self,
+        dest: PeerId,
+        protocol: ProtocolType,
+        payload: &[u8],
+    ) -> crate::Result<()> {
+        let packet = self.build_packet_to(protocol, dest.clone(), payload)?;
+        let route = self.route_for(dest)?;
+        self.core_transport
+            .send_raw(packet.as_bytes(), route.route_key().addr())
+            .await
+    }
+
     async fn connection_to(&self, peer_id: PeerId) -> crate::Result<Connection> {
         let rt = self.runtime()?;
         self.route_for(peer_id.clone())?;
-        let addr = self.shared_socket.register_virtual_peer(
-            rt.peer_id.clone(),
-            peer_id.clone(),
-            rt.max_ttl,
-        );
+        let addr =
+            self.quic_socket
+                .register_virtual_peer(rt.peer_id.clone(), peer_id.clone(), rt.max_ttl);
         self.connection_to_at(peer_id, addr).await
     }
 
@@ -703,13 +662,10 @@ impl Endpoint {
                 return Ok(conn.clone());
             }
         }
-        let conn = match self
-            .connect(NodeAddr::new(peer_id.clone(), vec![addr]))
-            .await
-        {
+        let conn = match self.connect_quic_addr(addr).await {
             Ok(conn) => conn,
             Err(e) => {
-                self.shared_socket.release_virtual_peer(&peer_id);
+                self.quic_socket.release_virtual_peer(&peer_id);
                 return Err(e);
             }
         };
@@ -718,46 +674,48 @@ impl Endpoint {
         Ok(conn)
     }
 
-    async fn connect_addr(&self, addr: SocketAddr) -> crate::Result<Connection> {
+    async fn connect_quic_addr(&self, addr: SocketAddr) -> crate::Result<Connection> {
         match self.quinn_endpoint.connect(addr, "localhost") {
-            Ok(connecting) => connecting
-                .await
-                .map(Connection::new)
-                .map_err(|e| io::Error::other(format!("handshake: {e}"))),
+            Ok(connecting) => {
+                let conn = tokio::time::timeout(Duration::from_secs(5), connecting)
+                    .await
+                    .map_err(|_| {
+                        io::Error::new(io::ErrorKind::TimedOut, "QUIC handshake timed out")
+                    })?
+                    .map_err(|e| io::Error::other(format!("handshake: {e}")))?;
+                match tokio::time::timeout(Duration::from_millis(50), conn.closed()).await {
+                    Ok(reason) => Err(io::Error::other(format!("connection closed: {reason}"))),
+                    Err(_) => {
+                        if let Some(reason) = conn.close_reason() {
+                            Err(io::Error::other(format!("connection closed: {reason}")))
+                        } else {
+                            Ok(Connection::new(conn))
+                        }
+                    }
+                }
+            }
             Err(e) => Err(io::Error::other(format!("connect: {e}"))),
         }
     }
 
-    async fn control_round_trip_on_conn(
-        &self,
-        conn: &Connection,
-        frame: StreamFrame,
-    ) -> crate::Result<StreamFrame> {
-        tokio::time::timeout(Duration::from_secs(30), async {
-            let (mut send, mut recv) = conn.quinn().open_bi().await?;
-            write_stream_frame(&mut send, &frame).await?;
-            read_stream_frame(&mut recv).await
-        })
-        .await
-        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "control stream timed out"))?
-    }
-
-    async fn control_round_trip(
-        &self,
-        peer_id: PeerId,
-        frame: StreamFrame,
-    ) -> crate::Result<StreamFrame> {
-        let conn = self.connection_to(peer_id).await?;
-        self.control_round_trip_on_conn(&conn, frame).await
+    async fn accept_quic(&self) -> Option<Connection> {
+        let incoming = self.quinn_endpoint.accept().await?;
+        match incoming.await {
+            Ok(conn) => Some(Connection::new(conn)),
+            Err(e) => {
+                log::warn!("Failed to accept connection: {e}");
+                None
+            }
+        }
     }
 
     fn start_high_level_tasks(&self) {
-        self.start_packet_dispatcher();
+        self.start_transport_dispatcher();
         self.start_accept_loop();
         self.start_maintenance_loop();
     }
 
-    fn start_packet_dispatcher(&self) {
+    fn start_transport_dispatcher(&self) {
         let endpoint = self.clone();
         tokio::spawn(async move {
             loop {
@@ -769,23 +727,24 @@ impl Endpoint {
                     break;
                 }
                 let packet = {
-                    let mut rx = endpoint.direct_rx.lock().await;
+                    let mut rx = endpoint.core_rx.lock().await;
                     rx.recv().await
                 };
                 let Some(packet) = packet else { break };
-                if let Err(e) = endpoint.handle_direct_packet(packet).await {
+                if let Err(e) = endpoint.handle_transport_packet(packet).await {
                     log::debug!("high-level packet handling failed: {e}");
                 }
             }
         });
     }
 
-    async fn handle_direct_packet(&self, received: ReceivedPacket) -> crate::Result<()> {
-        let rt = self.runtime()?;
-        let packet = Packet::parse(received.data.to_vec())?;
-        if packet.protocol()? != ProtocolType::QuicRelay {
+    async fn handle_transport_packet(&self, received: ReceivedPacket) -> crate::Result<()> {
+        if !matches!(received.packet_type, PacketType::RustP2p(_)) {
             return Ok(());
         }
+
+        let rt = self.runtime()?;
+        let packet = Packet::parse(received.data.to_vec())?;
         let src = packet.src();
         if src == rt.peer_id || src.is_unspecified() {
             return Ok(());
@@ -820,11 +779,70 @@ impl Endpoint {
             return Ok(());
         }
 
-        let virtual_addr =
-            self.shared_socket
-                .register_virtual_peer(rt.peer_id.clone(), src, rt.max_ttl);
-        self.shared_socket
-            .inject_routed_quic(Bytes::copy_from_slice(packet.payload()), virtual_addr);
+        match packet.protocol()? {
+            ProtocolType::HelloRequest => {
+                let payload =
+                    bincode::serialize(&self.hello_payload(&src).await?).map_err(bin_err)?;
+                self.send_control(src, ProtocolType::HelloReply, &payload)
+                    .await?;
+            }
+            ProtocolType::HelloReply => {
+                let hello: HelloPayload =
+                    bincode::deserialize(packet.payload()).map_err(bin_err)?;
+                let peer_id = hello.peer.peer_id.clone();
+                self.upsert_peer(hello.peer, route_key, metric);
+                let _ = rt.hello_tx.send_async((received.addr, peer_id)).await;
+                self.ingest_route_entries(hello.peers, route_key).await?;
+            }
+            ProtocolType::IDRouteQuery => {
+                let payload = bincode::serialize(&RouteReplyPayload {
+                    peers: self.discovery_entries(&src).await?,
+                })
+                .map_err(bin_err)?;
+                self.send_control(src, ProtocolType::IDRouteReply, &payload)
+                    .await?;
+            }
+            ProtocolType::IDRouteReply => {
+                let reply: RouteReplyPayload =
+                    bincode::deserialize(packet.payload()).map_err(bin_err)?;
+                self.ingest_route_entries(reply.peers, route_key).await?;
+            }
+            ProtocolType::QuicRelay => {
+                let virtual_addr =
+                    self.quic_socket
+                        .register_virtual_peer(rt.peer_id.clone(), src, rt.max_ttl);
+                self.quic_socket
+                    .inject_routed_quic(Bytes::copy_from_slice(packet.payload()), virtual_addr);
+            }
+            ProtocolType::MessageData | ProtocolType::RangeBroadcast => {
+                let _ = rt
+                    .transport_tx
+                    .send_async(TransportMessage {
+                        payload: Bytes::copy_from_slice(packet.payload()),
+                        src,
+                        dest: dest.clone(),
+                        route: route_key,
+                        ttl: packet.ttl(),
+                        max_ttl: packet.max_ttl(),
+                        is_relay: metric > 0,
+                    })
+                    .await;
+            }
+            ProtocolType::EchoRequest => {
+                self.send_control(src, ProtocolType::EchoReply, packet.payload())
+                    .await?;
+            }
+            ProtocolType::TimestampRequest => {
+                self.send_control(src, ProtocolType::TimestampReply, packet.payload())
+                    .await?;
+            }
+            ProtocolType::PunchConsultRequest
+            | ProtocolType::PunchConsultReply
+            | ProtocolType::PunchRequest
+            | ProtocolType::PunchReply
+            | ProtocolType::EchoReply
+            | ProtocolType::TimestampReply => {}
+        }
         Ok(())
     }
 
@@ -876,23 +894,8 @@ impl Endpoint {
     }
 
     async fn query_routes(&self, peer_id: PeerId) -> crate::Result<()> {
-        let rt = self.runtime()?;
-        let via = self.route_for(peer_id.clone())?.route_key();
-        let reply = self
-            .control_round_trip(
-                peer_id,
-                StreamFrame::RouteQuery {
-                    src: rt.peer_id.clone(),
-                },
-            )
-            .await?;
-        let StreamFrame::RouteReply(reply) = reply else {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "peer returned unexpected route control frame",
-            ));
-        };
-        self.ingest_route_entries(reply.peers, via).await
+        self.send_control(peer_id, ProtocolType::IDRouteQuery, &[])
+            .await
     }
 
     async fn forward_packet(&self, mut packet: Packet) -> crate::Result<()> {
@@ -900,7 +903,7 @@ impl Endpoint {
             return Ok(());
         }
         let route = self.route_for(packet.dest())?;
-        self.shared_socket
+        self.core_transport
             .send_raw(packet.as_bytes(), route.route_key().addr())
             .await
     }
@@ -939,7 +942,7 @@ impl Endpoint {
     fn start_accept_loop(&self) {
         let endpoint = self.clone();
         tokio::spawn(async move {
-            while let Some(conn) = endpoint.accept().await {
+            while let Some(conn) = endpoint.accept_quic().await {
                 if endpoint
                     .runtime
                     .as_ref()
@@ -958,7 +961,7 @@ impl Endpoint {
         if rt.connection_tasks.insert(stable_id, ()).is_some() {
             return;
         }
-        let connection_peer = self.shared_socket.peer_for_virtual_addr(conn.remote_addr());
+        let connection_peer = self.quic_socket.peer_for_virtual_addr(conn.remote_addr());
 
         let stream_endpoint = self.clone();
         let stream_conn = conn.clone();
@@ -1015,93 +1018,46 @@ impl Endpoint {
         rt.connection_tasks.remove(&stable_id);
         if let Some(peer_id) = peer_id {
             rt.connections.remove(&peer_id);
-            self.shared_socket.release_virtual_peer(&peer_id);
+            self.quic_socket.release_virtual_peer(&peer_id);
         }
     }
 
     async fn handle_incoming_stream(
         &self,
         remote_addr: SocketAddr,
-        mut send: quinn::SendStream,
+        send: quinn::SendStream,
         mut recv: quinn::RecvStream,
     ) -> crate::Result<()> {
         let rt = self.runtime()?;
-        let frame = read_stream_frame(&mut recv).await?;
-        match frame {
-            StreamFrame::User(header) => {
-                if header.dest != rt.peer_id {
-                    return Err(io::Error::new(
-                        io::ErrorKind::PermissionDenied,
-                        "stream destination peer mismatch",
-                    ));
-                }
-                let (route, metric) = self.route_from_remote(&header.src, remote_addr)?;
-                self.upsert_peer(
-                    PeerInfo {
-                        peer_id: header.src.clone(),
-                        addrs: if metric == 0 {
-                            vec![remote_addr]
-                        } else {
-                            Vec::new()
-                        },
-                        relay_hint: None,
-                        last_seen: now_millis(),
-                        is_direct: metric == 0,
-                    },
-                    route.route_key(),
-                    metric,
-                );
-                let incoming = IncomingBiStream {
-                    peer_id: header.src,
-                    send: ReliableSendStream::new(send),
-                    recv: ReliableRecvStream::new(recv),
-                };
-                let _ = rt.stream_tx.send_async(incoming).await;
-            }
-            StreamFrame::HelloRequest { src } => {
-                let (route, metric) = self.route_from_remote(&src, remote_addr)?;
-                self.upsert_peer(
-                    PeerInfo {
-                        peer_id: src.clone(),
-                        addrs: if metric == 0 {
-                            vec![remote_addr]
-                        } else {
-                            Vec::new()
-                        },
-                        relay_hint: None,
-                        last_seen: now_millis(),
-                        is_direct: metric == 0,
-                    },
-                    route.route_key(),
-                    metric,
-                );
-                let payload = self.hello_payload(&src).await?;
-                write_stream_frame(&mut send, &StreamFrame::HelloReply(payload)).await?;
-            }
-            StreamFrame::RouteQuery { src } => {
-                let (route, metric) = self.route_from_remote(&src, remote_addr)?;
-                self.upsert_peer(
-                    PeerInfo {
-                        peer_id: src.clone(),
-                        addrs: if metric == 0 {
-                            vec![remote_addr]
-                        } else {
-                            Vec::new()
-                        },
-                        relay_hint: None,
-                        last_seen: now_millis(),
-                        is_direct: metric == 0,
-                    },
-                    route.route_key(),
-                    metric,
-                );
-                let payload = RouteReplyPayload {
-                    peers: self.discovery_entries(&src).await?,
-                };
-                write_stream_frame(&mut send, &StreamFrame::RouteReply(payload)).await?;
-            }
-            StreamFrame::HelloReply(_) | StreamFrame::RouteReply(_) => {}
+        let StreamFrame::User(header) = read_stream_frame(&mut recv).await?;
+        if header.dest != rt.peer_id {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "stream destination peer mismatch",
+            ));
         }
+        let (route, metric) = self.route_from_remote(&header.src, remote_addr)?;
+        self.upsert_peer(
+            PeerInfo {
+                peer_id: header.src.clone(),
+                addrs: if metric == 0 {
+                    vec![remote_addr]
+                } else {
+                    Vec::new()
+                },
+                relay_hint: None,
+                last_seen: now_millis(),
+                is_direct: metric == 0,
+            },
+            route.route_key(),
+            metric,
+        );
+        let incoming = IncomingBiStream {
+            peer_id: header.src,
+            send: ReliableSendStream::new(send),
+            recv: ReliableRecvStream::new(recv),
+        };
+        let _ = rt.stream_tx.send_async(incoming).await;
         Ok(())
     }
 
@@ -1150,7 +1106,7 @@ impl Endpoint {
         remote_addr: SocketAddr,
     ) -> crate::Result<(Route, u8)> {
         if self
-            .shared_socket
+            .quic_socket
             .peer_for_virtual_addr(remote_addr)
             .is_some()
         {
@@ -1278,8 +1234,9 @@ impl Clone for Endpoint {
             node_id: self.node_id.clone(),
             stun_servers: self.stun_servers.clone(),
             nat_info: self.nat_info.clone(),
-            shared_socket: self.shared_socket.clone(),
-            direct_rx: self.direct_rx.clone(),
+            core_transport: self.core_transport.clone(),
+            quic_socket: self.quic_socket.clone(),
+            core_rx: self.core_rx.clone(),
             runtime: self.runtime.clone(),
         }
     }

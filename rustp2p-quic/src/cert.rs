@@ -56,6 +56,10 @@ impl RustlsClientCertificateVerifier {
 }
 
 impl rustls::server::danger::ClientCertVerifier for RustlsClientCertificateVerifier {
+    fn offer_client_auth(&self) -> bool {
+        true
+    }
+
     fn client_auth_mandatory(&self) -> bool {
         true
     }

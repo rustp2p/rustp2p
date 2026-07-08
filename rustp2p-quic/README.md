@@ -1,7 +1,7 @@
 # rustp2p-quic
 
-`rustp2p-quic` is the QUIC transport and high-level P2P layer for this workspace.
-It builds on `rustp2p-core` without modifying core APIs.
+`rustp2p-quic` is the PeerId-based QUIC layer for this workspace. It builds on
+`rustp2p-core` as the underlying transport without modifying core APIs.
 
 The high-level API uses `PeerId` for all application traffic. Socket addresses are only used to
 bootstrap connectivity to a reachable node.
@@ -17,8 +17,16 @@ between `A` and `C`. Reliable traffic is still end-to-end QUIC:
 - `B` forwards QUIC UDP datagrams inside rustp2p overlay relay packets.
 - `B` does not terminate QUIC streams.
 - `B` cannot read reliable stream payloads.
-- High-level user messages, discovery, route sync, and streams all run over QUIC.
-- Bare UDP overlay packets only carry relayed QUIC ciphertext.
+- High-level user messages and streams run over end-to-end QUIC.
+- Discovery, route sync, direct transport messages, and QUIC relay packets use the core-backed
+  transport layer.
+
+Internally this is split into two layers:
+
+- `CoreTransportLayer` owns `rustp2p-core::endpoint::EndPoint`, real reachable addresses, route
+  updates, discovery, and relay forwarding.
+- The QUIC adapter only maps `PeerId` to synthetic addresses required by quinn. It does not keep a
+  real next-hop address; each outgoing QUIC packet is sent through the transport layer by `PeerId`.
 
 There is no group concept in `rustp2p-quic`. A discovered peer can relay for any other reachable
 peer.
@@ -141,7 +149,8 @@ For request/response protocols, prefer explicit framing such as a length-prefixe
 
 ### Discovery
 
-Nodes exchange known peers through QUIC control streams (`Hello`, `RouteQuery`, and `RouteReply`).
+Nodes exchange known peers through transport control packets (`Hello`, `RouteQuery`, and
+`RouteReply`). These control packets use `rustp2p-core` transport I/O, not user QUIC streams.
 
 For a chain like:
 
@@ -156,21 +165,15 @@ so A eventually learns D's `PeerId` and a relay route to D. A can then call:
 endpoint.send_to("node-d".into(), b"hello d").await?;
 ```
 
-## Low-Level Escape Hatches
+## Transport Handle
 
-The low-level QUIC API is still available:
+Real socket addresses are only transport/bootstrap concerns. Use `Endpoint::transport()` when you
+need direct transport access:
 
-- `Endpoint::connect(NodeAddr)`
-- `Endpoint::accept()`
-- `Connection::open_bi()`
-- `Connection::accept_bi()`
-- `Connection::send_datagram()`
-- `Connection::recv_datagram()`
-
-Direct raw datagrams on the shared UDP socket are also available:
-
-- `Endpoint::send_direct_datagram(...)`
-- `Endpoint::recv_direct_datagram()`
+- `TransportHandle::add_bootstrap(addr)`
+- `TransportHandle::local_addr()`
+- `TransportHandle::send_to_peer(peer_id, bytes)`
+- `TransportHandle::recv_from_peer()`
 
 ## Example: Peer Node
 

@@ -177,7 +177,7 @@ impl CertificateVerifier for RejectVerifier {
 
 #[tokio::test]
 #[serial]
-async fn custom_certificate_verifier_can_reject_bootstrap_server_cert() {
+async fn custom_certificate_verifier_can_reject_server_cert() {
     let a = Endpoint::builder()
         .identity(Identity::new("verify-a", "verify-a-seed").unwrap())
         .certificate_verifier(Arc::new(RejectVerifier))
@@ -188,7 +188,8 @@ async fn custom_certificate_verifier_can_reject_bootstrap_server_cert() {
         .unwrap();
     let b = node("verify-b").await;
 
-    assert!(a.add_bootstrap(b.local_addr().unwrap()).await.is_err());
+    a.add_bootstrap(b.local_addr().unwrap()).await.unwrap();
+    assert!(a.open_bi(b.peer_id()).await.is_err());
     close_all(&[&a, &b]).await;
 }
 
@@ -232,6 +233,7 @@ async fn custom_certificate_verifier_can_reject_client_cert() {
         .await
         .unwrap();
 
-    assert!(a.add_bootstrap(b.local_addr().unwrap()).await.is_err());
+    a.add_bootstrap(b.local_addr().unwrap()).await.unwrap();
+    assert!(a.open_bi(b.peer_id()).await.is_err());
     close_all(&[&a, &b]).await;
 }

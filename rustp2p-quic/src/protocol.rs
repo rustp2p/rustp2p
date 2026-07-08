@@ -237,10 +237,6 @@ pub struct StreamHeader {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum StreamFrame {
     User(StreamHeader),
-    HelloRequest { src: PeerId },
-    HelloReply(HelloPayload),
-    RouteQuery { src: PeerId },
-    RouteReply(RouteReplyPayload),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
