@@ -1,0 +1,40 @@
+[package]
+name = "rustp2p-quic"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "QUIC-based reliable P2P transport using quinn and rustp2p-core"
+repository = "https://github.com/rustp2p/rustp2p"
+
+[dependencies]
+rust-p2p-core = { workspace = true }
+quinn = "0.11"
+quinn-udp = "0.5"
+rustls = { version = "0.23", default-features = false, features = ["std", "ring"] }
+rcgen = "0.13"
+tokio = { workspace = true }
+rand = { workspace = true }
+parking_lot = { workspace = true }
+bytes = { workspace = true }
+log = { workspace = true }
+flume = { workspace = true }
+async-shutdown = { workspace = true }
+dashmap = { workspace = true }
+serde = { version = "1.0", features = ["derive"] }
+prost = "0.13"
+hex = "0.4"
+sha2 = "0.10"
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+
+[build-dependencies]
+prost-build = "0.13"
+protoc-bin-vendored = "3"
+
+[dev-dependencies]
+tokio = { version = "1.42", features = ["full"] }
+env_logger = "0.11.5"
+serial_test = "3"
+
+[[example]]
+name = "node"
+path = "examples/node.rs"

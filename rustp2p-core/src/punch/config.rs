@@ -145,6 +145,15 @@ impl PunchInfo {
     }
 }
 
+impl Default for PunchInfo {
+    fn default() -> Self {
+        Self {
+            punch_model: PunchModel::all(),
+            peer_nat_info: NatInfo::default(),
+        }
+    }
+}
+
 impl FromStr for PunchPolicy {
     type Err = String;
 

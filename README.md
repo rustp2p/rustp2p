@@ -1,55 +1,46 @@
-A decentralized p2p library powered by Rust, which is devoted to simple use. 
+# rustp2p
 
-[![Crates.io](https://img.shields.io/crates/v/rustp2p.svg)](https://crates.io/crates/rustp2p)
-![rustp2p](https://docs.rs/rustp2p/badge.svg)
+This workspace now contains the core transport primitives and the QUIC transport:
 
-### Features
-1. UDP hole punching for both Cone and Symmetric Nat
-2. TCP hole punching for NAT1 
-3. Enables reliable transport over KCP
-4. Enables secure encryption with AesGcm or ChaCha20Poly1305.
-5. **C FFI bindings** for integration with C/C++ and JavaScript/TypeScript (see [rustp2p-c-ffi](rustp2p-c-ffi/))
+- `rustp2p-core`: shared endpoint, NAT/STUN, socket, punch, and route-table APIs.
+- `rustp2p-quic`: QUIC-based reliable connections, direct UDP datagrams, and a high-level P2P API.
 
+## Build
 
-### Description
-For connecting two peers, all you need to do is to give the configuration as done in the example. In short, provide a peer named `C`, peer `A` and `B` can directly connect to `C`, then `A` and `B` will find each other by `C`, `A` and `C` can directly connect by hole-punching, the whole process is done by this library. If two peers `D` and `F` cannot directly connect via hole-punching, this library can find the best link for indirectly connection(i.e. through some middle nodes).  
+```bash
+cargo check --workspace
+```
 
-### Example
+## QUIC Transport
 
-````rust
-use rustp2p::Builder;
-use rustp2p::protocol::node_id::GroupCode;
-use rustp2p::cipher::Algorithm;
-use rustp2p::tunnel::PeerNodeAddress;
-use std::net::Ipv4Addr;
-use std::sync::Arc;
+`rustp2p-quic` supports:
+
+- reliable bidirectional and unidirectional QUIC streams;
+- QUIC application datagrams through `Connection::send_datagram` and `Connection::recv_datagram`;
+- direct non-QUIC UDP datagrams through `Endpoint::send_direct_datagram` and `Endpoint::recv_direct_datagram`;
+- rustp2p-style packet demuxing that keeps `0x80..0xbf` protocol packets out of the QUIC path;
+- high-level application-supplied `PeerId`, route discovery, message relay, broadcast, and reliable streams;
+- reliable streams over end-to-end QUIC, including packet-level QUIC relay through reachable peers.
+
+## High-Level API
+
+```rust
+use rustp2p_quic::{Endpoint, Identity};
 
 #[tokio::main]
-async fn main() {
-    let node_id = Ipv4Addr::from([10, 0, 0, 1]);
-    let endpoint = Builder::new()
-        .node_id(node_id.into())
-        .tcp_port(8080)
-        .udp_port(8080)
-        .peers(vec![PeerNodeAddress::from_str("udp://127.0.0.1:9090").unwrap()])
-        .group_code(GroupCode::from(12345))
-        .encryption(Algorithm::AesGcm("password".to_string()))
+async fn main() -> rustp2p_quic::Result<()> {
+    let identity = Identity::new("node-a", "seed-a")?;
+    let endpoint = Endpoint::builder()
+        .identity(identity)
+        .bind("0.0.0.0:0".parse().unwrap())
         .build()
         .await?;
-    let endpoint = Arc::new(endpoint);
-    let receiver = endpoint.clone();
-    let h = tokio::spawn(async move {
-        while let Ok(peer) = receiver.recv_from().await {}
-    });
-    let peer_node_id = Ipv4Addr::from([10, 0, 0, 2]);
-    endpoint.send_to(b"hello", peer_node_id);
-    _ = h.await;
+
+    // Bootstrap with `endpoint.add_bootstrap(addr).await?`.
+    // Then send unreliable messages:
+    // endpoint.send_to(peer_id, b"hello").await?;
+    // Or open an end-to-end reliable bidirectional QUIC stream:
+    // let (mut send, mut recv) = endpoint.open_bi(peer_id).await?;
+    Ok(())
 }
-````
-
-- [example/node](https://github.com/rustp2p/rustp2p/blob/master/examples/node.rs)
-- [example/node_kcp](https://github.com/rustp2p/rustp2p/blob/master/examples/node_kcp_stream.rs)
-- [https://github.com/rustp2p/netlink](https://github.com/rustp2p/netlink)
-- [https://github.com/rustp2p/rustp2p-transport](https://github.com/rustp2p/rustp2p-transport)
-
-
+```

@@ -34,7 +34,7 @@ pub(crate) fn ignore_conn_reset(socket: &socket2::Socket) -> io::Result<()> {
     let mut bytes_returned: u32 = 0;
     let mut flag: u32 = 0;
 
-    // SIO_UDP_CONNRESET 参数设置为 FALSE (0) 来忽略错误
+    // Set SIO_UDP_CONNRESET to FALSE (0) to ignore ICMP errors
     let result = unsafe {
         WSAIoctl(
             socket_raw,

@@ -1,57 +1,102 @@
-# rust-p2p
+# rust-p2p-core
 
-NAT traversal for p2p communication, this is implemented in terms of a hole-punching technique.
+NAT traversal for P2P communication via hole-punching.
 
 [![Crates.io](https://img.shields.io/crates/v/rust-p2p-core.svg)](https://crates.io/crates/rust-p2p-core)
 ![rust-p2p-core](https://docs.rs/rust-p2p-core/badge.svg)
 
-This crate provides a convenient way to create connections between multiple remote peers that may be behind Nats, these tunnel that are spawned from the TunnelFactory can be used to read/write bytes from/to a peer to another.
+## Overview
 
-The underlying transport protocols are `TCP`, `UDP` in the tunnel.
+`rust-p2p-core` provides the core networking layer for P2P applications behind NATs. It handles:
 
-This crate is built on the async ecosystem tokio
+- **UDP/TCP hole-punching** for NAT traversal
+- **Symmetric NAT** probing with assistant sockets
+- **Route management** with load balancing
+- **Codec abstraction** for TCP framing
 
-# Supported Platforms
-
-It's a cross-platform crate
-
-# Usage
-
-Add this dependency to your `cargo.toml`
+## Quick Start
 
 ```toml
-rust-p2p-core = {version = "0.3"}
+[dependencies]
+rust-p2p-core = "0.4"
 ```
 
-# Example
-```rust
-use rust_p2p_core::tunnel::config::{TcpTunnelConfig, TunnelConfig, UdpTunnelConfig};
-use rust_p2p_core::tunnel::tcp::LengthPrefixedInitCodec;
-use rust_p2p_core::tunnel::new_tunnel_component;
+## Example: Echo Server
 
+```rust
+use rust_p2p_core::endpoint::{EndPoint, Config};
 
 #[tokio::main]
 async fn main() {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
-    let udp_config = UdpTunnelConfig::default();
-    let tcp_config = TcpTunnelConfig::new(Box::new(LengthPrefixedInitCodec));
-    let config = TunnelConfig::empty()
-        .set_udp_tunnel_config(udp_config)
-        .set_tcp_tunnel_config(tcp_config)
-        .set_tcp_multi_count(2);
-    let (mut tunnel_dispatcher, puncher) = new_tunnel_component(config).unwrap();
-    let socket_manager = tunnel_dispatcher.socket_manager();
-    // 1. Use "puncher" for hole punching. 
-    // 2. "tunnel_dispatcher" distributes encapsulated sockets
-    // 3. Use "socket_manager" to send messages to either the direct connection address or the post-punching routed address.
-    loop {
-        let tunnel = tunnel_dispatcher.dispatch().await.unwrap();
-        // Each tunnel corresponds to a TCP or UDP socket.
-        // 1. A TCP-type tunnel only appears after successful hole punching
-        // 2. UDP-type tunnels are dispatched right from the start.
+    let mut ep = EndPoint::bind(Config::new().udp_port(3000).tcp_port(3000))
+        .await
+        .unwrap();
+
+    while let Some(received) = ep.recv().await {
+        println!("From {}: {:?}", received.transport.remote_addr(), received.data);
+        received.transport.send(b"echo").await.unwrap();
     }
 }
-
 ```
 
-It is recommended to use `rustp2p` directly, which is ergonomic and easy to use.
+## Example: Client with NAT Punching
+
+```rust
+use rust_p2p_core::endpoint::{EndPoint, Config};
+use rust_p2p_core::route_table::{RouteKey, Protocol};
+
+#[tokio::main]
+async fn main() {
+    let ep = EndPoint::bind(
+        Config::default().stun_servers(vec![
+            "stun.miwifi.com:3478".to_string(),
+            "stun.chat.bilibili.com:3478".to_string(),
+            "stun.hitv.com:3478".to_string(),
+        ]),
+    )
+    .await
+    .unwrap();
+    let sender = ep.sender();
+    let puncher = ep.puncher();
+
+    // Send to server
+    let addr = "127.0.0.1:3000".parse().unwrap();
+    sender.send_to(b"hello", addr);
+
+    // Receive responses
+    while let Some(received) = ep.recv().await {
+        let route_key = RouteKey::from_transport(&received.transport);
+        println!("Route: {route_key}");
+    }
+}
+```
+
+`Config::default()` does not include public STUN servers. Configure STUN explicitly when NAT
+detection is needed.
+
+## Core Types
+
+| Type | Description |
+|------|-------------|
+| `EndPoint` | Main P2P endpoint, entry point for send/recv |
+| `Sender` | Lightweight handle for sending data and querying state |
+| `Transport` | Send handle to a peer (holds socket reference) |
+| `Received` | Received message with data + source Transport |
+| `RouteKey` | Identifies a route by (Protocol, SocketAddr) |
+| `Puncher` | NAT hole-punching logic |
+
+## API Design
+
+- **`EndPoint`** - Main API entry point
+- **`Sender`** - Cloneable send handle (no socket management)
+- **`RouteKey::from_transport()`** - Easy route construction
+
+See [design.md](design.md) for architecture details.
+
+## Supported Platforms
+
+Cross-platform (Windows, Linux, macOS).
+
+## License
+
+MIT OR Apache-2.0
