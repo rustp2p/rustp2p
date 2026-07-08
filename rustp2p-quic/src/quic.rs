@@ -23,20 +23,36 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 
 #[derive(Clone, Debug)]
+/// Decrypted QUIC DATAGRAM user message delivered by [`Endpoint::recv`](crate::Endpoint::recv).
 pub struct ReceivedMessage {
+    /// User payload after QUIC decryption and frame decoding.
     pub payload: Bytes,
+    /// Source peer id declared inside the QUIC application frame.
     pub src: PeerId,
+    /// Destination peer id declared inside the QUIC application frame.
     pub dest: PeerId,
+    /// Current route snapshot used to describe the source path.
     pub route: RouteKey,
+    /// Remaining overlay TTL inferred from the route metric.
     pub ttl: u8,
+    /// Initial overlay TTL configured for this endpoint.
     pub max_ttl: u8,
+    /// Whether the current route snapshot is relayed.
     pub is_relay: bool,
+    /// Whether this message was produced by a broadcast send.
     pub is_broadcast: bool,
 }
 
+/// Inbound end-to-end bidirectional QUIC stream.
+///
+/// Relay nodes do not receive this value for forwarded QUIC traffic; only the
+/// actual destination endpoint accepts the stream.
 pub struct IncomingBiStream {
+    /// Peer id of the remote QUIC endpoint.
     pub peer_id: PeerId,
+    /// Send half of the accepted bidirectional stream.
     pub send: ReliableSendStream,
+    /// Receive half of the accepted bidirectional stream.
     pub recv: ReliableRecvStream,
 }
 
@@ -51,7 +67,11 @@ struct RoutedQuicPacket {
     addr: SocketAddr,
 }
 
-/// Quinn socket adapter. It only maps PeerId to synthetic addresses for quinn.
+/// Quinn socket adapter.
+///
+/// Quinn requires `SocketAddr`s, but the public transport model is `PeerId`.
+/// This adapter owns the synthetic address table and delegates real delivery to
+/// the protocol layer, which wraps QUIC packets and sends them by peer id.
 pub(crate) struct QuicPeerSocket {
     protocol: Arc<ProtocolLayer>,
     routed_quic_tx: mpsc::UnboundedSender<RoutedQuicPacket>,
@@ -137,6 +157,9 @@ impl AsyncUdpSocket for QuicPeerSocket {
                 .protocol
                 .try_send_quic_payload(peer.peer_id.clone(), transmit.contents);
         }
+        // Unknown destinations are internal state errors. Treating the address
+        // as a real network address would bypass the PeerId overlay and route
+        // confirmation rules.
         Err(io::Error::new(
             io::ErrorKind::NotFound,
             format!(
@@ -406,6 +429,8 @@ impl QuicEndpoint {
 
     async fn connection_to(self: &Arc<Self>, peer_id: PeerId) -> io::Result<Connection> {
         self.protocol.ensure_peer_reachable(&peer_id)?;
+        // The address is only a local quinn handle. It does not encode the next
+        // hop; route lookup happens each time protocol sends a QUIC packet.
         let addr = self.socket.register_virtual_peer(peer_id.clone());
         self.connection_to_at(peer_id, addr).await
     }
@@ -657,6 +682,8 @@ async fn write_frame(send: &mut quinn::SendStream, data: &[u8]) -> io::Result<()
 }
 
 async fn write_stream_frame(send: &mut quinn::SendStream, frame: &StreamFrame) -> io::Result<()> {
+    // Stream metadata is a small protobuf frame before the user-visible stream
+    // bytes. The enclosing QUIC stream still provides end-to-end encryption.
     write_frame(send, &encode_stream_frame(frame)).await
 }
 
@@ -680,6 +707,8 @@ async fn read_frame(recv: &mut quinn::RecvStream) -> io::Result<Vec<u8>> {
 }
 
 async fn read_stream_frame(recv: &mut quinn::RecvStream) -> io::Result<StreamFrame> {
+    // Only the internal stream header is length-prefixed. User bytes remain on
+    // the raw QUIC stream for `ReliableRecvStream` to consume.
     decode_stream_frame(&read_frame(recv).await?)
 }
 

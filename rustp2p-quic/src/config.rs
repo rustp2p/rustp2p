@@ -5,23 +5,30 @@ use std::sync::Arc;
 use std::time::Duration;
 
 /// Configuration for the QUIC endpoint.
+///
+/// Most users should prefer [`Endpoint::builder`](crate::Endpoint::builder).
+/// This struct remains available for callers that need to construct or store a
+/// complete endpoint configuration.
 #[derive(Clone, Debug)]
 pub struct Config {
-    /// Local address to bind to.
+    /// Local core transport address to bind to.
     pub bind_addr: SocketAddr,
-    /// STUN servers for NAT detection.
+    /// STUN servers used for NAT type and port-range estimation.
     pub stun_servers: Vec<String>,
-    /// Timeout for NAT detection.
+    /// Interval used by NAT maintenance tasks.
     pub stun_timeout: Duration,
-    /// ALPN protocols to accept.
+    /// QUIC ALPN protocols to accept.
     pub alpns: Vec<Vec<u8>>,
     /// QUIC application datagram receive buffer size. `None` disables QUIC datagrams.
     pub datagram_receive_buffer_size: Option<usize>,
     /// QUIC application datagram send buffer size.
     pub datagram_send_buffer_size: usize,
-    /// Local high-level P2P identity.
+    /// Local high-level P2P identity. If absent, a random identity is generated.
     pub identity: Option<Identity>,
     /// Initial directly reachable bootstrap addresses.
+    ///
+    /// These addresses are entry points only; discovered peers are later
+    /// addressed by `PeerId`.
     pub bootstrap: Vec<SocketAddr>,
     /// Whether to enable the underlying core TCP transport.
     pub enable_tcp: bool,
@@ -37,11 +44,13 @@ pub struct Config {
     pub punch_whitelist: Vec<PeerId>,
     /// Direct peers allowed to act as public address observers. Empty means any direct peer.
     pub nat_observers: Vec<PeerId>,
-    /// QUIC server certificate verifier.
+    /// QUIC certificate verifier used for both server and client certificates.
     pub certificate_verifier: Arc<dyn CertificateVerifier>,
     /// Maximum forwarding TTL for high-level packets.
     pub max_ttl: u8,
     /// Whether to start high-level P2P dispatch/maintenance tasks.
+    ///
+    /// `Endpoint::builder` enables this automatically.
     pub high_level: bool,
 }
 

@@ -15,15 +15,22 @@ use tokio::sync::mpsc;
 /// Read-only peer information discovered by the protocol layer.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PeerInfo {
+    /// Application-level peer id.
     pub peer_id: PeerId,
+    /// Direct socket addresses observed or advertised for this peer.
     pub addrs: Vec<SocketAddr>,
+    /// Peer id of a relay that may currently reach this peer.
     pub relay_hint: Option<PeerId>,
+    /// Last update time in milliseconds since the Unix epoch.
     pub last_seen: u64,
+    /// Whether the peer currently has confirmed direct reachability.
     pub is_direct: bool,
+    /// Latest NAT information learned for this peer, if any.
     pub nat_info: Option<NatInfo>,
 }
 
 impl PeerInfo {
+    /// Creates peer information without any confirmed address.
     pub fn new(peer_id: PeerId) -> Self {
         Self {
             peer_id,
@@ -35,6 +42,7 @@ impl PeerInfo {
         }
     }
 
+    /// Adds a direct address and marks the peer as direct.
     pub fn with_addr(mut self, addr: SocketAddr) -> Self {
         self.addrs.push(addr);
         self.is_direct = true;
@@ -48,25 +56,39 @@ impl PeerInfo {
 /// type. This remains for low-level diagnostics and control-plane escape hatches.
 #[derive(Clone, Debug)]
 pub struct TransportMessage {
+    /// Raw protocol/control payload bytes.
     pub payload: Bytes,
+    /// Source peer id encoded by the protocol packet.
     pub src: PeerId,
+    /// Destination peer id encoded by the protocol packet.
     pub dest: PeerId,
+    /// Core route used by this packet.
     pub route: RouteKey,
+    /// Remaining packet TTL after forwarding.
     pub ttl: u8,
+    /// Initial packet TTL.
     pub max_ttl: u8,
+    /// Whether this packet has traversed at least one relay hop.
     pub is_relay: bool,
 }
 
+/// Current best confirmed link mode for a peer.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LinkMode {
+    /// The best confirmed route is a direct transport route.
     Direct,
+    /// The best confirmed route reaches the peer through another node.
     Relay,
 }
 
+/// Snapshot of the current best confirmed route for a peer.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LinkInfo {
+    /// Peer described by this route snapshot.
     pub peer_id: PeerId,
+    /// Direct or relayed mode for the selected route.
     pub mode: LinkMode,
+    /// Route hop metric. `0` means direct; larger values mean relayed.
     pub metric: u8,
 }
 
@@ -94,6 +116,11 @@ struct CoreTransportLayer {
     local_tcp_port: u16,
     raw_tx: flume::Sender<RawTransportPacket>,
     routes: parking_lot::RwLock<Option<RouteTable<PeerId>>>,
+    // Cache of live core transport handles keyed by RouteKey.
+    //
+    // This is deliberately not the route table. A packet received from an
+    // address proves only that the remote side reached us once; protocol
+    // control messages decide whether the route is bidirectional and confirmed.
     transports: DashMap<RouteKey, Transport>,
     outbound_tx: mpsc::UnboundedSender<CoreOutboundPacket>,
 }
@@ -189,6 +216,9 @@ impl CoreTransportLayer {
         tokio::spawn(async move {
             while let Some(received) = endpoint.recv().await {
                 let route_key = RouteKey::from_transport(&received.transport);
+                // Store the send handle for this core transport, but do not add
+                // a PeerId route here. Only the protocol layer can confirm that
+                // a route is usable for outbound peer traffic.
                 this.transports
                     .insert(route_key, received.transport.clone());
                 if received.data.is_empty() {
@@ -375,6 +405,9 @@ impl TransportLayer {
     }
 
     pub(crate) fn confirm_route(&self, peer_id: PeerId, route_key: RouteKey, metric: u8) {
+        // Protocol is the only caller for this primitive in normal operation.
+        // Keeping route mutation behind this method prevents receive-side packet
+        // observation from becoming confirmed reachability by accident.
         self.state
             .routes
             .add_route(peer_id, Route::from_default_rt(route_key, metric));
@@ -412,6 +445,9 @@ impl TransportLayer {
     }
 
     pub(crate) fn confirm_peer_route(&self, mut peer: PeerInfo, route_key: RouteKey, metric: u8) {
+        // Confirmed direct routes keep their socket address. Confirmed relay
+        // routes point at the next hop route and intentionally do not expose the
+        // final peer's socket address as directly reachable.
         if metric == 0 {
             peer.is_direct = true;
             if !peer.addrs.contains(&route_key.addr()) {
@@ -439,6 +475,10 @@ impl TransportLayer {
 }
 
 #[derive(Clone)]
+/// Low-level handle for transport diagnostics and control tooling.
+///
+/// This handle sends already encoded protocol wire bytes. It does not provide
+/// QUIC encryption for user payloads.
 pub struct TransportHandle {
     transport: Arc<TransportLayer>,
 }
@@ -448,6 +488,7 @@ impl TransportHandle {
         Self { transport }
     }
 
+    /// Returns the local core transport address, if one is available.
     pub fn local_addr(&self) -> Option<SocketAddr> {
         Some(self.transport.local_addr())
     }

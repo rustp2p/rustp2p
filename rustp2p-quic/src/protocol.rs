@@ -19,6 +19,10 @@ pub(crate) mod pb {
     include!(concat!(env!("OUT_DIR"), "/rustp2p.quic.v3.rs"));
 }
 
+/// Version of the rustp2p overlay packet header.
+///
+/// The fixed header is still hand-encoded for fast demux and TTL updates.
+/// Protocol-specific payloads inside the header are protobuf messages.
 pub const VERSION: u8 = 3;
 const FIXED_HEADER_LEN: usize = 13;
 
@@ -344,9 +348,18 @@ pub(crate) struct ProtocolLayer {
     nat_observers: parking_lot::RwLock<HashSet<PeerId>>,
     nat_info: parking_lot::RwLock<NatInfo>,
     peer_nat: DashMap<PeerId, NatInfo>,
+    // Bootstrap hello requests sent to raw socket addresses. A matching
+    // HelloReply confirms that the direct route is bidirectional.
     pending_hello_routes: DashSet<RouteKey>,
+    // Direct NAT observation requests waiting for a reply. Relayed observations
+    // are ignored because they would describe the relay, not the requester.
     pending_nat_observe: DashMap<PeerId, RouteKey>,
+    // Hole-punch request ids waiting for PunchReply. Only a matching reply can
+    // promote a punch candidate into a confirmed direct route.
     pending_punch: DashMap<u64, PeerId>,
+    // One-hop candidates observed from inbound UDP/control traffic. Candidates
+    // can be used to answer handshakes but are hidden from public route queries
+    // until a protocol-specific confirmation arrives.
     route_candidates: DashMap<PeerId, RouteKey>,
 }
 
@@ -401,6 +414,9 @@ impl ProtocolLayer {
     }
 
     pub(crate) fn route_metric_for(&self, peer_id: &PeerId) -> io::Result<(RouteKey, u8)> {
+        // QUIC may need metadata for packets received while the route is still
+        // a direct candidate. This does not expose the candidate through
+        // Endpoint::routes or link_mode.
         match self.transport.route_metric_for(peer_id) {
             Ok((route, metric)) => Ok((route.route_key(), metric)),
             Err(e) => self
@@ -412,6 +428,8 @@ impl ProtocolLayer {
     }
 
     pub(crate) fn try_send_quic_payload(&self, peer_id: PeerId, payload: &[u8]) -> io::Result<()> {
+        // QUIC ciphertext is always wrapped as QuicRelay before entering the
+        // transport layer. User datagrams never become raw rustp2p payloads.
         let packet = Packet::build(
             ProtocolType::QuicRelay,
             self.peer_id.clone(),
@@ -606,6 +624,9 @@ impl ProtocolLayer {
         let metric = packet.max_ttl().saturating_sub(packet.ttl());
         self.transport.update_route_read_time(&src, &route_key);
         let peer = self.peer_info_from_packet(&src, route_key, metric);
+        // Peer store updates are cheap discovery metadata. They are not route
+        // confirmation; confirmed routes are written only in protocol branches
+        // that prove bidirectional reachability or advertised relay reachability.
         self.transport.upsert_peer_info(peer.clone());
         if metric == 0 {
             self.route_candidates.insert(src.clone(), route_key);
@@ -641,6 +662,8 @@ impl ProtocolLayer {
                 }
                 let pending = self.pending_hello_routes.remove(&route_key).is_some();
                 if metric == 0 && pending {
+                    // A reply to our raw-address hello proves we can send to the
+                    // peer and receive from it over the same direct route.
                     self.transport.confirm_peer_route(hello.peer, route_key, 0);
                 } else {
                     self.transport.upsert_peer_info(hello.peer);
@@ -663,6 +686,9 @@ impl ProtocolLayer {
                 self.ingest_route_entries(reply.peers, route_key).await?;
             }
             ProtocolType::QuicRelay => {
+                // The relay payload is opaque QUIC ciphertext. The protocol
+                // layer only forwards or injects it into quinn; it never parses
+                // user data from this payload.
                 let _ = self
                     .quic_tx
                     .send_async(TransportPayload {
@@ -680,6 +706,9 @@ impl ProtocolLayer {
             ProtocolType::PunchRequest => {
                 let payload = self.handle_punch_payload(packet.payload()).await?;
                 if metric == 0 {
+                    // A punch request proves only that the peer reached us. It
+                    // stays a candidate until a matching PunchReply completes
+                    // the request/response exchange.
                     self.route_candidates.insert(payload.src.clone(), route_key);
                 }
                 if self.punch_allowed(&payload.src) {
@@ -702,6 +731,8 @@ impl ProtocolLayer {
                 let payload = self.handle_punch_payload(packet.payload()).await?;
                 if let Some((_, peer_id)) = self.pending_punch.remove(&payload.request_id) {
                     if peer_id == payload.src && metric == 0 {
+                        // Matching request id prevents unrelated punch traffic
+                        // from promoting a route to direct reachability.
                         self.transport.confirm_peer_route(
                             self.peer_info_from_packet(&payload.src, route_key, metric),
                             route_key,
@@ -842,6 +873,9 @@ impl ProtocolLayer {
                     .insert(item.peer.peer_id.clone(), nat_info.clone());
             }
             let metric = item.metric.saturating_add(1);
+            // Route replies advertise transport reachability. The next hop is
+            // the route used to receive this reply, while metric records the
+            // additional overlay hop distance to the advertised peer.
             self.transport
                 .confirm_peer_route(item.peer.clone(), via, metric);
         }
@@ -893,6 +927,8 @@ impl ProtocolLayer {
         if !packet.decrement_ttl() {
             return Ok(());
         }
+        // Forwarding is packet-level. Relays only inspect the rustp2p header and
+        // never terminate QUIC connections or decrypt QuicRelay payloads.
         self.transport
             .send_wire(packet.dest(), packet.as_bytes())
             .await
@@ -992,6 +1028,8 @@ impl ProtocolLayer {
 
     fn confirm_tcp_route(&self, peer: &PeerInfo, route_key: RouteKey, metric: u8) {
         if route_key.protocol().is_tcp() && metric == 0 {
+            // TCP transports are connection-oriented, so a valid direct control
+            // packet on TCP is enough to confirm bidirectional reachability.
             self.transport
                 .confirm_peer_route(peer.clone(), route_key, metric);
         }
@@ -999,6 +1037,9 @@ impl ProtocolLayer {
 
     fn confirm_relay_route_from_control(&self, peer: &PeerInfo, route_key: RouteKey, metric: u8) {
         if metric > 0 {
+            // Relayed control replies confirm that this next hop can carry
+            // packets toward the source peer, but they do not make the peer
+            // direct.
             self.transport
                 .confirm_peer_route(peer.clone(), route_key, metric);
         }
@@ -1102,6 +1143,9 @@ pub(crate) fn encode_msg<T: Message>(msg: &T) -> Vec<u8> {
 }
 
 pub(crate) fn decode_msg<T: Message + Default>(payload: &[u8]) -> io::Result<T> {
+    // Only protocol payloads use protobuf. The outer packet header remains the
+    // compact rustp2p header so relays can update TTL without decoding a full
+    // protobuf envelope.
     T::decode(payload)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("protobuf: {e}")))
 }

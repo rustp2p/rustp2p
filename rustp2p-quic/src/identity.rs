@@ -6,30 +6,40 @@ use std::fmt;
 use std::io;
 
 /// Stable peer identifier supplied by the application.
+///
+/// A `PeerId` is the name used by the high-level API for all peer-to-peer
+/// operations. It is not derived from the QUIC certificate; applications choose
+/// it directly and can decide how to bind it to certificate trust policy.
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, Default)]
 pub struct PeerId(pub String);
 
 impl PeerId {
+    /// Creates a peer id from application-provided text.
     pub fn new(value: impl Into<String>) -> Self {
         Self(value.into())
     }
 
+    /// Returns an empty placeholder peer id used only for internal packet validation.
     pub fn unspecified() -> Self {
         Self(String::new())
     }
 
+    /// Returns the broadcast peer id used by discovery control packets.
     pub fn broadcast() -> Self {
         Self("*".to_string())
     }
 
+    /// Returns true when this is the internal empty placeholder id.
     pub fn is_unspecified(&self) -> bool {
         self.0.is_empty()
     }
 
+    /// Returns true when this id targets broadcast control traffic.
     pub fn is_broadcast(&self) -> bool {
         self.0 == "*"
     }
 
+    /// Returns the peer id as application-visible text.
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -71,7 +81,12 @@ impl fmt::Display for PeerId {
     }
 }
 
-/// Local overlay identity. The peer id and QUIC certificate are intentionally decoupled.
+/// Local overlay identity.
+///
+/// The peer id and QUIC certificate are intentionally decoupled. The `peer_id`
+/// is the stable application-level node identifier. The seed deterministically
+/// generates the local QUIC certificate key material, but changing the seed does
+/// not change the peer id.
 #[derive(Clone)]
 pub struct Identity {
     peer_id: PeerId,
@@ -81,6 +96,10 @@ pub struct Identity {
 }
 
 impl Identity {
+    /// Creates an identity from a peer id and deterministic certificate seed.
+    ///
+    /// The peer id must be non-empty and must not be the broadcast id. The seed
+    /// is hashed and used to generate the self-signed QUIC certificate key.
     pub fn new(peer_id: impl Into<String>, seed: impl AsRef<[u8]>) -> io::Result<Self> {
         let peer_id = PeerId::new(peer_id);
         if peer_id.is_unspecified() || peer_id.is_broadcast() {
@@ -112,18 +131,22 @@ impl Identity {
         })
     }
 
+    /// Returns the application-level peer id for this identity.
     pub fn peer_id(&self) -> PeerId {
         self.peer_id.clone()
     }
 
+    /// Returns the DER-encoded self-signed certificate used by QUIC.
     pub fn certificate_der(&self) -> &[u8] {
         &self.cert_der
     }
 
+    /// Returns the DER-encoded private key used by QUIC.
     pub fn private_key_der(&self) -> &[u8] {
         &self.key_der
     }
 
+    /// Returns the SHA-256 hash of the seed used for deterministic key generation.
     pub fn seed_hash(&self) -> [u8; 32] {
         self.seed_hash
     }

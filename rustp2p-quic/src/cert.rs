@@ -3,7 +3,14 @@ use rustls::DistinguishedName;
 use std::fmt;
 use std::sync::Arc;
 
+/// Application-provided QUIC certificate verifier.
+///
+/// The same trait is used for both directions of the mutual QUIC/TLS handshake:
+/// clients call `verify_server_cert`, and servers call `verify_client_cert`.
+/// The verifier validates certificate trust. It does not bind certificates to
+/// `PeerId`; applications can enforce that policy above this layer if needed.
 pub trait CertificateVerifier: fmt::Debug + Send + Sync + 'static {
+    /// Verifies a remote server certificate during outbound QUIC connection setup.
     fn verify_server_cert(
         &self,
         end_entity: &CertificateDer<'_>,
@@ -13,6 +20,10 @@ pub trait CertificateVerifier: fmt::Debug + Send + Sync + 'static {
         now: UnixTime,
     ) -> Result<(), rustls::Error>;
 
+    /// Verifies a remote client certificate during inbound QUIC connection setup.
+    ///
+    /// The default implementation accepts any client certificate. Override this
+    /// for production deployments that require mutual certificate trust.
     fn verify_client_cert(
         &self,
         end_entity: &CertificateDer<'_>,
@@ -24,6 +35,10 @@ pub trait CertificateVerifier: fmt::Debug + Send + Sync + 'static {
     }
 }
 
+/// Certificate verifier that accepts every certificate.
+///
+/// This is convenient for tests and controlled local deployments. Production
+/// applications should install a verifier that enforces their trust policy.
 #[derive(Debug, Default)]
 pub struct SkipCertificateVerification;
 
