@@ -2,19 +2,24 @@ use crate::transport::{now_millis as transport_now_millis, PeerInfo, RawTranspor
 use crate::transport::{TransportLayer, TransportPayload};
 use crate::PeerId;
 use bytes::Bytes;
-use dashmap::DashMap;
-use rust_p2p_core::nat::NatInfo;
+use dashmap::{DashMap, DashSet};
+use prost::Message;
+use rust_p2p_core::nat::{NatInfo, NatType};
 use rust_p2p_core::punch::{PunchInfo, PunchModel};
 use rust_p2p_core::route_table::{Protocol, RouteKey};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::io;
-use std::net::SocketAddr;
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-pub const VERSION: u8 = 2;
+pub(crate) mod pb {
+    include!(concat!(env!("OUT_DIR"), "/rustp2p.quic.v3.rs"));
+}
+
+pub const VERSION: u8 = 3;
 const FIXED_HEADER_LEN: usize = 13;
 
 /// Packet types identified by the first byte.
@@ -339,6 +344,10 @@ pub(crate) struct ProtocolLayer {
     nat_observers: parking_lot::RwLock<HashSet<PeerId>>,
     nat_info: parking_lot::RwLock<NatInfo>,
     peer_nat: DashMap<PeerId, NatInfo>,
+    pending_hello_routes: DashSet<RouteKey>,
+    pending_nat_observe: DashMap<PeerId, RouteKey>,
+    pending_punch: DashMap<u64, PeerId>,
+    route_candidates: DashMap<PeerId, RouteKey>,
 }
 
 impl ProtocolLayer {
@@ -365,6 +374,10 @@ impl ProtocolLayer {
             nat_observers: parking_lot::RwLock::new(nat_observers.into_iter().collect()),
             nat_info: parking_lot::RwLock::new(initial_nat_info),
             peer_nat: DashMap::new(),
+            pending_hello_routes: DashSet::new(),
+            pending_nat_observe: DashMap::new(),
+            pending_punch: DashMap::new(),
+            route_candidates: DashMap::new(),
         });
         layer.start_packet_dispatcher();
         layer.start_maintenance_loop();
@@ -388,8 +401,14 @@ impl ProtocolLayer {
     }
 
     pub(crate) fn route_metric_for(&self, peer_id: &PeerId) -> io::Result<(RouteKey, u8)> {
-        let (route, metric) = self.transport.route_metric_for(peer_id)?;
-        Ok((route.route_key(), metric))
+        match self.transport.route_metric_for(peer_id) {
+            Ok((route, metric)) => Ok((route.route_key(), metric)),
+            Err(e) => self
+                .route_candidates
+                .get(peer_id)
+                .map(|route| (*route, 0))
+                .ok_or(e),
+        }
     }
 
     pub(crate) fn try_send_quic_payload(&self, peer_id: PeerId, payload: &[u8]) -> io::Result<()> {
@@ -400,7 +419,18 @@ impl ProtocolLayer {
             self.max_ttl,
             payload,
         )?;
-        self.transport.try_send_wire(peer_id, packet.as_bytes())
+        if self.transport.route_for(&peer_id).is_ok() {
+            return self.transport.try_send_wire(peer_id, packet.as_bytes());
+        }
+        if let Some(route) = self.route_candidates.get(&peer_id).map(|route| *route) {
+            self.transport
+                .try_send_wire_to_route(route, packet.as_bytes())
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "peer route not found",
+            ))
+        }
     }
 
     pub(crate) async fn recv_quic_payload(&self) -> io::Result<TransportPayload> {
@@ -435,6 +465,8 @@ impl ProtocolLayer {
         self.transport
             .send_raw_to_addr(packet.as_bytes(), addr)
             .await?;
+        self.pending_hello_routes
+            .insert(RouteKey::new(Protocol::UDP, addr));
 
         tokio::time::timeout(Duration::from_secs(30), async {
             loop {
@@ -475,7 +507,9 @@ impl ProtocolLayer {
             ));
         }
         let payload = self.punch_payload(peer_id.clone());
-        let encoded = bincode::serialize(&payload).map_err(bin_err)?;
+        self.pending_punch
+            .insert(payload.request_id, peer_id.clone());
+        let encoded = encode_punch_payload(&payload);
         self.send_protocol(peer_id.clone(), ProtocolType::PunchRequest, &encoded)
             .await?;
         if let Some(nat_info) = self.peer_nat.get(&peer_id).map(|v| v.clone()) {
@@ -519,6 +553,11 @@ impl ProtocolLayer {
                     if protocol.should_observe_with(&peer.peer_id)
                         && protocol.has_direct_route(&peer.peer_id)
                     {
+                        if let Ok(route) = protocol.transport.route_for(&peer.peer_id) {
+                            protocol
+                                .pending_nat_observe
+                                .insert(peer.peer_id.clone(), route.route_key());
+                        }
                         let _ = protocol
                             .send_protocol(peer.peer_id, ProtocolType::NatObserveRequest, &[])
                             .await;
@@ -565,29 +604,12 @@ impl ProtocolLayer {
 
         let route_key = received.route_key;
         let metric = packet.max_ttl().saturating_sub(packet.ttl());
-        let relay_hint = if metric > 0 {
-            self.transport.route_to_id(&route_key)
-        } else {
-            None
-        };
         self.transport.update_route_read_time(&src, &route_key);
-        let known_nat = self.peer_nat.get(&src).map(|entry| entry.clone());
-        self.transport.upsert_peer(
-            PeerInfo {
-                peer_id: src.clone(),
-                addrs: if metric == 0 {
-                    vec![route_key.addr()]
-                } else {
-                    Vec::new()
-                },
-                relay_hint,
-                last_seen: now_millis(),
-                is_direct: metric == 0,
-                nat_info: known_nat,
-            },
-            route_key,
-            metric,
-        );
+        let peer = self.peer_info_from_packet(&src, route_key, metric);
+        self.transport.upsert_peer_info(peer.clone());
+        if metric == 0 {
+            self.route_candidates.insert(src.clone(), route_key);
+        }
 
         let dest = packet.dest();
         if dest != self.peer_id && !dest.is_broadcast() {
@@ -597,18 +619,17 @@ impl ProtocolLayer {
 
         match packet.protocol()? {
             ProtocolType::HelloRequest => {
-                let payload = bincode::serialize(
+                self.confirm_tcp_route(&peer, route_key, metric);
+                let payload = encode_hello_payload(
                     &self
                         .hello_payload(&src, Some(self.observation_from_route(route_key)))
                         .await?,
-                )
-                .map_err(bin_err)?;
-                self.send_protocol(src, ProtocolType::HelloReply, &payload)
+                );
+                self.send_protocol_to_route(src, route_key, ProtocolType::HelloReply, &payload)
                     .await?;
             }
             ProtocolType::HelloReply => {
-                let hello: HelloPayload =
-                    bincode::deserialize(packet.payload()).map_err(bin_err)?;
+                let hello = decode_hello_payload(packet.payload())?;
                 let peer_id = hello.peer.peer_id.clone();
                 if let Some(nat_info) = &hello.peer.nat_info {
                     self.peer_nat.insert(peer_id.clone(), nat_info.clone());
@@ -618,21 +639,27 @@ impl ProtocolLayer {
                         self.apply_observation(observation);
                     }
                 }
-                self.transport.upsert_peer(hello.peer, route_key, metric);
+                let pending = self.pending_hello_routes.remove(&route_key).is_some();
+                if metric == 0 && pending {
+                    self.transport.confirm_peer_route(hello.peer, route_key, 0);
+                } else {
+                    self.transport.upsert_peer_info(hello.peer);
+                }
                 let _ = self.hello_tx.send_async((route_key.addr(), peer_id)).await;
                 self.ingest_route_entries(hello.peers, route_key).await?;
             }
             ProtocolType::IDRouteQuery => {
-                let payload = bincode::serialize(&RouteReplyPayload {
+                self.confirm_relay_route_from_control(&peer, route_key, metric);
+                let payload = encode_route_reply_payload(&RouteReplyPayload {
                     peers: self.discovery_entries(&src).await?,
-                })
-                .map_err(bin_err)?;
-                self.send_protocol(src, ProtocolType::IDRouteReply, &payload)
+                });
+                self.send_protocol_to_route(src, route_key, ProtocolType::IDRouteReply, &payload)
                     .await?;
             }
             ProtocolType::IDRouteReply => {
-                let reply: RouteReplyPayload =
-                    bincode::deserialize(packet.payload()).map_err(bin_err)?;
+                let reply = decode_route_reply_payload(packet.payload())?;
+                self.confirm_tcp_route(&peer, route_key, metric);
+                self.confirm_relay_route_from_control(&peer, route_key, metric);
                 self.ingest_route_entries(reply.peers, route_key).await?;
             }
             ProtocolType::QuicRelay => {
@@ -645,52 +672,89 @@ impl ProtocolLayer {
                     .await;
             }
             ProtocolType::PunchConsultRequest => {
-                self.handle_punch_consult_request(packet).await?;
+                self.handle_punch_consult_request(packet, route_key).await?;
             }
             ProtocolType::PunchConsultReply => {
                 self.handle_punch_payload(packet.payload()).await?;
             }
             ProtocolType::PunchRequest => {
                 let payload = self.handle_punch_payload(packet.payload()).await?;
+                if metric == 0 {
+                    self.route_candidates.insert(payload.src.clone(), route_key);
+                }
                 if self.punch_allowed(&payload.src) {
                     self.execute_punch(payload.src.clone(), payload.nat_info)
                         .await?;
-                    let reply = bincode::serialize(&self.punch_payload(payload.src.clone()))
-                        .map_err(bin_err)?;
-                    self.send_protocol(payload.src, ProtocolType::PunchReply, &reply)
-                        .await?;
+                    let reply = encode_punch_payload(
+                        &self
+                            .punch_payload_with_request_id(payload.src.clone(), payload.request_id),
+                    );
+                    self.send_protocol_to_route(
+                        payload.src,
+                        route_key,
+                        ProtocolType::PunchReply,
+                        &reply,
+                    )
+                    .await?;
                 }
             }
             ProtocolType::PunchReply => {
                 let payload = self.handle_punch_payload(packet.payload()).await?;
+                if let Some((_, peer_id)) = self.pending_punch.remove(&payload.request_id) {
+                    if peer_id == payload.src && metric == 0 {
+                        self.transport.confirm_peer_route(
+                            self.peer_info_from_packet(&payload.src, route_key, metric),
+                            route_key,
+                            0,
+                        );
+                    }
+                }
                 if self.punch_allowed(&payload.src) {
                     self.execute_punch(payload.src, payload.nat_info).await?;
                 }
             }
             ProtocolType::EchoRequest => {
-                self.send_protocol(src, ProtocolType::EchoReply, packet.payload())
-                    .await?;
+                self.confirm_tcp_route(&peer, route_key, metric);
+                self.send_protocol_to_route(
+                    src,
+                    route_key,
+                    ProtocolType::EchoReply,
+                    packet.payload(),
+                )
+                .await?;
             }
             ProtocolType::TimestampRequest => {
-                self.send_protocol(src, ProtocolType::TimestampReply, packet.payload())
-                    .await?;
+                self.confirm_tcp_route(&peer, route_key, metric);
+                self.send_protocol_to_route(
+                    src,
+                    route_key,
+                    ProtocolType::TimestampReply,
+                    packet.payload(),
+                )
+                .await?;
             }
             ProtocolType::NatObserveRequest => {
-                if metric == 0 {
-                    let payload = bincode::serialize(&NatObserveReplyPayload {
+                if self.is_confirmed_or_candidate(&src, route_key, metric) {
+                    let payload = encode_nat_observe_reply_payload(&NatObserveReplyPayload {
                         observation: self.observation_from_route(route_key),
-                    })
-                    .map_err(bin_err)?;
-                    self.send_protocol(src, ProtocolType::NatObserveReply, &payload)
-                        .await?;
+                    });
+                    self.send_protocol_to_route(
+                        src,
+                        route_key,
+                        ProtocolType::NatObserveReply,
+                        &payload,
+                    )
+                    .await?;
                 }
             }
             ProtocolType::NatObserveReply => {
-                if metric == 0 {
-                    let reply: NatObserveReplyPayload =
-                        bincode::deserialize(packet.payload()).map_err(bin_err)?;
+                if self.is_confirmed_or_pending_nat_observe(&src, route_key, metric) {
+                    let reply = decode_nat_observe_reply_payload(packet.payload())?;
                     if reply.observation.observer_peer_id == src && self.should_observe_with(&src) {
                         self.apply_observation(reply.observation);
+                        if metric == 0 {
+                            self.transport.confirm_peer_route(peer, route_key, 0);
+                        }
                     }
                 }
             }
@@ -702,26 +766,34 @@ impl ProtocolLayer {
         Ok(())
     }
 
-    async fn handle_punch_consult_request(&self, packet: Packet) -> io::Result<()> {
+    async fn handle_punch_consult_request(
+        &self,
+        packet: Packet,
+        route_key: RouteKey,
+    ) -> io::Result<()> {
         let payload = self.handle_punch_payload(packet.payload()).await?;
         if !self.punch_allowed(&payload.src) {
             return Ok(());
         }
-        let reply =
-            bincode::serialize(&self.punch_payload(payload.src.clone())).map_err(bin_err)?;
-        self.send_protocol(payload.src, ProtocolType::PunchConsultReply, &reply)
-            .await
+        let reply = encode_punch_payload(&self.punch_payload(payload.src.clone()));
+        self.send_protocol_to_route(
+            payload.src,
+            route_key,
+            ProtocolType::PunchConsultReply,
+            &reply,
+        )
+        .await
     }
 
     async fn handle_punch_payload(&self, payload: &[u8]) -> io::Result<PunchPayload> {
-        let payload: PunchPayload = bincode::deserialize(payload).map_err(bin_err)?;
+        let payload = decode_punch_payload(payload)?;
         self.peer_nat
             .insert(payload.src.clone(), payload.nat_info.clone());
         Ok(payload)
     }
 
     async fn execute_punch(&self, peer_id: PeerId, peer_nat_info: NatInfo) -> io::Result<()> {
-        let payload = bincode::serialize(&self.punch_payload(peer_id.clone())).map_err(bin_err)?;
+        let payload = encode_punch_payload(&self.punch_payload(peer_id.clone()));
         let packet = Packet::build(
             ProtocolType::PunchRequest,
             self.peer_id.clone(),
@@ -740,8 +812,12 @@ impl ProtocolLayer {
     }
 
     fn punch_payload(&self, dest: PeerId) -> PunchPayload {
+        self.punch_payload_with_request_id(dest, rand::random())
+    }
+
+    fn punch_payload_with_request_id(&self, dest: PeerId, request_id: u64) -> PunchPayload {
         PunchPayload {
-            request_id: rand::random(),
+            request_id,
             src: self.peer_id.clone(),
             dest,
             nat_info: self.nat_info(),
@@ -766,7 +842,8 @@ impl ProtocolLayer {
                     .insert(item.peer.peer_id.clone(), nat_info.clone());
             }
             let metric = item.metric.saturating_add(1);
-            self.transport.upsert_peer(item.peer.clone(), via, metric);
+            self.transport
+                .confirm_peer_route(item.peer.clone(), via, metric);
         }
         Ok(())
     }
@@ -837,6 +914,19 @@ impl ProtocolLayer {
         self.transport.send_wire(dest, packet.as_bytes()).await
     }
 
+    async fn send_protocol_to_route(
+        &self,
+        dest: PeerId,
+        route_key: RouteKey,
+        protocol: ProtocolType,
+        payload: &[u8],
+    ) -> io::Result<()> {
+        let packet = Packet::build(protocol, self.peer_id.clone(), dest, self.max_ttl, payload)?;
+        self.transport
+            .send_wire_to_route(route_key, packet.as_bytes())
+            .await
+    }
+
     fn self_peer_info(&self) -> PeerInfo {
         let mut addrs = vec![self.transport.local_addr()];
         if let Some(addr) = self.transport.local_tcp_addr() {
@@ -878,6 +968,68 @@ impl ProtocolLayer {
             .routes(peer_id.clone())
             .into_iter()
             .any(|route| route.is_direct())
+    }
+
+    fn peer_info_from_packet(&self, src: &PeerId, route_key: RouteKey, metric: u8) -> PeerInfo {
+        let relay_hint = if metric > 0 {
+            self.transport.route_to_id(&route_key)
+        } else {
+            None
+        };
+        PeerInfo {
+            peer_id: src.clone(),
+            addrs: if metric == 0 {
+                vec![route_key.addr()]
+            } else {
+                Vec::new()
+            },
+            relay_hint,
+            last_seen: now_millis(),
+            is_direct: false,
+            nat_info: self.peer_nat.get(src).map(|entry| entry.clone()),
+        }
+    }
+
+    fn confirm_tcp_route(&self, peer: &PeerInfo, route_key: RouteKey, metric: u8) {
+        if route_key.protocol().is_tcp() && metric == 0 {
+            self.transport
+                .confirm_peer_route(peer.clone(), route_key, metric);
+        }
+    }
+
+    fn confirm_relay_route_from_control(&self, peer: &PeerInfo, route_key: RouteKey, metric: u8) {
+        if metric > 0 {
+            self.transport
+                .confirm_peer_route(peer.clone(), route_key, metric);
+        }
+    }
+
+    fn is_confirmed_or_candidate(&self, peer_id: &PeerId, route_key: RouteKey, metric: u8) -> bool {
+        if metric != 0 {
+            return false;
+        }
+        self.transport
+            .routes(peer_id.clone())
+            .into_iter()
+            .any(|route| route.route_key() == route_key && route.is_direct())
+            || self
+                .route_candidates
+                .get(peer_id)
+                .is_some_and(|route| *route == route_key)
+    }
+
+    fn is_confirmed_or_pending_nat_observe(
+        &self,
+        peer_id: &PeerId,
+        route_key: RouteKey,
+        metric: u8,
+    ) -> bool {
+        self.is_confirmed_or_candidate(peer_id, route_key, metric)
+            || (metric == 0
+                && self
+                    .pending_nat_observe
+                    .remove(peer_id)
+                    .is_some_and(|(_, route)| route == route_key))
     }
 
     fn start_maintenance_loop(self: &Arc<Self>) {
@@ -945,16 +1097,426 @@ pub fn now_millis() -> u64 {
         .as_millis() as u64
 }
 
-fn bin_err(err: bincode::Error) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidData, format!("bincode: {err}"))
+pub(crate) fn encode_msg<T: Message>(msg: &T) -> Vec<u8> {
+    msg.encode_to_vec()
+}
+
+pub(crate) fn decode_msg<T: Message + Default>(payload: &[u8]) -> io::Result<T> {
+    T::decode(payload)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("protobuf: {e}")))
+}
+
+fn encode_hello_payload(payload: &HelloPayload) -> Vec<u8> {
+    encode_msg(&hello_payload_to_pb(payload))
+}
+
+fn decode_hello_payload(payload: &[u8]) -> io::Result<HelloPayload> {
+    hello_payload_from_pb(decode_msg(payload)?)
+}
+
+fn encode_route_reply_payload(payload: &RouteReplyPayload) -> Vec<u8> {
+    encode_msg(&route_reply_payload_to_pb(payload))
+}
+
+fn decode_route_reply_payload(payload: &[u8]) -> io::Result<RouteReplyPayload> {
+    route_reply_payload_from_pb(decode_msg(payload)?)
+}
+
+fn encode_punch_payload(payload: &PunchPayload) -> Vec<u8> {
+    encode_msg(&punch_payload_to_pb(payload))
+}
+
+fn decode_punch_payload(payload: &[u8]) -> io::Result<PunchPayload> {
+    punch_payload_from_pb(decode_msg(payload)?)
+}
+
+fn encode_nat_observe_reply_payload(payload: &NatObserveReplyPayload) -> Vec<u8> {
+    encode_msg(&nat_observe_reply_payload_to_pb(payload))
+}
+
+fn decode_nat_observe_reply_payload(payload: &[u8]) -> io::Result<NatObserveReplyPayload> {
+    nat_observe_reply_payload_from_pb(decode_msg(payload)?)
+}
+
+pub(crate) fn encode_stream_frame(frame: &StreamFrame) -> Vec<u8> {
+    let frame = match frame {
+        StreamFrame::User(header) => pb::stream_frame::Frame::User(stream_header_to_pb(header)),
+    };
+    encode_msg(&pb::StreamFrame { frame: Some(frame) })
+}
+
+pub(crate) fn decode_stream_frame(payload: &[u8]) -> io::Result<StreamFrame> {
+    let frame: pb::StreamFrame = decode_msg(payload)?;
+    match required(frame.frame, "stream_frame.frame")? {
+        pb::stream_frame::Frame::User(header) => {
+            Ok(StreamFrame::User(stream_header_from_pb(header)))
+        }
+    }
+}
+
+pub(crate) fn encode_datagram_frame(frame: &DatagramFrame) -> Vec<u8> {
+    let frame = match frame {
+        DatagramFrame::User {
+            id,
+            src,
+            dest,
+            payload,
+        } => pb::datagram_frame::Frame::User(pb::UserDatagram {
+            id: *id,
+            src: src.as_str().to_string(),
+            dest: dest.as_str().to_string(),
+            payload: payload.clone(),
+        }),
+    };
+    encode_msg(&pb::DatagramFrame { frame: Some(frame) })
+}
+
+pub(crate) fn decode_datagram_frame(payload: &[u8]) -> io::Result<DatagramFrame> {
+    let frame: pb::DatagramFrame = decode_msg(payload)?;
+    match required(frame.frame, "datagram_frame.frame")? {
+        pb::datagram_frame::Frame::User(user) => Ok(DatagramFrame::User {
+            id: user.id,
+            src: PeerId::from(user.src),
+            dest: PeerId::from(user.dest),
+            payload: user.payload,
+        }),
+    }
+}
+
+fn hello_payload_to_pb(payload: &HelloPayload) -> pb::HelloPayload {
+    pb::HelloPayload {
+        peer: Some(peer_info_to_pb(&payload.peer)),
+        peers: payload.peers.iter().map(route_entry_to_pb).collect(),
+        observed_addr: payload.observed_addr.as_ref().map(nat_observation_to_pb),
+    }
+}
+
+fn hello_payload_from_pb(payload: pb::HelloPayload) -> io::Result<HelloPayload> {
+    Ok(HelloPayload {
+        peer: peer_info_from_pb(required(payload.peer, "hello.peer")?)?,
+        peers: payload
+            .peers
+            .into_iter()
+            .map(route_entry_from_pb)
+            .collect::<io::Result<_>>()?,
+        observed_addr: payload
+            .observed_addr
+            .map(nat_observation_from_pb)
+            .transpose()?,
+    })
+}
+
+fn route_reply_payload_to_pb(payload: &RouteReplyPayload) -> pb::RouteReplyPayload {
+    pb::RouteReplyPayload {
+        peers: payload.peers.iter().map(route_entry_to_pb).collect(),
+    }
+}
+
+fn route_reply_payload_from_pb(payload: pb::RouteReplyPayload) -> io::Result<RouteReplyPayload> {
+    Ok(RouteReplyPayload {
+        peers: payload
+            .peers
+            .into_iter()
+            .map(route_entry_from_pb)
+            .collect::<io::Result<_>>()?,
+    })
+}
+
+fn route_entry_to_pb(entry: &RouteEntry) -> pb::RouteEntry {
+    pb::RouteEntry {
+        peer: Some(peer_info_to_pb(&entry.peer)),
+        metric: u32::from(entry.metric),
+    }
+}
+
+fn route_entry_from_pb(entry: pb::RouteEntry) -> io::Result<RouteEntry> {
+    Ok(RouteEntry {
+        peer: peer_info_from_pb(required(entry.peer, "route_entry.peer")?)?,
+        metric: checked_u8("route_entry.metric", entry.metric)?,
+    })
+}
+
+fn punch_payload_to_pb(payload: &PunchPayload) -> pb::PunchPayload {
+    pb::PunchPayload {
+        request_id: payload.request_id,
+        src: payload.src.as_str().to_string(),
+        dest: payload.dest.as_str().to_string(),
+        nat_info: Some(nat_info_to_pb(&payload.nat_info)),
+    }
+}
+
+fn punch_payload_from_pb(payload: pb::PunchPayload) -> io::Result<PunchPayload> {
+    Ok(PunchPayload {
+        request_id: payload.request_id,
+        src: PeerId::from(payload.src),
+        dest: PeerId::from(payload.dest),
+        nat_info: nat_info_from_pb(required(payload.nat_info, "punch.nat_info")?)?,
+    })
+}
+
+fn nat_observe_reply_payload_to_pb(payload: &NatObserveReplyPayload) -> pb::NatObserveReplyPayload {
+    pb::NatObserveReplyPayload {
+        observation: Some(nat_observation_to_pb(&payload.observation)),
+    }
+}
+
+fn nat_observe_reply_payload_from_pb(
+    payload: pb::NatObserveReplyPayload,
+) -> io::Result<NatObserveReplyPayload> {
+    Ok(NatObserveReplyPayload {
+        observation: nat_observation_from_pb(required(
+            payload.observation,
+            "nat_observe_reply.observation",
+        )?)?,
+    })
+}
+
+fn peer_info_to_pb(peer: &PeerInfo) -> pb::PeerInfo {
+    pb::PeerInfo {
+        peer_id: peer.peer_id.as_str().to_string(),
+        addrs: peer.addrs.iter().map(ToString::to_string).collect(),
+        relay_hint: peer
+            .relay_hint
+            .as_ref()
+            .map(|peer_id| peer_id.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        last_seen: peer.last_seen,
+        is_direct: peer.is_direct,
+        nat_info: peer.nat_info.as_ref().map(nat_info_to_pb),
+    }
+}
+
+fn peer_info_from_pb(peer: pb::PeerInfo) -> io::Result<PeerInfo> {
+    Ok(PeerInfo {
+        peer_id: PeerId::from(peer.peer_id),
+        addrs: peer
+            .addrs
+            .iter()
+            .map(|addr| parse_socket_addr("peer.addrs", addr))
+            .collect::<io::Result<_>>()?,
+        relay_hint: (!peer.relay_hint.is_empty()).then(|| PeerId::from(peer.relay_hint)),
+        last_seen: peer.last_seen,
+        is_direct: peer.is_direct,
+        nat_info: peer.nat_info.map(nat_info_from_pb).transpose()?,
+    })
+}
+
+fn nat_info_to_pb(info: &NatInfo) -> pb::NatInfo {
+    pb::NatInfo {
+        nat_type: match info.nat_type {
+            NatType::Cone => pb::NatType::Cone as i32,
+            NatType::Symmetric => pb::NatType::Symmetric as i32,
+        },
+        public_ips: info.public_ips.iter().map(ToString::to_string).collect(),
+        public_udp_ports: info
+            .public_udp_ports
+            .iter()
+            .map(|port| u32::from(*port))
+            .collect(),
+        mapping_tcp_addr: info
+            .mapping_tcp_addr
+            .iter()
+            .map(ToString::to_string)
+            .collect(),
+        mapping_udp_addr: info
+            .mapping_udp_addr
+            .iter()
+            .map(ToString::to_string)
+            .collect(),
+        public_port_range: u32::from(info.public_port_range),
+        local_ipv4: info.local_ipv4.to_string(),
+        local_ipv4s: info.local_ipv4s.iter().map(ToString::to_string).collect(),
+        ipv6: info.ipv6.map(|ip| ip.to_string()).unwrap_or_default(),
+        local_udp_ports: info
+            .local_udp_ports
+            .iter()
+            .map(|port| u32::from(*port))
+            .collect(),
+        local_tcp_port: u32::from(info.local_tcp_port),
+        public_tcp_port: u32::from(info.public_tcp_port),
+    }
+}
+
+fn nat_info_from_pb(info: pb::NatInfo) -> io::Result<NatInfo> {
+    let nat_type = match pb::NatType::try_from(info.nat_type).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("invalid nat type: {}", info.nat_type),
+        )
+    })? {
+        pb::NatType::Cone => NatType::Cone,
+        pb::NatType::Symmetric => NatType::Symmetric,
+    };
+    Ok(NatInfo {
+        nat_type,
+        public_ips: info
+            .public_ips
+            .iter()
+            .map(|ip| parse_ipv4("nat.public_ips", ip))
+            .collect::<io::Result<_>>()?,
+        public_udp_ports: checked_u16_vec("nat.public_udp_ports", &info.public_udp_ports)?,
+        mapping_tcp_addr: info
+            .mapping_tcp_addr
+            .iter()
+            .map(|addr| parse_socket_addr("nat.mapping_tcp_addr", addr))
+            .collect::<io::Result<_>>()?,
+        mapping_udp_addr: info
+            .mapping_udp_addr
+            .iter()
+            .map(|addr| parse_socket_addr("nat.mapping_udp_addr", addr))
+            .collect::<io::Result<_>>()?,
+        public_port_range: checked_u16("nat.public_port_range", info.public_port_range)?,
+        local_ipv4: parse_ipv4_or_unspecified("nat.local_ipv4", &info.local_ipv4)?,
+        local_ipv4s: info
+            .local_ipv4s
+            .iter()
+            .map(|ip| parse_ipv4("nat.local_ipv4s", ip))
+            .collect::<io::Result<_>>()?,
+        ipv6: if info.ipv6.is_empty() {
+            None
+        } else {
+            Some(parse_ipv6("nat.ipv6", &info.ipv6)?)
+        },
+        local_udp_ports: checked_u16_vec("nat.local_udp_ports", &info.local_udp_ports)?,
+        local_tcp_port: checked_u16("nat.local_tcp_port", info.local_tcp_port)?,
+        public_tcp_port: checked_u16("nat.public_tcp_port", info.public_tcp_port)?,
+    })
+}
+
+fn nat_observation_to_pb(observation: &NatObservation) -> pb::NatObservation {
+    pb::NatObservation {
+        observed_protocol: match observation.observed_protocol {
+            ObservedProtocol::Udp => pb::ObservedProtocol::Udp as i32,
+            ObservedProtocol::Tcp => pb::ObservedProtocol::Tcp as i32,
+        },
+        observed_addr: observation.observed_addr.to_string(),
+        observer_peer_id: observation.observer_peer_id.as_str().to_string(),
+        observed_at: observation.observed_at,
+    }
+}
+
+fn nat_observation_from_pb(observation: pb::NatObservation) -> io::Result<NatObservation> {
+    let observed_protocol = match pb::ObservedProtocol::try_from(observation.observed_protocol)
+        .map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "invalid observed protocol: {}",
+                    observation.observed_protocol
+                ),
+            )
+        })? {
+        pb::ObservedProtocol::Udp => ObservedProtocol::Udp,
+        pb::ObservedProtocol::Tcp => ObservedProtocol::Tcp,
+    };
+    Ok(NatObservation {
+        observed_protocol,
+        observed_addr: parse_socket_addr(
+            "nat_observation.observed_addr",
+            &observation.observed_addr,
+        )?,
+        observer_peer_id: PeerId::from(observation.observer_peer_id),
+        observed_at: observation.observed_at,
+    })
+}
+
+fn stream_header_to_pb(header: &StreamHeader) -> pb::StreamHeader {
+    pb::StreamHeader {
+        src: header.src.as_str().to_string(),
+        dest: header.dest.as_str().to_string(),
+    }
+}
+
+fn stream_header_from_pb(header: pb::StreamHeader) -> StreamHeader {
+    StreamHeader {
+        src: PeerId::from(header.src),
+        dest: PeerId::from(header.dest),
+    }
+}
+
+fn required<T>(value: Option<T>, field: &str) -> io::Result<T> {
+    value.ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("missing protobuf field: {field}"),
+        )
+    })
+}
+
+fn parse_socket_addr(field: &str, value: &str) -> io::Result<SocketAddr> {
+    value.parse().map_err(|e| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("invalid {field}: {value}: {e}"),
+        )
+    })
+}
+
+fn parse_ipv4(field: &str, value: &str) -> io::Result<Ipv4Addr> {
+    value.parse().map_err(|e| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("invalid {field}: {value}: {e}"),
+        )
+    })
+}
+
+fn parse_ipv4_or_unspecified(field: &str, value: &str) -> io::Result<Ipv4Addr> {
+    if value.is_empty() {
+        Ok(Ipv4Addr::UNSPECIFIED)
+    } else {
+        parse_ipv4(field, value)
+    }
+}
+
+fn parse_ipv6(field: &str, value: &str) -> io::Result<Ipv6Addr> {
+    value.parse().map_err(|e| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("invalid {field}: {value}: {e}"),
+        )
+    })
+}
+
+fn checked_u16(field: &str, value: u32) -> io::Result<u16> {
+    u16::try_from(value).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{field} exceeds u16: {value}"),
+        )
+    })
+}
+
+fn checked_u8(field: &str, value: u32) -> io::Result<u8> {
+    u8::try_from(value).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{field} exceeds u8: {value}"),
+        )
+    })
+}
+
+fn checked_u16_vec(field: &str, values: &[u32]) -> io::Result<Vec<u16>> {
+    values
+        .iter()
+        .map(|value| checked_u16(field, *value))
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
         apply_observation_to_nat_info, apply_stun_result_to_nat_info, classify_packet,
-        NatObservation, ObservedProtocol, Packet, PacketType, ProtocolType,
+        decode_datagram_frame, decode_hello_payload, decode_nat_observe_reply_payload,
+        decode_punch_payload, decode_route_reply_payload, decode_stream_frame,
+        encode_datagram_frame, encode_hello_payload, encode_nat_observe_reply_payload,
+        encode_punch_payload, encode_route_reply_payload, encode_stream_frame, DatagramFrame,
+        HelloPayload, NatObservation, NatObserveReplyPayload, ObservedProtocol, Packet, PacketType,
+        ProtocolType, PunchPayload, RouteEntry, RouteReplyPayload, StreamFrame, StreamHeader,
+        VERSION,
     };
+    use crate::transport::PeerInfo;
     use crate::PeerId;
     use rust_p2p_core::nat::{NatInfo, NatType};
     use rust_p2p_core::stun::StunResult;
@@ -978,6 +1540,111 @@ mod tests {
         assert_eq!(packet.payload(), b"encrypted-quic-packet");
         let parsed = Packet::parse(packet.into_bytes()).unwrap();
         assert_eq!(parsed.payload(), b"encrypted-quic-packet");
+    }
+
+    #[test]
+    fn packet_rejects_v2_header() {
+        let mut bytes = Packet::build(
+            ProtocolType::QuicRelay,
+            PeerId::from("node-a"),
+            PeerId::from("node-b"),
+            8,
+            b"payload",
+        )
+        .unwrap()
+        .into_bytes();
+        bytes[1] = 2;
+
+        let err = Packet::parse(bytes).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert_eq!(VERSION, 3);
+    }
+
+    #[test]
+    fn protobuf_control_payloads_round_trip() {
+        let peer = sample_peer();
+        let observed_udp = observation(ObservedProtocol::Udp, "203.0.113.1:4567");
+        let hello = HelloPayload {
+            peer: peer.clone(),
+            peers: vec![RouteEntry {
+                peer: peer.clone(),
+                metric: 2,
+            }],
+            observed_addr: Some(observed_udp.clone()),
+        };
+        let decoded_hello = decode_hello_payload(&encode_hello_payload(&hello)).unwrap();
+        assert_eq!(decoded_hello.peer.peer_id, peer.peer_id);
+        assert_eq!(decoded_hello.peers[0].metric, 2);
+        assert_eq!(
+            decoded_hello.observed_addr.unwrap().observed_addr,
+            observed_udp.observed_addr
+        );
+        assert_nat_eq(
+            decoded_hello.peer.nat_info.as_ref().unwrap(),
+            peer.nat_info.as_ref().unwrap(),
+        );
+
+        let route_reply = RouteReplyPayload {
+            peers: vec![RouteEntry {
+                peer: sample_peer(),
+                metric: 3,
+            }],
+        };
+        let decoded_route =
+            decode_route_reply_payload(&encode_route_reply_payload(&route_reply)).unwrap();
+        assert_eq!(decoded_route.peers[0].metric, 3);
+
+        let punch = PunchPayload {
+            request_id: 99,
+            src: PeerId::from("node-a"),
+            dest: PeerId::from("node-b"),
+            nat_info: sample_nat_info(),
+        };
+        let decoded_punch = decode_punch_payload(&encode_punch_payload(&punch)).unwrap();
+        assert_eq!(decoded_punch.request_id, 99);
+        assert_eq!(decoded_punch.src, punch.src);
+        assert_eq!(decoded_punch.dest, punch.dest);
+        assert_nat_eq(&decoded_punch.nat_info, &punch.nat_info);
+
+        let nat_observe = NatObserveReplyPayload {
+            observation: observation(ObservedProtocol::Tcp, "203.0.113.2:7788"),
+        };
+        let decoded_observe =
+            decode_nat_observe_reply_payload(&encode_nat_observe_reply_payload(&nat_observe))
+                .unwrap();
+        assert_eq!(
+            decoded_observe.observation.observed_protocol,
+            ObservedProtocol::Tcp
+        );
+    }
+
+    #[test]
+    fn protobuf_quic_frames_round_trip() {
+        let stream = StreamFrame::User(StreamHeader {
+            src: PeerId::from("node-a"),
+            dest: PeerId::from("node-b"),
+        });
+        let StreamFrame::User(decoded_stream) =
+            decode_stream_frame(&encode_stream_frame(&stream)).unwrap();
+        assert_eq!(decoded_stream.src, PeerId::from("node-a"));
+        assert_eq!(decoded_stream.dest, PeerId::from("node-b"));
+
+        let datagram = DatagramFrame::User {
+            id: 42,
+            src: PeerId::from("node-a"),
+            dest: PeerId::from("node-b"),
+            payload: b"hello".to_vec(),
+        };
+        let DatagramFrame::User {
+            id,
+            src,
+            dest,
+            payload,
+        } = decode_datagram_frame(&encode_datagram_frame(&datagram)).unwrap();
+        assert_eq!(id, 42);
+        assert_eq!(src, PeerId::from("node-a"));
+        assert_eq!(dest, PeerId::from("node-b"));
+        assert_eq!(payload, b"hello");
     }
 
     #[test]
@@ -1057,5 +1724,51 @@ mod tests {
             observer_peer_id: PeerId::from("observer"),
             observed_at: 1,
         }
+    }
+
+    fn sample_peer() -> PeerInfo {
+        PeerInfo {
+            peer_id: PeerId::from("node-a"),
+            addrs: vec!["127.0.0.1:7001".parse().unwrap()],
+            relay_hint: Some(PeerId::from("relay")),
+            last_seen: 123,
+            is_direct: true,
+            nat_info: Some(sample_nat_info()),
+        }
+    }
+
+    fn sample_nat_info() -> NatInfo {
+        NatInfo {
+            nat_type: NatType::Symmetric,
+            public_ips: vec![
+                Ipv4Addr::new(203, 0, 113, 1),
+                Ipv4Addr::new(198, 51, 100, 2),
+            ],
+            public_udp_ports: vec![4567, 4568],
+            mapping_tcp_addr: vec!["192.0.2.10:6000".parse().unwrap()],
+            mapping_udp_addr: vec!["192.0.2.10:6001".parse().unwrap()],
+            public_port_range: 32,
+            local_ipv4: Ipv4Addr::new(10, 0, 0, 2),
+            local_ipv4s: vec![Ipv4Addr::new(10, 0, 0, 2), Ipv4Addr::new(10, 0, 0, 3)],
+            ipv6: Some("2001:db8::1".parse().unwrap()),
+            local_udp_ports: vec![7001, 7002],
+            local_tcp_port: 7003,
+            public_tcp_port: 9443,
+        }
+    }
+
+    fn assert_nat_eq(left: &NatInfo, right: &NatInfo) {
+        assert_eq!(left.nat_type, right.nat_type);
+        assert_eq!(left.public_ips, right.public_ips);
+        assert_eq!(left.public_udp_ports, right.public_udp_ports);
+        assert_eq!(left.mapping_tcp_addr, right.mapping_tcp_addr);
+        assert_eq!(left.mapping_udp_addr, right.mapping_udp_addr);
+        assert_eq!(left.public_port_range, right.public_port_range);
+        assert_eq!(left.local_ipv4, right.local_ipv4);
+        assert_eq!(left.local_ipv4s, right.local_ipv4s);
+        assert_eq!(left.ipv6, right.ipv6);
+        assert_eq!(left.local_udp_ports, right.local_udp_ports);
+        assert_eq!(left.local_tcp_port, right.local_tcp_port);
+        assert_eq!(left.public_tcp_port, right.public_tcp_port);
     }
 }

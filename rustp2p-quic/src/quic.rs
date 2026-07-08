@@ -1,7 +1,10 @@
 use crate::cert::{RustlsCertificateVerifier, RustlsClientCertificateVerifier};
 use crate::config::Config;
 use crate::connection::Connection;
-use crate::protocol::{DatagramFrame, ProtocolLayer, StreamFrame, StreamHeader};
+use crate::protocol::{
+    decode_datagram_frame, decode_stream_frame, encode_datagram_frame, encode_stream_frame,
+    DatagramFrame, ProtocolLayer, StreamFrame, StreamHeader,
+};
 use crate::reliable::{ReliableRecvStream, ReliableSendStream};
 use crate::{Identity, PeerId};
 use bytes::Bytes;
@@ -307,7 +310,7 @@ impl QuicEndpoint {
             dest: peer_id,
             payload: payload.to_vec(),
         };
-        let data = Bytes::from(bincode::serialize(&frame).map_err(bin_err)?);
+        let data = Bytes::from(encode_datagram_frame(&frame));
         for attempt in 0..5 {
             conn.quinn()
                 .send_datagram_wait(data.clone())
@@ -333,7 +336,7 @@ impl QuicEndpoint {
             payload: payload.to_vec(),
         };
         conn.quinn()
-            .send_datagram(Bytes::from(bincode::serialize(&frame).map_err(bin_err)?))
+            .send_datagram(Bytes::from(encode_datagram_frame(&frame)))
             .map_err(|e| io::Error::other(format!("send QUIC datagram: {e}")))
     }
 
@@ -602,7 +605,7 @@ impl QuicEndpoint {
                 "datagram arrived from unknown synthetic peer",
             ));
         }
-        let frame: DatagramFrame = bincode::deserialize(&data).map_err(bin_err)?;
+        let frame = decode_datagram_frame(&data)?;
         match frame {
             DatagramFrame::User {
                 id,
@@ -654,7 +657,7 @@ async fn write_frame(send: &mut quinn::SendStream, data: &[u8]) -> io::Result<()
 }
 
 async fn write_stream_frame(send: &mut quinn::SendStream, frame: &StreamFrame) -> io::Result<()> {
-    write_frame(send, &bincode::serialize(frame).map_err(bin_err)?).await
+    write_frame(send, &encode_stream_frame(frame)).await
 }
 
 async fn read_frame(recv: &mut quinn::RecvStream) -> io::Result<Vec<u8>> {
@@ -677,11 +680,7 @@ async fn read_frame(recv: &mut quinn::RecvStream) -> io::Result<Vec<u8>> {
 }
 
 async fn read_stream_frame(recv: &mut quinn::RecvStream) -> io::Result<StreamFrame> {
-    bincode::deserialize(&read_frame(recv).await?).map_err(bin_err)
-}
-
-fn bin_err(err: bincode::Error) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidData, format!("bincode: {err}"))
+    decode_stream_frame(&read_frame(recv).await?)
 }
 
 #[cfg(test)]
@@ -690,6 +689,7 @@ mod tests {
     use crate::protocol::ProtocolLayer;
     use crate::{Config, Identity, PeerId};
     use quinn::AsyncUdpSocket;
+    use rust_p2p_core::route_table::{Protocol, RouteKey};
     use std::io;
 
     #[tokio::test]
@@ -735,6 +735,11 @@ mod tests {
         let transport = crate::transport::TransportLayer::bind(PeerId::from("node-a"), &config)
             .await
             .unwrap();
+        transport.confirm_route(
+            PeerId::from("node-b"),
+            RouteKey::new(Protocol::UDP, "127.0.0.1:9".parse().unwrap()),
+            0,
+        );
         let protocol = ProtocolLayer::new(
             PeerId::from("node-a"),
             transport,

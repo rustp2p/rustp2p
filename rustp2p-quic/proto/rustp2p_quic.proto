@@ -1,0 +1,94 @@
+syntax = "proto3";
+
+package rustp2p.quic.v3;
+
+enum NatType {
+  CONE = 0;
+  SYMMETRIC = 1;
+}
+
+enum ObservedProtocol {
+  UDP = 0;
+  TCP = 1;
+}
+
+message NatInfo {
+  NatType nat_type = 1;
+  repeated string public_ips = 2;
+  repeated uint32 public_udp_ports = 3;
+  repeated string mapping_tcp_addr = 4;
+  repeated string mapping_udp_addr = 5;
+  uint32 public_port_range = 6;
+  string local_ipv4 = 7;
+  repeated string local_ipv4s = 8;
+  string ipv6 = 9;
+  repeated uint32 local_udp_ports = 10;
+  uint32 local_tcp_port = 11;
+  uint32 public_tcp_port = 12;
+}
+
+message PeerInfo {
+  string peer_id = 1;
+  repeated string addrs = 2;
+  string relay_hint = 3;
+  uint64 last_seen = 4;
+  bool is_direct = 5;
+  NatInfo nat_info = 6;
+}
+
+message RouteEntry {
+  PeerInfo peer = 1;
+  uint32 metric = 2;
+}
+
+message HelloPayload {
+  PeerInfo peer = 1;
+  repeated RouteEntry peers = 2;
+  NatObservation observed_addr = 3;
+}
+
+message RouteReplyPayload {
+  repeated RouteEntry peers = 1;
+}
+
+message PunchPayload {
+  uint64 request_id = 1;
+  string src = 2;
+  string dest = 3;
+  NatInfo nat_info = 4;
+}
+
+message NatObservation {
+  ObservedProtocol observed_protocol = 1;
+  string observed_addr = 2;
+  string observer_peer_id = 3;
+  uint64 observed_at = 4;
+}
+
+message NatObserveReplyPayload {
+  NatObservation observation = 1;
+}
+
+message StreamHeader {
+  string src = 1;
+  string dest = 2;
+}
+
+message StreamFrame {
+  oneof frame {
+    StreamHeader user = 1;
+  }
+}
+
+message UserDatagram {
+  uint64 id = 1;
+  string src = 2;
+  string dest = 3;
+  bytes payload = 4;
+}
+
+message DatagramFrame {
+  oneof frame {
+    UserDatagram user = 1;
+  }
+}
