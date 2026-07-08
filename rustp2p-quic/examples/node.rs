@@ -52,13 +52,18 @@ async fn main() -> rustp2p_quic::Result<()> {
         loop {
             match stream_endpoint.accept_bi().await {
                 Ok(mut stream) => {
+                    let endpoint = stream_endpoint.clone();
                     tokio::spawn(async move {
                         match read_frame(&mut stream.recv, 1024 * 1024).await {
                             Ok(data) => {
+                                let link = endpoint
+                                    .link_mode(stream.peer_id.clone())
+                                    .map(|mode| format!("{mode:?}"))
+                                    .unwrap_or_else(|| "Unknown".to_string());
                                 println!(
-                                    "[stream] from={} relay={} {}",
+                                    "[stream] from={} link={} {}",
                                     stream.peer_id,
-                                    stream.is_relay,
+                                    link,
                                     String::from_utf8_lossy(&data)
                                 );
                                 let mut response = b"echo: ".to_vec();

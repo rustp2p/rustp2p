@@ -1,4 +1,4 @@
-use rustp2p_quic::{CertificateVerifier, Endpoint, Identity, PeerId};
+use rustp2p_quic::{CertificateVerifier, Endpoint, Identity, LinkMode, PeerId};
 use serial_test::serial;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -77,7 +77,7 @@ async fn direct_reliable_stream_returns_source_info() {
         .unwrap()
         .unwrap();
     assert_eq!(inbound.peer_id, a.peer_id());
-    assert!(!inbound.is_relay);
+    assert_eq!(b.link_mode(a.peer_id()), Some(LinkMode::Direct));
 
     let mut buf = [0u8; 32];
     let n = inbound.recv.read(&mut buf).await.unwrap().unwrap();
@@ -116,7 +116,7 @@ async fn three_nodes_discover_and_relay_by_peer_id_only() {
         .unwrap()
         .unwrap();
     assert_eq!(inbound.peer_id, a.peer_id());
-    assert!(inbound.is_relay);
+    assert_eq!(c.link_mode(a.peer_id()), Some(LinkMode::Relay));
 
     let mut buf = [0u8; 64];
     let n = inbound.recv.read(&mut buf).await.unwrap().unwrap();

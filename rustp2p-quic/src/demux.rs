@@ -4,10 +4,10 @@ use bytes::Bytes;
 use dashmap::DashMap;
 use quinn::udp::{RecvMeta, Transmit};
 use quinn::AsyncUdpSocket;
+use rust_p2p_core::route_table::RouteTable;
 use std::io::{self, IoSliceMut};
 use std::net::SocketAddr;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use tokio::net::UdpSocket;
@@ -50,7 +50,6 @@ struct VirtualPeer {
     peer_id: PeerId,
     src: PeerId,
     max_ttl: u8,
-    next_hop: SocketAddr,
 }
 
 #[derive(Clone, Debug)]
@@ -67,7 +66,7 @@ pub struct SharedUdpSocket {
     routed_quic_rx: parking_lot::Mutex<mpsc::UnboundedReceiver<RoutedQuicPacket>>,
     virtual_by_addr: DashMap<SocketAddr, VirtualPeer>,
     virtual_by_peer: DashMap<PeerId, SocketAddr>,
-    next_virtual: AtomicU16,
+    routes: parking_lot::RwLock<Option<RouteTable<PeerId>>>,
 }
 
 impl SharedUdpSocket {
@@ -80,8 +79,12 @@ impl SharedUdpSocket {
             routed_quic_rx: parking_lot::Mutex::new(routed_quic_rx),
             virtual_by_addr: DashMap::new(),
             virtual_by_peer: DashMap::new(),
-            next_virtual: AtomicU16::new(1),
+            routes: parking_lot::RwLock::new(None),
         })
+    }
+
+    pub(crate) fn set_route_table(&self, routes: RouteTable<PeerId>) {
+        *self.routes.write() = Some(routes);
     }
 
     pub fn local_addr(&self) -> io::Result<SocketAddr> {
@@ -101,7 +104,6 @@ impl SharedUdpSocket {
         src: PeerId,
         peer_id: PeerId,
         max_ttl: u8,
-        next_hop: SocketAddr,
     ) -> SocketAddr {
         if let Some(addr) = self.virtual_by_peer.get(&peer_id).map(|entry| *entry) {
             self.virtual_by_addr.insert(
@@ -110,14 +112,12 @@ impl SharedUdpSocket {
                     peer_id,
                     src,
                     max_ttl,
-                    next_hop,
                 },
             );
             return addr;
         }
 
-        let seq = self.next_virtual.fetch_add(1, Ordering::Relaxed);
-        let addr = SocketAddr::from(([127, 255, (seq >> 8) as u8, seq as u8], 4433));
+        let addr = self.allocate_virtual_addr();
         self.virtual_by_peer.insert(peer_id.clone(), addr);
         self.virtual_by_addr.insert(
             addr,
@@ -125,10 +125,40 @@ impl SharedUdpSocket {
                 peer_id,
                 src,
                 max_ttl,
-                next_hop,
             },
         );
         addr
+    }
+
+    pub(crate) fn peer_for_virtual_addr(&self, addr: SocketAddr) -> Option<PeerId> {
+        self.virtual_by_addr
+            .get(&addr)
+            .map(|entry| entry.peer_id.clone())
+    }
+
+    pub(crate) fn release_virtual_peer(&self, peer_id: &PeerId) {
+        if let Some((_, addr)) = self.virtual_by_peer.remove(peer_id) {
+            self.virtual_by_addr.remove(&addr);
+        }
+    }
+
+    fn allocate_virtual_addr(&self) -> SocketAddr {
+        for _ in 0..128 {
+            let suffix = rand::random::<u16>();
+            let port = 1024 + (rand::random::<u16>() % (u16::MAX - 1024));
+            let addr = SocketAddr::from(([127, 255, (suffix >> 8) as u8, suffix as u8], port));
+            if !self.virtual_by_addr.contains_key(&addr) {
+                return addr;
+            }
+        }
+
+        loop {
+            let suffix = rand::random::<u16>();
+            let addr = SocketAddr::from(([127, 255, (suffix >> 8) as u8, suffix as u8], 4433));
+            if !self.virtual_by_addr.contains_key(&addr) {
+                return addr;
+            }
+        }
     }
 
     pub(crate) fn inject_routed_quic(&self, data: Bytes, addr: SocketAddr) {
@@ -157,6 +187,11 @@ impl AsyncUdpSocket for SharedUdpSocket {
 
     fn try_send(&self, transmit: &Transmit) -> io::Result<()> {
         if let Some(peer) = self.virtual_by_addr.get(&transmit.destination) {
+            let routes = self.routes.read();
+            let route = routes
+                .as_ref()
+                .and_then(|routes| routes.route_one(&peer.peer_id))
+                .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "peer route not found"))?;
             let packet = Packet::build(
                 ProtocolType::QuicRelay,
                 peer.src.clone(),
@@ -166,7 +201,7 @@ impl AsyncUdpSocket for SharedUdpSocket {
             )?;
             return self
                 .socket
-                .try_send_to(packet.as_bytes(), peer.next_hop)
+                .try_send_to(packet.as_bytes(), route.route_key().addr())
                 .map(|_| ());
         }
         self.socket
@@ -271,7 +306,15 @@ impl std::fmt::Debug for SharedUdpSocket {
 
 #[cfg(test)]
 mod tests {
-    use super::{classify_packet, PacketType};
+    use super::{classify_packet, PacketType, SharedUdpSocket};
+    use crate::PeerId;
+    use quinn::udp::Transmit;
+    use quinn::AsyncUdpSocket;
+    use rust_p2p_core::route_table::{Protocol, Route, RouteKey, RouteTable};
+    use std::net::SocketAddr;
+    use std::sync::Arc;
+    use tokio::net::UdpSocket;
+    use tokio::sync::mpsc;
 
     #[test]
     fn classifies_quic_by_fixed_bit() {
@@ -283,5 +326,105 @@ mod tests {
     fn keeps_rustp2p_packets_out_of_quic_path() {
         assert_eq!(classify_packet(0x80), PacketType::RustP2p(0));
         assert_eq!(classify_packet(0x8e), PacketType::RustP2p(14));
+    }
+
+    #[tokio::test]
+    async fn virtual_peer_mapping_is_stable_unique_and_released() {
+        let shared = shared_socket().await;
+        let src = PeerId::from("node-a");
+        let peer_a = PeerId::from("node-b");
+        let peer_b = PeerId::from("node-c");
+
+        let addr_a = shared.register_virtual_peer(src.clone(), peer_a.clone(), 8);
+        let addr_a_again = shared.register_virtual_peer(src.clone(), peer_a.clone(), 8);
+        let addr_b = shared.register_virtual_peer(src, peer_b.clone(), 8);
+
+        assert_eq!(addr_a, addr_a_again);
+        assert_ne!(addr_a, addr_b);
+        assert!(is_virtual_addr(addr_a));
+        assert!(is_virtual_addr(addr_b));
+        assert_eq!(shared.peer_for_virtual_addr(addr_a), Some(peer_a.clone()));
+
+        shared.release_virtual_peer(&peer_a);
+        assert_eq!(shared.peer_for_virtual_addr(addr_a), None);
+    }
+
+    #[tokio::test]
+    async fn virtual_send_uses_current_route_for_peer() {
+        let shared = shared_socket().await;
+        let routes = RouteTable::new(Default::default());
+        shared.set_route_table(routes.clone());
+
+        let src = PeerId::from("node-a");
+        let peer = PeerId::from("node-b");
+        let virtual_addr = shared.register_virtual_peer(src, peer.clone(), 8);
+
+        let recv_one = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let recv_two = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let route_one = RouteKey::new(Protocol::UDP, recv_one.local_addr().unwrap());
+        let route_two = RouteKey::new(Protocol::UDP, recv_two.local_addr().unwrap());
+
+        routes.add_route(peer.clone(), Route::from_default_rt(route_one, 0));
+        send_with_retry(&shared, virtual_addr, b"one").await;
+        let mut buf = [0u8; 256];
+        let (n, _) = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            recv_one.recv_from(&mut buf),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(n > 0);
+
+        routes.remove_route(&peer, &route_one);
+        routes.add_route(peer, Route::from_default_rt(route_two, 0));
+        send_with_retry(&shared, virtual_addr, b"two").await;
+        let (n, _) = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            recv_two.recv_from(&mut buf),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(n > 0);
+    }
+
+    async fn shared_socket() -> Arc<SharedUdpSocket> {
+        let std_socket = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        std_socket.set_nonblocking(true).unwrap();
+        let socket = Arc::new(UdpSocket::from_std(std_socket).unwrap());
+        let (tx, _rx) = mpsc::channel(8);
+        SharedUdpSocket::new(socket, tx)
+    }
+
+    fn transmit(destination: SocketAddr, contents: &[u8]) -> Transmit<'_> {
+        Transmit {
+            destination,
+            ecn: None,
+            contents,
+            segment_size: None,
+            src_ip: None,
+        }
+    }
+
+    async fn send_with_retry(shared: &Arc<SharedUdpSocket>, destination: SocketAddr, data: &[u8]) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        loop {
+            match shared.try_send(&transmit(destination, data)) {
+                Ok(()) => return,
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "timed out waiting for UDP socket to become writable"
+                    );
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+                Err(e) => panic!("send failed: {e}"),
+            }
+        }
+    }
+
+    fn is_virtual_addr(addr: SocketAddr) -> bool {
+        matches!(addr.ip(), std::net::IpAddr::V4(ip) if ip.octets()[0] == 127 && ip.octets()[1] == 255)
     }
 }

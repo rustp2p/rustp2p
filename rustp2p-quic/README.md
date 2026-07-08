@@ -121,7 +121,11 @@ On the receiving side, `accept_bi` returns source information:
 
 ```rust
 let mut stream = endpoint.accept_bi().await?;
-println!("from={} relay={}", stream.peer_id, stream.is_relay);
+println!("from={}", stream.peer_id);
+
+if let Some(info) = endpoint.link_info(stream.peer_id.clone()) {
+    println!("current link={:?} metric={}", info.mode, info.metric);
+}
 
 let mut request = [0u8; 1024];
 if let Some(n) = stream.recv.read(&mut request).await? {

@@ -14,7 +14,7 @@ use rust_p2p_core::route_table::{Protocol, Route, RouteKey, RouteTable};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use serde::{Deserialize, Serialize};
 use std::io;
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -86,10 +86,21 @@ pub struct ReceivedMessage {
 
 pub struct IncomingBiStream {
     pub peer_id: PeerId,
-    pub remote_addr: SocketAddr,
-    pub is_relay: bool,
     pub send: ReliableSendStream,
     pub recv: ReliableRecvStream,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LinkMode {
+    Direct,
+    Relay,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LinkInfo {
+    pub peer_id: PeerId,
+    pub mode: LinkMode,
+    pub metric: u8,
 }
 
 pub struct Builder {
@@ -270,13 +281,15 @@ impl Endpoint {
 
         let (inbox_tx, inbox_rx) = flume::bounded(512);
         let (stream_tx, stream_rx) = flume::bounded(128);
+        let routes = RouteTable::new(Default::default());
+        shared_socket.set_route_table(routes.clone());
         let runtime = if config.high_level {
             Some(Arc::new(RuntimeState {
                 peer_id: identity.peer_id(),
                 max_ttl: config.max_ttl.max(1),
                 closed: AtomicBool::new(false),
                 peers: DashMap::new(),
-                routes: RouteTable::new(Default::default()),
+                routes,
                 connections: DashMap::new(),
                 connection_tasks: DashMap::new(),
                 seen_datagrams: DashMap::new(),
@@ -347,6 +360,24 @@ impl Endpoint {
             .unwrap_or_default()
     }
 
+    pub fn link_mode(&self, peer_id: PeerId) -> Option<LinkMode> {
+        self.link_info(peer_id).map(|info| info.mode)
+    }
+
+    pub fn link_info(&self, peer_id: PeerId) -> Option<LinkInfo> {
+        let rt = self.runtime.as_ref()?;
+        let route = rt.routes.route_one(&peer_id)?;
+        Some(LinkInfo {
+            peer_id,
+            mode: if route.metric() == 0 {
+                LinkMode::Direct
+            } else {
+                LinkMode::Relay
+            },
+            metric: route.metric(),
+        })
+    }
+
     pub async fn add_bootstrap(&self, addr: SocketAddr) -> crate::Result<PeerId> {
         let rt = self.runtime()?;
         if let Some(peer) = rt
@@ -410,10 +441,9 @@ impl Endpoint {
             RouteKey::new(Protocol::UDP, addr),
             0,
         );
-        rt.connections.insert(peer_id.clone(), conn.clone());
-        self.start_connection_tasks(conn);
         self.ingest_route_entries(hello.peers, RouteKey::new(Protocol::UDP, addr))
             .await?;
+        conn.quinn().close(0u32.into(), b"bootstrap complete");
         Ok(peer_id)
     }
 
@@ -497,6 +527,7 @@ impl Endpoint {
                     if let Ok(rt) = self.runtime() {
                         rt.connections.remove(&peer_id);
                     }
+                    self.shared_socket.release_virtual_peer(&peer_id);
                     tokio::time::sleep(Duration::from_millis(50)).await;
                 }
             }
@@ -509,14 +540,7 @@ impl Endpoint {
         peer_id: PeerId,
     ) -> crate::Result<(ReliableSendStream, ReliableRecvStream)> {
         let rt = self.runtime()?;
-        let route = self.route_for(peer_id.clone())?;
-        let addr = self.shared_socket.register_virtual_peer(
-            rt.peer_id.clone(),
-            peer_id.clone(),
-            rt.max_ttl,
-            route.route_key().addr(),
-        );
-        let conn = self.connection_to_at(peer_id.clone(), addr).await?;
+        let conn = self.connection_to(peer_id.clone()).await?;
         let (mut send, recv) = conn.quinn().open_bi().await?;
         write_stream_frame(
             &mut send,
@@ -659,12 +683,11 @@ impl Endpoint {
 
     async fn connection_to(&self, peer_id: PeerId) -> crate::Result<Connection> {
         let rt = self.runtime()?;
-        let route = self.route_for(peer_id.clone())?;
+        self.route_for(peer_id.clone())?;
         let addr = self.shared_socket.register_virtual_peer(
             rt.peer_id.clone(),
             peer_id.clone(),
             rt.max_ttl,
-            route.route_key().addr(),
         );
         self.connection_to_at(peer_id, addr).await
     }
@@ -680,9 +703,16 @@ impl Endpoint {
                 return Ok(conn.clone());
             }
         }
-        let conn = self
+        let conn = match self
             .connect(NodeAddr::new(peer_id.clone(), vec![addr]))
-            .await?;
+            .await
+        {
+            Ok(conn) => conn,
+            Err(e) => {
+                self.shared_socket.release_virtual_peer(&peer_id);
+                return Err(e);
+            }
+        };
         rt.connections.insert(peer_id, conn.clone());
         self.start_connection_tasks(conn.clone());
         Ok(conn)
@@ -703,7 +733,7 @@ impl Endpoint {
         conn: &Connection,
         frame: StreamFrame,
     ) -> crate::Result<StreamFrame> {
-        tokio::time::timeout(Duration::from_secs(10), async {
+        tokio::time::timeout(Duration::from_secs(30), async {
             let (mut send, mut recv) = conn.quinn().open_bi().await?;
             write_stream_frame(&mut send, &frame).await?;
             read_stream_frame(&mut recv).await
@@ -790,13 +820,9 @@ impl Endpoint {
             return Ok(());
         }
 
-        let next_hop = self
-            .route_for(src.clone())
-            .map(|route| route.route_key().addr())
-            .unwrap_or(received.addr);
         let virtual_addr =
             self.shared_socket
-                .register_virtual_peer(rt.peer_id.clone(), src, rt.max_ttl, next_hop);
+                .register_virtual_peer(rt.peer_id.clone(), src, rt.max_ttl);
         self.shared_socket
             .inject_routed_quic(Bytes::copy_from_slice(packet.payload()), virtual_addr);
         Ok(())
@@ -932,9 +958,11 @@ impl Endpoint {
         if rt.connection_tasks.insert(stable_id, ()).is_some() {
             return;
         }
+        let connection_peer = self.shared_socket.peer_for_virtual_addr(conn.remote_addr());
 
         let stream_endpoint = self.clone();
         let stream_conn = conn.clone();
+        let stream_peer = connection_peer.clone();
         tokio::spawn(async move {
             loop {
                 match stream_conn.quinn().accept_bi().await {
@@ -956,9 +984,11 @@ impl Endpoint {
                     }
                 }
             }
+            stream_endpoint.cleanup_connection(stable_id, stream_peer);
         });
 
         let datagram_endpoint = self.clone();
+        let datagram_peer = connection_peer;
         tokio::spawn(async move {
             loop {
                 match conn.quinn().read_datagram().await {
@@ -976,7 +1006,17 @@ impl Endpoint {
                     }
                 }
             }
+            datagram_endpoint.cleanup_connection(stable_id, datagram_peer);
         });
+    }
+
+    fn cleanup_connection(&self, stable_id: usize, peer_id: Option<PeerId>) {
+        let Ok(rt) = self.runtime() else { return };
+        rt.connection_tasks.remove(&stable_id);
+        if let Some(peer_id) = peer_id {
+            rt.connections.remove(&peer_id);
+            self.shared_socket.release_virtual_peer(&peer_id);
+        }
     }
 
     async fn handle_incoming_stream(
@@ -1013,8 +1053,6 @@ impl Endpoint {
                 );
                 let incoming = IncomingBiStream {
                     peer_id: header.src,
-                    remote_addr,
-                    is_relay: metric > 0,
                     send: ReliableSendStream::new(send),
                     recv: ReliableRecvStream::new(recv),
                 };
@@ -1111,7 +1149,11 @@ impl Endpoint {
         peer_id: &PeerId,
         remote_addr: SocketAddr,
     ) -> crate::Result<(Route, u8)> {
-        if is_virtual_addr(remote_addr) {
+        if self
+            .shared_socket
+            .peer_for_virtual_addr(remote_addr)
+            .is_some()
+        {
             let route = self.route_for(peer_id.clone())?;
             let metric = route.metric();
             Ok((route, metric))
@@ -1223,10 +1265,6 @@ async fn read_frame(recv: &mut quinn::RecvStream) -> io::Result<Vec<u8>> {
 
 async fn read_stream_frame(recv: &mut quinn::RecvStream) -> io::Result<StreamFrame> {
     bincode::deserialize(&read_frame(recv).await?).map_err(bin_err)
-}
-
-fn is_virtual_addr(addr: SocketAddr) -> bool {
-    matches!(addr.ip(), IpAddr::V4(ip) if ip.octets()[0] == 127 && ip.octets()[1] == 255)
 }
 
 fn bin_err(err: bincode::Error) -> io::Error {

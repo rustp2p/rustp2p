@@ -54,7 +54,9 @@ pub use cert::{CertificateVerifier, SkipCertificateVerification};
 pub use config::Config;
 pub use connection::{Connection, RecvStream, SendStream};
 pub use demux::{classify_packet, PacketType, ReceivedPacket};
-pub use endpoint::{Builder, Endpoint, IncomingBiStream, NodeAddr, PeerInfo, ReceivedMessage};
+pub use endpoint::{
+    Builder, Endpoint, IncomingBiStream, LinkInfo, LinkMode, NodeAddr, PeerInfo, ReceivedMessage,
+};
 pub use identity::{Identity, PeerId};
 pub use reliable::{ReliableRecvStream, ReliableSendStream};
 pub use rust_p2p_core::nat::NatInfo;
