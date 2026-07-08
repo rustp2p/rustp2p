@@ -282,7 +282,12 @@ Create ──▶ Add to Pool ──▶ Reader Task Spawned ──▶ Ready
 Config::new()
     .udp_port(3000)           // UDP listen port
     .tcp_port(3000)           // TCP listen port
-    .stun_servers(vec![...])  // STUN servers for NAT detection
+    // Defaults to no STUN servers; configure them explicitly when needed.
+    .stun_servers(vec![
+        "stun.miwifi.com:3478".to_string(),
+        "stun.chat.bilibili.com:3478".to_string(),
+        "stun.hitv.com:3478".to_string(),
+    ])
     .load_balance(LoadBalance::MinHopLowestLatency)
 ```
 

@@ -47,7 +47,15 @@ use rust_p2p_core::route_table::{RouteKey, Protocol};
 
 #[tokio::main]
 async fn main() {
-    let ep = EndPoint::bind(Config::default()).await.unwrap();
+    let ep = EndPoint::bind(
+        Config::default().stun_servers(vec![
+            "stun.miwifi.com:3478".to_string(),
+            "stun.chat.bilibili.com:3478".to_string(),
+            "stun.hitv.com:3478".to_string(),
+        ]),
+    )
+    .await
+    .unwrap();
     let sender = ep.sender();
     let puncher = ep.puncher();
 
@@ -62,6 +70,9 @@ async fn main() {
     }
 }
 ```
+
+`Config::default()` does not include public STUN servers. Configure STUN explicitly when NAT
+detection is needed.
 
 ## Core Types
 

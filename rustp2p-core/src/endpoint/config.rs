@@ -31,10 +31,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            stun_servers: vec![
-                "stun.l.google.com:19302".to_string(),
-                "stun1.l.google.com:19302".to_string(),
-            ],
+            stun_servers: Vec::new(),
             udp_port: Some(0),
             tcp_port: Some(0),
             tcp_codec: None,
@@ -117,5 +114,15 @@ impl Config {
     pub fn default_interface(mut self, interface: LocalInterface) -> Self {
         self.default_interface = Some(interface);
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Config;
+
+    #[test]
+    fn default_config_has_no_stun_servers() {
+        assert!(Config::default().stun_servers.is_empty());
     }
 }

@@ -5,6 +5,12 @@ use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
+const DEFAULT_STUN_SERVERS: &[&str] = &[
+    "stun.miwifi.com:3478",
+    "stun.chat.bilibili.com:3478",
+    "stun.hitv.com:3478",
+];
+
 #[tokio::main]
 async fn main() -> rustp2p_quic::Result<()> {
     env_logger::init();
@@ -14,11 +20,13 @@ async fn main() -> rustp2p_quic::Result<()> {
         .identity(Identity::new(args.id, args.seed)?)
         .bind(args.bind)
         .bootstrap(args.bootstrap.clone())
+        .stun_servers(args.stun_servers.clone())
         .build()
         .await?;
 
     println!("peer_id={}", endpoint.peer_id());
     println!("addr={}", endpoint.local_addr().unwrap());
+    println!("stun_servers={:?}", args.stun_servers);
     println!("commands:");
     println!("  connect <addr>");
     println!("  send <peer_id> <message>");
@@ -170,6 +178,7 @@ struct Args {
     seed: String,
     bind: SocketAddr,
     bootstrap: Vec<SocketAddr>,
+    stun_servers: Vec<String>,
 }
 
 impl Args {
@@ -178,6 +187,11 @@ impl Args {
         let mut seed = None;
         let mut bind = "127.0.0.1:0".parse().unwrap();
         let mut bootstrap = Vec::new();
+        let mut stun_servers = DEFAULT_STUN_SERVERS
+            .iter()
+            .map(|server| (*server).to_string())
+            .collect::<Vec<_>>();
+        let mut stun_overridden = false;
         let mut args = env::args().skip(1);
 
         while let Some(arg) = args.next() {
@@ -209,6 +223,20 @@ impl Args {
                             .map_err(|e| invalid(format!("invalid bootstrap address: {e}")))?,
                     );
                 }
+                "--stun" => {
+                    if !stun_overridden {
+                        stun_servers.clear();
+                        stun_overridden = true;
+                    }
+                    stun_servers.push(
+                        args.next()
+                            .ok_or_else(|| invalid("--stun requires a server address"))?,
+                    );
+                }
+                "--no-stun" => {
+                    stun_servers.clear();
+                    stun_overridden = true;
+                }
                 "--help" | "-h" => {
                     print_usage();
                     std::process::exit(0);
@@ -224,6 +252,7 @@ impl Args {
             seed,
             bind,
             bootstrap,
+            stun_servers,
         })
     }
 }
@@ -274,4 +303,11 @@ async fn read_exact(recv: &mut ReliableRecvStream, mut out: &mut [u8]) -> io::Re
 fn print_usage() {
     println!("cargo run -p rustp2p-quic --example node -- --id node-a --seed seed-a --bind 127.0.0.1:7001");
     println!("cargo run -p rustp2p-quic --example node -- --id node-b --seed seed-b --bind 127.0.0.1:7002 --bootstrap 127.0.0.1:7001");
+    println!("default example STUN servers:");
+    for server in DEFAULT_STUN_SERVERS {
+        println!("  {server}");
+    }
+    println!(
+        "use --stun <server> to replace/append explicit servers, or --no-stun to disable STUN"
+    );
 }

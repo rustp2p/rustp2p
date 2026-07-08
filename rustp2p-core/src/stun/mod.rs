@@ -12,8 +12,9 @@
 //! # #[tokio::main]
 //! # async fn main() -> std::io::Result<()> {
 //! let stun_servers = vec![
-//!     "stun.l.google.com:19302".to_string(),
-//!     "stun1.l.google.com:19302".to_string(),
+//!     "stun.miwifi.com:3478".to_string(),
+//!     "stun.chat.bilibili.com:3478".to_string(),
+//!     "stun.hitv.com:3478".to_string(),
 //! ];
 //!
 //! let result = stun_test_nat(stun_servers, None).await?;
@@ -74,7 +75,11 @@ pub struct StunResult {
 ///
 /// # #[tokio::main]
 /// # async fn main() -> std::io::Result<()> {
-/// let stun_servers = vec!["stun.l.google.com:19302".to_string()];
+/// let stun_servers = vec![
+///     "stun.miwifi.com:3478".to_string(),
+///     "stun.chat.bilibili.com:3478".to_string(),
+///     "stun.hitv.com:3478".to_string(),
+/// ];
 /// let result = stun_test_nat(stun_servers, None).await?;
 /// println!("NAT Type: {:?}", result.nat_type);
 /// println!("Public IPv4: {:?}", result.public_ipv4);

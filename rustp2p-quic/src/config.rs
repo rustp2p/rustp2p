@@ -60,11 +60,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             bind_addr: "0.0.0.0:0".parse().unwrap(),
-            stun_servers: vec![
-                "stun.l.google.com:19302".to_string(),
-                "stun1.l.google.com:19302".to_string(),
-                "stun2.l.google.com:19302".to_string(),
-            ],
+            stun_servers: Vec::new(),
             stun_timeout: Duration::from_secs(10),
             alpns: vec![b"rustp2p-quic".to_vec()],
             datagram_receive_buffer_size: Some(1024 * 1024),
@@ -83,5 +79,15 @@ impl Default for Config {
             max_ttl: 8,
             high_level: false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Config;
+
+    #[test]
+    fn default_config_has_no_stun_servers() {
+        assert!(Config::default().stun_servers.is_empty());
     }
 }

@@ -102,9 +102,10 @@ ciphertext.
 
 ### NAT Observe and Punch
 
-STUN updates only NAT type and public port range. Public UDP/TCP ports and IPv6
-addresses come from direct peer observation through `NatObserveRequest` and
-`NatObserveReply`.
+Default configuration does not include STUN servers. When STUN servers are
+configured explicitly, STUN updates only NAT type and public port range. Public
+UDP/TCP ports and IPv6 addresses come from direct peer observation through
+`NatObserveRequest` and `NatObserveReply`.
 
 Punching is allow-list controlled. A `PunchRequest` records only a candidate
 route. A matching `PunchReply` with the expected request id is required before

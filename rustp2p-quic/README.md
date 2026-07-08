@@ -198,7 +198,9 @@ updates and the `rustp2p-core` punch primitive.
 `Endpoint::nat_info()` combines local transport data, STUN-derived NAT shape, and direct peer
 observations:
 
-- STUN is used for NAT type and symmetric-port range hints.
+- `Config::default()` does not include STUN servers; STUN maintenance is opt-in through
+  `Builder::stun_servers(...)`.
+- STUN is used for NAT type and symmetric-port range hints when configured.
 - Public UDP/TCP ports and public IPv6 are learned from direct peers through protocol
   `NatObserve` control packets.
 - A long-running public node can be used as a bootstrap peer and as a direct observer, but it is
@@ -210,6 +212,15 @@ addresses. If the list is empty, any direct known peer may act as an observer.
 ## Example: Peer Node
 
 The example is a single peer program. It is not split into server and client.
+The example enables these STUN servers by default:
+
+```text
+stun.miwifi.com:3478
+stun.chat.bilibili.com:3478
+stun.hitv.com:3478
+```
+
+Use `--stun <server>` to provide an explicit list, or `--no-stun` to run the example without STUN.
 
 Run node A:
 
