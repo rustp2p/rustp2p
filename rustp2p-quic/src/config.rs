@@ -35,6 +35,8 @@ pub struct Config {
     pub load_balance: LoadBalance,
     /// Initial peers allowed to perform direct hole punching.
     pub punch_whitelist: Vec<PeerId>,
+    /// Direct peers allowed to act as public address observers. Empty means any direct peer.
+    pub nat_observers: Vec<PeerId>,
     /// QUIC server certificate verifier.
     pub certificate_verifier: Arc<dyn CertificateVerifier>,
     /// Maximum forwarding TTL for high-level packets.
@@ -64,6 +66,7 @@ impl Default for Config {
             mapping_tcp_addrs: Vec::new(),
             load_balance: LoadBalance::MinHopLowestLatency,
             punch_whitelist: Vec::new(),
+            nat_observers: Vec::new(),
             certificate_verifier: Arc::new(SkipCertificateVerification),
             max_ttl: 8,
             high_level: false,

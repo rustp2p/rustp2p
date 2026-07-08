@@ -5,7 +5,7 @@ use bytes::Bytes;
 use dashmap::DashMap;
 use rust_p2p_core::nat::NatInfo;
 use rust_p2p_core::punch::{PunchInfo, PunchModel};
-use rust_p2p_core::route_table::RouteKey;
+use rust_p2p_core::route_table::{Protocol, RouteKey};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::io;
@@ -59,6 +59,8 @@ pub enum ProtocolType {
     QuicRelay = 12,
     HelloRequest = 13,
     HelloReply = 14,
+    NatObserveRequest = 15,
+    NatObserveReply = 16,
 }
 
 impl TryFrom<u8> for ProtocolType {
@@ -81,6 +83,8 @@ impl TryFrom<u8> for ProtocolType {
             12 => Ok(Self::QuicRelay),
             13 => Ok(Self::HelloRequest),
             14 => Ok(Self::HelloReply),
+            15 => Ok(Self::NatObserveRequest),
+            16 => Ok(Self::NatObserveReply),
             val => Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("invalid protocol type: {val}"),
@@ -251,6 +255,7 @@ impl Packet {
 pub struct HelloPayload {
     pub peer: PeerInfo,
     pub peers: Vec<RouteEntry>,
+    pub observed_addr: Option<NatObservation>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -270,6 +275,34 @@ pub struct PunchPayload {
     pub src: PeerId,
     pub dest: PeerId,
     pub nat_info: NatInfo,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum ObservedProtocol {
+    Udp,
+    Tcp,
+}
+
+impl From<Protocol> for ObservedProtocol {
+    fn from(value: Protocol) -> Self {
+        match value {
+            Protocol::UDP => Self::Udp,
+            Protocol::TCP => Self::Tcp,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct NatObservation {
+    pub observed_protocol: ObservedProtocol,
+    pub observed_addr: SocketAddr,
+    pub observer_peer_id: PeerId,
+    pub observed_at: u64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct NatObserveReplyPayload {
+    pub observation: NatObservation,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -303,6 +336,7 @@ pub(crate) struct ProtocolLayer {
     quic_tx: flume::Sender<TransportPayload>,
     quic_rx: flume::Receiver<TransportPayload>,
     punch_whitelist: parking_lot::RwLock<HashSet<PeerId>>,
+    nat_observers: parking_lot::RwLock<HashSet<PeerId>>,
     nat_info: parking_lot::RwLock<NatInfo>,
     peer_nat: DashMap<PeerId, NatInfo>,
 }
@@ -313,6 +347,8 @@ impl ProtocolLayer {
         transport: Arc<TransportLayer>,
         max_ttl: u8,
         punch_whitelist: Vec<PeerId>,
+        nat_observers: Vec<PeerId>,
+        initial_nat_info: NatInfo,
     ) -> Arc<Self> {
         let (hello_tx, hello_rx) = flume::bounded(128);
         let (quic_tx, quic_rx) = flume::bounded(512);
@@ -326,7 +362,8 @@ impl ProtocolLayer {
             quic_tx,
             quic_rx,
             punch_whitelist: parking_lot::RwLock::new(punch_whitelist.into_iter().collect()),
-            nat_info: parking_lot::RwLock::new(NatInfo::default()),
+            nat_observers: parking_lot::RwLock::new(nat_observers.into_iter().collect()),
+            nat_info: parking_lot::RwLock::new(initial_nat_info),
             peer_nat: DashMap::new(),
         });
         layer.start_packet_dispatcher();
@@ -447,31 +484,46 @@ impl ProtocolLayer {
         Ok(())
     }
 
-    pub(crate) fn start_nat_detection(
+    pub(crate) fn start_nat_maintenance(
         self: &Arc<Self>,
         timeout: Duration,
         stun_servers: Vec<String>,
     ) {
-        if stun_servers.is_empty() {
-            return;
-        }
         let protocol = self.clone();
-        tokio::spawn(async move {
-            loop {
-                match rust_p2p_core::stun::stun_test_nat(stun_servers.clone(), None).await {
-                    Ok(result) => {
-                        let mut info = protocol.nat_info.write();
-                        info.nat_type = result.nat_type;
-                        info.public_ips = result.public_ipv4;
-                        info.ipv6 = result.public_ipv6;
-                        info.public_udp_ports = result.public_udp_ports;
-                        info.public_port_range = result.port_range;
+        if !stun_servers.is_empty() {
+            let protocol = protocol.clone();
+            tokio::spawn(async move {
+                loop {
+                    match rust_p2p_core::stun::stun_test_nat(stun_servers.clone(), None).await {
+                        Ok(result) => {
+                            let mut info = protocol.nat_info.write();
+                            apply_stun_result_to_nat_info(&mut info, &result);
+                        }
+                        Err(e) => {
+                            log::debug!("NAT detection failed: {e}");
+                        }
                     }
-                    Err(e) => {
-                        log::debug!("NAT detection failed: {e}");
+                    tokio::time::sleep(timeout).await;
+                }
+            });
+        }
+
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(timeout.max(Duration::from_secs(1)));
+            loop {
+                interval.tick().await;
+                if protocol.closed.load(Ordering::Relaxed) {
+                    break;
+                }
+                for peer in protocol.transport.known_peers() {
+                    if protocol.should_observe_with(&peer.peer_id)
+                        && protocol.has_direct_route(&peer.peer_id)
+                    {
+                        let _ = protocol
+                            .send_protocol(peer.peer_id, ProtocolType::NatObserveRequest, &[])
+                            .await;
                     }
                 }
-                tokio::time::sleep(timeout).await;
             }
         });
     }
@@ -545,8 +597,12 @@ impl ProtocolLayer {
 
         match packet.protocol()? {
             ProtocolType::HelloRequest => {
-                let payload =
-                    bincode::serialize(&self.hello_payload(&src).await?).map_err(bin_err)?;
+                let payload = bincode::serialize(
+                    &self
+                        .hello_payload(&src, Some(self.observation_from_route(route_key)))
+                        .await?,
+                )
+                .map_err(bin_err)?;
                 self.send_protocol(src, ProtocolType::HelloReply, &payload)
                     .await?;
             }
@@ -556,6 +612,11 @@ impl ProtocolLayer {
                 let peer_id = hello.peer.peer_id.clone();
                 if let Some(nat_info) = &hello.peer.nat_info {
                     self.peer_nat.insert(peer_id.clone(), nat_info.clone());
+                }
+                if metric == 0 {
+                    if let Some(observation) = hello.observed_addr {
+                        self.apply_observation(observation);
+                    }
                 }
                 self.transport.upsert_peer(hello.peer, route_key, metric);
                 let _ = self.hello_tx.send_async((route_key.addr(), peer_id)).await;
@@ -613,6 +674,25 @@ impl ProtocolLayer {
             ProtocolType::TimestampRequest => {
                 self.send_protocol(src, ProtocolType::TimestampReply, packet.payload())
                     .await?;
+            }
+            ProtocolType::NatObserveRequest => {
+                if metric == 0 {
+                    let payload = bincode::serialize(&NatObserveReplyPayload {
+                        observation: self.observation_from_route(route_key),
+                    })
+                    .map_err(bin_err)?;
+                    self.send_protocol(src, ProtocolType::NatObserveReply, &payload)
+                        .await?;
+                }
+            }
+            ProtocolType::NatObserveReply => {
+                if metric == 0 {
+                    let reply: NatObserveReplyPayload =
+                        bincode::deserialize(packet.payload()).map_err(bin_err)?;
+                    if reply.observation.observer_peer_id == src && self.should_observe_with(&src) {
+                        self.apply_observation(reply.observation);
+                    }
+                }
             }
             ProtocolType::MessageData
             | ProtocolType::RangeBroadcast
@@ -715,10 +795,15 @@ impl ProtocolLayer {
         Ok(peers)
     }
 
-    async fn hello_payload(&self, requester: &PeerId) -> io::Result<HelloPayload> {
+    async fn hello_payload(
+        &self,
+        requester: &PeerId,
+        observed_addr: Option<NatObservation>,
+    ) -> io::Result<HelloPayload> {
         Ok(HelloPayload {
             peer: self.self_peer_info(),
             peers: self.discovery_entries(requester).await?,
+            observed_addr,
         })
     }
 
@@ -769,6 +854,32 @@ impl ProtocolLayer {
         }
     }
 
+    fn observation_from_route(&self, route_key: RouteKey) -> NatObservation {
+        NatObservation {
+            observed_protocol: route_key.protocol().into(),
+            observed_addr: route_key.addr(),
+            observer_peer_id: self.peer_id.clone(),
+            observed_at: now_millis(),
+        }
+    }
+
+    fn apply_observation(&self, observation: NatObservation) {
+        let mut info = self.nat_info.write();
+        apply_observation_to_nat_info(&mut info, &observation);
+    }
+
+    fn should_observe_with(&self, peer_id: &PeerId) -> bool {
+        let observers = self.nat_observers.read();
+        observers.is_empty() || observers.contains(peer_id)
+    }
+
+    fn has_direct_route(&self, peer_id: &PeerId) -> bool {
+        self.transport
+            .routes(peer_id.clone())
+            .into_iter()
+            .any(|route| route.is_direct())
+    }
+
     fn start_maintenance_loop(self: &Arc<Self>) {
         let protocol = self.clone();
         tokio::spawn(async move {
@@ -788,6 +899,45 @@ impl ProtocolLayer {
     }
 }
 
+fn apply_stun_result_to_nat_info(info: &mut NatInfo, result: &rust_p2p_core::stun::StunResult) {
+    info.nat_type = result.nat_type;
+    info.public_port_range = result.port_range;
+}
+
+fn apply_observation_to_nat_info(info: &mut NatInfo, observation: &NatObservation) {
+    match observation.observed_addr {
+        SocketAddr::V4(addr) => {
+            let ip = *addr.ip();
+            if !info.public_ips.contains(&ip) {
+                info.public_ips.push(ip);
+            }
+            match observation.observed_protocol {
+                ObservedProtocol::Udp => {
+                    if !info.public_udp_ports.contains(&addr.port()) {
+                        info.public_udp_ports.push(addr.port());
+                    }
+                }
+                ObservedProtocol::Tcp => {
+                    info.public_tcp_port = addr.port();
+                }
+            }
+        }
+        SocketAddr::V6(addr) => {
+            info.ipv6 = Some(*addr.ip());
+            match observation.observed_protocol {
+                ObservedProtocol::Udp => {
+                    if !info.public_udp_ports.contains(&addr.port()) {
+                        info.public_udp_ports.push(addr.port());
+                    }
+                }
+                ObservedProtocol::Tcp => {
+                    info.public_tcp_port = addr.port();
+                }
+            }
+        }
+    }
+}
+
 pub fn now_millis() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -801,8 +951,14 @@ fn bin_err(err: bincode::Error) -> io::Error {
 
 #[cfg(test)]
 mod tests {
-    use super::{classify_packet, Packet, PacketType, ProtocolType};
+    use super::{
+        apply_observation_to_nat_info, apply_stun_result_to_nat_info, classify_packet,
+        NatObservation, ObservedProtocol, Packet, PacketType, ProtocolType,
+    };
     use crate::PeerId;
+    use rust_p2p_core::nat::{NatInfo, NatType};
+    use rust_p2p_core::stun::StunResult;
+    use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 
     #[test]
     fn packet_round_trip_for_quic_relay() {
@@ -834,5 +990,72 @@ mod tests {
     fn keeps_rustp2p_packets_out_of_quic_path() {
         assert_eq!(classify_packet(0x80), PacketType::RustP2p(0));
         assert_eq!(classify_packet(0x8e), PacketType::RustP2p(14));
+    }
+
+    #[test]
+    fn stun_update_does_not_fill_public_ports_or_ipv6() {
+        let mut info = NatInfo::default();
+        let result = StunResult {
+            nat_type: NatType::Symmetric,
+            public_ipv4: vec![Ipv4Addr::new(203, 0, 113, 10)],
+            public_ipv6: Some(Ipv6Addr::LOCALHOST),
+            public_udp_ports: vec![34567],
+            port_range: 42,
+        };
+
+        apply_stun_result_to_nat_info(&mut info, &result);
+
+        assert_eq!(info.nat_type, NatType::Symmetric);
+        assert_eq!(info.public_port_range, 42);
+        assert!(info.public_ips.is_empty());
+        assert!(info.public_udp_ports.is_empty());
+        assert!(info.ipv6.is_none());
+    }
+
+    #[test]
+    fn udp_ipv4_observation_updates_public_udp_addr() {
+        let mut info = NatInfo::default();
+        apply_observation_to_nat_info(
+            &mut info,
+            &observation(ObservedProtocol::Udp, "203.0.113.1:4567"),
+        );
+
+        assert_eq!(info.public_ips, vec![Ipv4Addr::new(203, 0, 113, 1)]);
+        assert_eq!(info.public_udp_ports, vec![4567]);
+        assert_eq!(info.public_tcp_port, 0);
+    }
+
+    #[test]
+    fn tcp_ipv4_observation_updates_public_tcp_port() {
+        let mut info = NatInfo::default();
+        apply_observation_to_nat_info(
+            &mut info,
+            &observation(ObservedProtocol::Tcp, "203.0.113.2:7788"),
+        );
+
+        assert_eq!(info.public_ips, vec![Ipv4Addr::new(203, 0, 113, 2)]);
+        assert_eq!(info.public_tcp_port, 7788);
+        assert!(info.public_udp_ports.is_empty());
+    }
+
+    #[test]
+    fn ipv6_observation_updates_ipv6_and_protocol_port() {
+        let mut info = NatInfo::default();
+        apply_observation_to_nat_info(
+            &mut info,
+            &observation(ObservedProtocol::Udp, "[2001:db8::1]:9000"),
+        );
+
+        assert_eq!(info.ipv6, Some("2001:db8::1".parse().unwrap()));
+        assert_eq!(info.public_udp_ports, vec![9000]);
+    }
+
+    fn observation(protocol: ObservedProtocol, addr: &str) -> NatObservation {
+        NatObservation {
+            observed_protocol: protocol,
+            observed_addr: addr.parse::<SocketAddr>().unwrap(),
+            observer_peer_id: PeerId::from("observer"),
+            observed_at: 1,
+        }
     }
 }

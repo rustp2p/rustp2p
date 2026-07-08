@@ -47,6 +47,10 @@ async fn bootstrap_addr_discovers_peer_id_then_datagram_uses_peer_id_only() {
 
     let discovered = a.add_bootstrap(b.local_addr().unwrap()).await.unwrap();
     assert_eq!(discovered, b.peer_id());
+    let a_nat = a.nat_info();
+    assert!(a_nat
+        .public_udp_ports
+        .contains(&a.local_addr().unwrap().port()));
 
     a.send_to(b.peer_id(), b"hello").await.unwrap();
     let msg = tokio::time::timeout(Duration::from_secs(5), b.recv())

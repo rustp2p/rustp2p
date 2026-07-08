@@ -193,6 +193,20 @@ endpoint.deny_punch("node-b".into());
 Punch negotiation is handled by the protocol layer. The transport layer only supplies core route
 updates and the `rustp2p-core` punch primitive.
 
+## NAT Observation
+
+`Endpoint::nat_info()` combines local transport data, STUN-derived NAT shape, and direct peer
+observations:
+
+- STUN is used for NAT type and symmetric-port range hints.
+- Public UDP/TCP ports and public IPv6 are learned from direct peers through protocol
+  `NatObserve` control packets.
+- A long-running public node can be used as a bootstrap peer and as a direct observer, but it is
+  still just another peer in the protocol.
+
+Use `Builder::nat_observers(Vec<PeerId>)` to restrict which direct peers can update observed public
+addresses. If the list is empty, any direct known peer may act as an observer.
+
 ## Example: Peer Node
 
 The example is a single peer program. It is not split into server and client.

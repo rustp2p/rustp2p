@@ -5,6 +5,7 @@ use crate::transport::{LinkInfo, LinkMode, PeerInfo, TransportHandle, TransportL
 use crate::{Identity, NatInfo, PeerId};
 use rust_p2p_core::endpoint::LoadBalance;
 use rust_p2p_core::route_table::Route;
+use std::net::IpAddr;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -81,6 +82,11 @@ impl Builder {
         self
     }
 
+    pub fn nat_observers(mut self, peers: Vec<PeerId>) -> Self {
+        self.config.nat_observers = peers;
+        self
+    }
+
     pub async fn build(self) -> crate::Result<Endpoint> {
         Endpoint::bind_with_config(self.config).await
     }
@@ -131,13 +137,16 @@ impl Endpoint {
         };
         let node_id = identity.peer_id();
         let transport = TransportLayer::bind(node_id.clone(), &config).await?;
+        let initial_nat_info = initial_nat_info(&config, &transport);
         let protocol = ProtocolLayer::new(
             node_id.clone(),
             transport.clone(),
             config.max_ttl,
             config.punch_whitelist.clone(),
+            config.nat_observers.clone(),
+            initial_nat_info,
         );
-        protocol.start_nat_detection(config.stun_timeout, config.stun_servers.clone());
+        protocol.start_nat_maintenance(config.stun_timeout, config.stun_servers.clone());
         let quic = QuicEndpoint::bind(identity, &config, protocol.clone()).await?;
 
         let endpoint = Self {
@@ -259,6 +268,24 @@ impl Endpoint {
         self.transport.close();
         self.quic.close().await;
     }
+}
+
+fn initial_nat_info(config: &Config, transport: &TransportLayer) -> NatInfo {
+    let local_addr = transport.local_addr();
+    let mut info = NatInfo {
+        mapping_udp_addr: config.mapping_udp_addrs.clone(),
+        mapping_tcp_addr: config.mapping_tcp_addrs.clone(),
+        local_udp_ports: vec![local_addr.port()],
+        local_tcp_port: transport
+            .local_tcp_addr()
+            .map(|addr| addr.port())
+            .unwrap_or(0),
+        ..Default::default()
+    };
+    if let IpAddr::V4(ip) = local_addr.ip() {
+        info.local_ipv4 = ip;
+    }
+    info
 }
 
 impl std::fmt::Debug for Endpoint {

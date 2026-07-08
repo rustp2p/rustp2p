@@ -735,7 +735,14 @@ mod tests {
         let transport = crate::transport::TransportLayer::bind(PeerId::from("node-a"), &config)
             .await
             .unwrap();
-        let protocol = ProtocolLayer::new(PeerId::from("node-a"), transport, 8, Vec::new());
+        let protocol = ProtocolLayer::new(
+            PeerId::from("node-a"),
+            transport,
+            8,
+            Vec::new(),
+            Vec::new(),
+            rust_p2p_core::nat::NatInfo::default(),
+        );
         QuicPeerSocket::new(protocol)
     }
 
