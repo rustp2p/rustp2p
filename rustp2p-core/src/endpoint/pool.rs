@@ -114,9 +114,9 @@ impl SocketPool {
     }
 
     /// Clean all assistant UDP sockets and cancel their reader tasks.
-    pub fn clean_assistant_udp(&self) {
-        let mut sockets = self.udp_sockets.blocking_write();
-        // Dropping UdpEntry drops _shutdown Sender, reader task exits
+    pub async fn clean_assistant_udp(&self) {
+        let mut sockets = self.udp_sockets.write().await;
+        // Dropping UdpEntry drops _shutdown Sender, reader task exits.
         sockets.retain(|e| e.role == SocketRole::Main);
     }
 

@@ -301,7 +301,7 @@ async fn test_nat(udp: &UdpSocket, stun_server: &str) -> io::Result<HashSet<Sock
             }
         }
     }
-    log::info!("stun {stun_server} mapped_addr {addr:?}  changed_addr {changed_addr1:?}",);
+    log::debug!("stun {stun_server} mapped_addr {addr:?}  changed_addr {changed_addr1:?}",);
 
     Ok(addr)
 }

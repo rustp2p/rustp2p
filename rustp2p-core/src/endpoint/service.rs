@@ -225,20 +225,22 @@ impl EndPoint {
         })
     }
 
-    /// Apply NAT model based on detected NAT type.
+    /// Apply the socket model for an externally detected NAT type.
     ///
-    /// - Symmetric NAT: Add assistant sockets up to configured limit
-    /// - Cone NAT: Clean all assistant sockets
-    pub async fn apply_nat_model(&self) -> io::Result<crate::nat::NatInfo> {
-        let nat_info = self.nat_info().await?;
-
-        match nat_info.nat_type {
+    /// This method does not run STUN or any other NAT detection. Call
+    /// [`nat_info`](Self::nat_info) or your own detector first, then pass the
+    /// resulting [`NatType`](crate::nat::NatType) here.
+    ///
+    /// - `Symmetric`: add assistant sockets up to `Config::max_assistant_sockets`.
+    /// - `Cone`: remove assistant sockets because extra source ports are not needed.
+    pub async fn apply_nat_model(&self, nat_type: crate::nat::NatType) -> io::Result<()> {
+        match nat_type {
             crate::nat::NatType::Symmetric => {
                 let current = self.pool.assistant_count().await;
                 let target = self.config.max_assistant_sockets;
                 if target > current {
-                    log::info!(
-                        "Symmetric NAT detected, adding {} assistant sockets",
+                    log::debug!(
+                        "Symmetric NAT model selected, adding {} assistant sockets",
                         target - current
                     );
                     for _ in current..target {
@@ -252,13 +254,13 @@ impl EndPoint {
             crate::nat::NatType::Cone => {
                 let count = self.pool.assistant_count().await;
                 if count > 0 {
-                    log::info!("Cone NAT detected, cleaning {} assistant sockets", count);
-                    self.pool.clean_assistant_udp();
+                    log::debug!("Cone NAT model selected, cleaning {count} assistant sockets");
+                    self.pool.clean_assistant_udp().await;
                 }
             }
         }
 
-        Ok(nat_info)
+        Ok(())
     }
 }
 
@@ -271,5 +273,31 @@ impl std::fmt::Debug for EndPoint {
 impl Drop for EndPoint {
     fn drop(&mut self) {
         self.pool.shutdown();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::EndPoint;
+    use crate::endpoint::Config;
+    use crate::nat::NatType;
+
+    #[tokio::test]
+    async fn apply_nat_model_uses_external_nat_type() {
+        let ep = EndPoint::bind(
+            Config::new()
+                .udp_port(0)
+                .tcp_port(0)
+                .max_assistant_sockets(2),
+        )
+        .await
+        .unwrap();
+        let sender = ep.sender();
+
+        ep.apply_nat_model(NatType::Symmetric).await.unwrap();
+        assert_eq!(sender.assistant_count().await, 2);
+
+        ep.apply_nat_model(NatType::Cone).await.unwrap();
+        assert_eq!(sender.assistant_count().await, 0);
     }
 }

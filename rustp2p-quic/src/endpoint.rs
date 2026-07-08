@@ -113,6 +113,15 @@ impl Builder {
         self
     }
 
+    /// Sets the maximum assistant UDP sockets used after symmetric NAT detection.
+    ///
+    /// The protocol layer detects the local `NatType`; transport then applies
+    /// that external result to core. `0` disables assistant sockets.
+    pub fn max_assistant_sockets(mut self, max: usize) -> Self {
+        self.config.max_assistant_sockets = max;
+        self
+    }
+
     /// Builds and starts the endpoint.
     ///
     /// Bootstrap addresses are contacted before this method returns.

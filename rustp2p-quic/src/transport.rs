@@ -10,7 +10,7 @@ use std::io;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
 /// Read-only peer information discovered by the protocol layer.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -109,6 +109,13 @@ enum CoreOutboundPacket {
     RoutePacket { route_key: RouteKey, data: Bytes },
 }
 
+enum CoreControl {
+    ApplyNatModel {
+        nat_type: rust_p2p_core::nat::NatType,
+        reply: oneshot::Sender<io::Result<()>>,
+    },
+}
+
 struct CoreTransportLayer {
     sender: CoreSender,
     puncher: rust_p2p_core::punch::Puncher,
@@ -123,6 +130,7 @@ struct CoreTransportLayer {
     // control messages decide whether the route is bidirectional and confirmed.
     transports: DashMap<RouteKey, Transport>,
     outbound_tx: mpsc::UnboundedSender<CoreOutboundPacket>,
+    control_tx: mpsc::UnboundedSender<CoreControl>,
 }
 
 impl CoreTransportLayer {
@@ -142,7 +150,8 @@ impl CoreTransportLayer {
             .stun_servers(config.stun_servers.clone())
             .mapping_udp_addr(config.mapping_udp_addrs.clone())
             .mapping_tcp_addr(config.mapping_tcp_addrs.clone())
-            .load_balance(config.load_balance);
+            .load_balance(config.load_balance)
+            .max_assistant_sockets(config.max_assistant_sockets);
 
         let endpoint = EndPoint::bind(core_config).await?;
         let sender = endpoint.sender();
@@ -150,6 +159,7 @@ impl CoreTransportLayer {
         let local_tcp_port = endpoint.local_tcp_port();
         let local_addr = normalize_local_addr(endpoint.local_addr().await?, config.bind_addr);
         let (outbound_tx, outbound_rx) = mpsc::unbounded_channel();
+        let (control_tx, control_rx) = mpsc::unbounded_channel();
         let layer = Arc::new(Self {
             sender,
             puncher,
@@ -159,8 +169,9 @@ impl CoreTransportLayer {
             routes: parking_lot::RwLock::new(None),
             transports: DashMap::new(),
             outbound_tx,
+            control_tx,
         });
-        layer.start(endpoint, outbound_rx);
+        layer.start(endpoint, outbound_rx, control_rx);
         Ok(layer)
     }
 
@@ -168,8 +179,9 @@ impl CoreTransportLayer {
         self: &Arc<Self>,
         endpoint: EndPoint,
         outbound_rx: mpsc::UnboundedReceiver<CoreOutboundPacket>,
+        control_rx: mpsc::UnboundedReceiver<CoreControl>,
     ) {
-        self.start_core_receiver(endpoint);
+        self.start_core_receiver(endpoint, control_rx);
         self.start_core_sender(outbound_rx);
     }
 
@@ -211,30 +223,61 @@ impl CoreTransportLayer {
         self.puncher.punch_now(tcp_buf, udp_buf, punch_info).await
     }
 
-    fn start_core_receiver(self: &Arc<Self>, mut endpoint: EndPoint) {
+    async fn apply_nat_model(&self, nat_type: rust_p2p_core::nat::NatType) -> io::Result<()> {
+        let (reply, result) = oneshot::channel();
+        self.control_tx
+            .send(CoreControl::ApplyNatModel { nat_type, reply })
+            .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "core control task closed"))?;
+        result
+            .await
+            .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "core control reply closed"))?
+    }
+
+    fn start_core_receiver(
+        self: &Arc<Self>,
+        mut endpoint: EndPoint,
+        mut control_rx: mpsc::UnboundedReceiver<CoreControl>,
+    ) {
         let this = self.clone();
         tokio::spawn(async move {
-            while let Some(received) = endpoint.recv().await {
-                let route_key = RouteKey::from_transport(&received.transport);
-                // Store the send handle for this core transport, but do not add
-                // a PeerId route here. Only the protocol layer can confirm that
-                // a route is usable for outbound peer traffic.
-                this.transports
-                    .insert(route_key, received.transport.clone());
-                if received.data.is_empty() {
-                    continue;
-                }
-                if this
-                    .raw_tx
-                    .send_async(RawTransportPacket {
-                        data: received.data,
-                        route_key,
-                    })
-                    .await
-                    .is_err()
-                {
-                    log::debug!("raw transport receiver closed");
-                    break;
+            loop {
+                tokio::select! {
+                    received = endpoint.recv() => {
+                        let Some(received) = received else {
+                            break;
+                        };
+                        let route_key = RouteKey::from_transport(&received.transport);
+                        // Store the send handle for this core transport, but do not add
+                        // a PeerId route here. Only the protocol layer can confirm that
+                        // a route is usable for outbound peer traffic.
+                        this.transports
+                            .insert(route_key, received.transport.clone());
+                        if received.data.is_empty() {
+                            continue;
+                        }
+                        if this
+                            .raw_tx
+                            .send_async(RawTransportPacket {
+                                data: received.data,
+                                route_key,
+                            })
+                            .await
+                            .is_err()
+                        {
+                            log::debug!("raw transport receiver closed");
+                            break;
+                        }
+                    }
+                    Some(command) = control_rx.recv() => {
+                        match command {
+                            CoreControl::ApplyNatModel { nat_type, reply } => {
+                                // The core EndPoint owns the socket pool. Apply the local
+                                // NAT model here instead of routing it through Puncher, whose
+                                // job is remote-peer punching strategy.
+                                let _ = reply.send(endpoint.apply_nat_model(nat_type).await);
+                            }
+                        }
+                    }
                 }
             }
         });
@@ -471,6 +514,13 @@ impl TransportLayer {
         punch_info: PunchInfo,
     ) -> io::Result<()> {
         self.core.punch(tcp_buf, udp_buf, punch_info).await
+    }
+
+    pub(crate) async fn apply_nat_model(
+        &self,
+        nat_type: rust_p2p_core::nat::NatType,
+    ) -> io::Result<()> {
+        self.core.apply_nat_model(nat_type).await
     }
 }
 

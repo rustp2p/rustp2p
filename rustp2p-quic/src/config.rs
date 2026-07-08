@@ -44,6 +44,8 @@ pub struct Config {
     pub punch_whitelist: Vec<PeerId>,
     /// Direct peers allowed to act as public address observers. Empty means any direct peer.
     pub nat_observers: Vec<PeerId>,
+    /// Maximum assistant UDP sockets enabled when the detected local NAT is symmetric.
+    pub max_assistant_sockets: usize,
     /// QUIC certificate verifier used for both server and client certificates.
     pub certificate_verifier: Arc<dyn CertificateVerifier>,
     /// Maximum forwarding TTL for high-level packets.
@@ -76,6 +78,7 @@ impl Default for Config {
             load_balance: LoadBalance::MinHopLowestLatency,
             punch_whitelist: Vec::new(),
             nat_observers: Vec::new(),
+            max_assistant_sockets: 0,
             certificate_verifier: Arc::new(SkipCertificateVerification),
             max_ttl: 8,
             high_level: false,

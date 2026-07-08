@@ -548,8 +548,14 @@ impl ProtocolLayer {
                 loop {
                     match rust_p2p_core::stun::stun_test_nat(stun_servers.clone(), None).await {
                         Ok(result) => {
-                            let mut info = protocol.nat_info.write();
-                            apply_stun_result_to_nat_info(&mut info, &result);
+                            let nat_type = result.nat_type;
+                            {
+                                let mut info = protocol.nat_info.write();
+                                apply_stun_result_to_nat_info(&mut info, &result);
+                            }
+                            if let Err(e) = protocol.transport.apply_nat_model(nat_type).await {
+                                log::debug!("failed to apply NAT model: {e}");
+                            }
                         }
                         Err(e) => {
                             log::debug!("NAT detection failed: {e}");
