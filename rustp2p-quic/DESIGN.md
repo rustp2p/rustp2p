@@ -155,7 +155,7 @@ Control payloads use protobuf messages from `proto/rustp2p_quic.proto`.
 `QuicRelay` payload is not protobuf; it is the raw encrypted QUIC UDP packet
 emitted by quinn.
 
-The previous bincode v2 payload format is intentionally not compatible.
+The previous v2 payload format is intentionally not compatible.
 
 ## Security Model
 
@@ -168,7 +168,9 @@ Both rely on QUIC/TLS encryption. rustp2p control packets are not a user payload
 path. Certificate trust is delegated to the application-provided
 `CertificateVerifier`, which is used for both server and client certificates.
 The default `SkipCertificateVerification` is intended for tests and controlled
-deployments.
+deployments and accepts certificates in both directions. Production deployments
+should override both server and client certificate verification according to
+their trust model.
 
 ## Public API Defaults
 

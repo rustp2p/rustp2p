@@ -1,8 +1,8 @@
 use bytes::{BufMut, BytesMut};
 use clap::Parser;
 use env_logger::Env;
-use rust_p2p_core::endpoint::{Config, EndPoint, Sender};
-use rust_p2p_core::route_table::{RouteKey, RouteTable};
+use rustp2p_core::endpoint::{Config, EndPoint, Sender};
+use rustp2p_core::route_table::{RouteKey, RouteTable};
 
 /*Demo Protocol
    0                                            15                                              31
@@ -61,7 +61,7 @@ async fn main() {
 
 async fn handler(
     route_table: RouteTable<u32>,
-    received: rust_p2p_core::endpoint::Received,
+    received: rustp2p_core::endpoint::Received,
     sender: Sender,
 ) {
     let data = &received.data;

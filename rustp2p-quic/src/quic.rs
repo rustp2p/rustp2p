@@ -11,8 +11,8 @@ use bytes::Bytes;
 use dashmap::DashMap;
 use quinn::udp::{RecvMeta, Transmit};
 use quinn::AsyncUdpSocket;
-use rust_p2p_core::route_table::RouteKey;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
+use rustp2p_core::route_table::RouteKey;
 use std::io::{self, IoSliceMut};
 use std::net::SocketAddr;
 use std::pin::Pin;
@@ -718,7 +718,7 @@ mod tests {
     use crate::protocol::ProtocolLayer;
     use crate::{Config, Identity, PeerId};
     use quinn::AsyncUdpSocket;
-    use rust_p2p_core::route_table::{Protocol, RouteKey};
+    use rustp2p_core::route_table::{Protocol, RouteKey};
     use std::io;
 
     #[tokio::test]
@@ -775,7 +775,7 @@ mod tests {
             8,
             Vec::new(),
             Vec::new(),
-            rust_p2p_core::nat::NatInfo::default(),
+            rustp2p_core::nat::NatInfo::default(),
         );
         QuicPeerSocket::new(protocol)
     }

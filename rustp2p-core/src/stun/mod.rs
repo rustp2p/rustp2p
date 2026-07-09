@@ -7,7 +7,7 @@
 //! # Examples
 //!
 //! ```rust,no_run
-//! use rust_p2p_core::stun::stun_test_nat;
+//! use rustp2p_core::stun::stun_test_nat;
 //!
 //! # #[tokio::main]
 //! # async fn main() -> std::io::Result<()> {
@@ -71,7 +71,7 @@ pub struct StunResult {
 /// # Examples
 ///
 /// ```rust,no_run
-/// use rust_p2p_core::stun::stun_test_nat;
+/// use rustp2p_core::stun::stun_test_nat;
 ///
 /// # #[tokio::main]
 /// # async fn main() -> std::io::Result<()> {

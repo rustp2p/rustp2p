@@ -6,7 +6,7 @@
 //! # Examples
 //!
 //! ```rust
-//! use rust_p2p_core::route_table::{RouteKey, Protocol};
+//! use rustp2p_core::route_table::{RouteKey, Protocol};
 //!
 //! # fn example() {
 //! // Create a RouteKey from protocol and address
@@ -35,7 +35,7 @@ pub const DEFAULT_RTT: u32 = 9999;
 /// # Examples
 ///
 /// ```rust
-/// use rust_p2p_core::route_table::{RouteKey, Protocol};
+/// use rustp2p_core::route_table::{RouteKey, Protocol};
 ///
 /// # fn example() {
 /// // Create from protocol and address
@@ -97,7 +97,7 @@ pub struct RouteSortKey {
 /// # Examples
 ///
 /// ```rust
-/// use rust_p2p_core::route_table::Protocol;
+/// use rustp2p_core::route_table::Protocol;
 ///
 /// let proto = Protocol::UDP;
 /// assert!(proto.is_udp());

@@ -1,10 +1,10 @@
 use crate::{Config, PeerId};
 use bytes::Bytes;
 use dashmap::DashMap;
-use rust_p2p_core::endpoint::{EndPoint, Sender as CoreSender, Transport};
-use rust_p2p_core::nat::NatInfo;
-use rust_p2p_core::punch::PunchInfo;
-use rust_p2p_core::route_table::{Route, RouteKey, RouteTable};
+use rustp2p_core::endpoint::{EndPoint, Sender as CoreSender, Transport};
+use rustp2p_core::nat::NatInfo;
+use rustp2p_core::punch::PunchInfo;
+use rustp2p_core::route_table::{Route, RouteKey, RouteTable};
 use serde::{Deserialize, Serialize};
 use std::io;
 use std::net::SocketAddr;
@@ -111,14 +111,14 @@ enum CoreOutboundPacket {
 
 enum CoreControl {
     ApplyNatModel {
-        nat_type: rust_p2p_core::nat::NatType,
+        nat_type: rustp2p_core::nat::NatType,
         reply: oneshot::Sender<io::Result<()>>,
     },
 }
 
 struct CoreTransportLayer {
     sender: CoreSender,
-    puncher: rust_p2p_core::punch::Puncher,
+    puncher: rustp2p_core::punch::Puncher,
     local_addr: SocketAddr,
     local_tcp_port: u16,
     raw_tx: flume::Sender<RawTransportPacket>,
@@ -140,11 +140,11 @@ impl CoreTransportLayer {
     ) -> io::Result<Arc<Self>> {
         let udp_port = config.bind_addr.port();
         let mut core_config = if config.enable_tcp {
-            rust_p2p_core::endpoint::Config::new()
+            rustp2p_core::endpoint::Config::new()
                 .udp_port(udp_port)
                 .tcp_port(config.tcp_port.unwrap_or(udp_port))
         } else {
-            rust_p2p_core::endpoint::Config::udp(udp_port)
+            rustp2p_core::endpoint::Config::udp(udp_port)
         };
         core_config = core_config
             .stun_servers(config.stun_servers.clone())
@@ -223,7 +223,7 @@ impl CoreTransportLayer {
         self.puncher.punch_now(tcp_buf, udp_buf, punch_info).await
     }
 
-    async fn apply_nat_model(&self, nat_type: rust_p2p_core::nat::NatType) -> io::Result<()> {
+    async fn apply_nat_model(&self, nat_type: rustp2p_core::nat::NatType) -> io::Result<()> {
         let (reply, result) = oneshot::channel();
         self.control_tx
             .send(CoreControl::ApplyNatModel { nat_type, reply })
@@ -518,7 +518,7 @@ impl TransportLayer {
 
     pub(crate) async fn apply_nat_model(
         &self,
-        nat_type: rust_p2p_core::nat::NatType,
+        nat_type: rustp2p_core::nat::NatType,
     ) -> io::Result<()> {
         self.core.apply_nat_model(nat_type).await
     }
@@ -587,16 +587,16 @@ mod tests {
         let peer = PeerId::from("route-multi-b");
         transport.confirm_route(
             peer.clone(),
-            rust_p2p_core::route_table::RouteKey::new(
-                rust_p2p_core::route_table::Protocol::UDP,
+            rustp2p_core::route_table::RouteKey::new(
+                rustp2p_core::route_table::Protocol::UDP,
                 "127.0.0.1:1111".parse().unwrap(),
             ),
             1,
         );
         transport.confirm_route(
             peer.clone(),
-            rust_p2p_core::route_table::RouteKey::new(
-                rust_p2p_core::route_table::Protocol::TCP,
+            rustp2p_core::route_table::RouteKey::new(
+                rustp2p_core::route_table::Protocol::TCP,
                 "127.0.0.1:2222".parse().unwrap(),
             ),
             1,
@@ -612,8 +612,8 @@ mod tests {
         let peer = PeerId::from("transport-b");
         transport.confirm_route(
             peer.clone(),
-            rust_p2p_core::route_table::RouteKey::new(
-                rust_p2p_core::route_table::Protocol::UDP,
+            rustp2p_core::route_table::RouteKey::new(
+                rustp2p_core::route_table::Protocol::UDP,
                 "127.0.0.1:3333".parse().unwrap(),
             ),
             0,

@@ -4,9 +4,9 @@ use crate::PeerId;
 use bytes::Bytes;
 use dashmap::{DashMap, DashSet};
 use prost::Message;
-use rust_p2p_core::nat::{NatInfo, NatType};
-use rust_p2p_core::punch::{PunchInfo, PunchModel};
-use rust_p2p_core::route_table::{Protocol, RouteKey};
+use rustp2p_core::nat::{NatInfo, NatType};
+use rustp2p_core::punch::{PunchInfo, PunchModel};
+use rustp2p_core::route_table::{Protocol, RouteKey};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::io;
@@ -546,7 +546,7 @@ impl ProtocolLayer {
             let protocol = protocol.clone();
             tokio::spawn(async move {
                 loop {
-                    match rust_p2p_core::stun::stun_test_nat(stun_servers.clone(), None).await {
+                    match rustp2p_core::stun::stun_test_nat(stun_servers.clone(), None).await {
                         Ok(result) => {
                             let nat_type = result.nat_type;
                             {
@@ -1098,7 +1098,7 @@ impl ProtocolLayer {
     }
 }
 
-fn apply_stun_result_to_nat_info(info: &mut NatInfo, result: &rust_p2p_core::stun::StunResult) {
+fn apply_stun_result_to_nat_info(info: &mut NatInfo, result: &rustp2p_core::stun::StunResult) {
     info.nat_type = result.nat_type;
     info.public_port_range = result.port_range;
 }
@@ -1568,8 +1568,8 @@ mod tests {
     };
     use crate::transport::PeerInfo;
     use crate::PeerId;
-    use rust_p2p_core::nat::{NatInfo, NatType};
-    use rust_p2p_core::stun::StunResult;
+    use rustp2p_core::nat::{NatInfo, NatType};
+    use rustp2p_core::stun::StunResult;
     use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 
     #[test]

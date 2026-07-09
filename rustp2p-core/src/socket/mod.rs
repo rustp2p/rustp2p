@@ -6,7 +6,7 @@
 //! # Examples
 //!
 //! ```rust,no_run
-//! use rust_p2p_core::socket::{bind_udp, LocalInterface};
+//! use rustp2p_core::socket::{bind_udp, LocalInterface};
 //! use std::net::SocketAddr;
 //!
 //! # fn main() -> std::io::Result<()> {
@@ -41,7 +41,7 @@ pub(crate) trait SocketTrait {
 /// # Examples
 ///
 /// ```rust
-/// use rust_p2p_core::socket::LocalInterface;
+/// use rustp2p_core::socket::LocalInterface;
 ///
 /// // On Linux/Android
 /// #[cfg(any(target_os = "linux", target_os = "android"))]

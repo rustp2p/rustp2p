@@ -3,11 +3,11 @@ name = "rustp2p-quic"
 version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
-description = "QUIC-based reliable P2P transport using quinn and rustp2p-core"
+description = "PeerId-based QUIC overlay with encrypted datagrams, streams, discovery, relay, and NAT traversal"
 repository = "https://github.com/rustp2p/rustp2p"
 
 [dependencies]
-rust-p2p-core = { workspace = true }
+rustp2p-core = { workspace = true }
 quinn = "0.11"
 quinn-udp = "0.5"
 rustls = { version = "0.23", default-features = false, features = ["std", "ring"] }

@@ -1,5 +1,5 @@
 use crate::{CertificateVerifier, Identity, PeerId, SkipCertificateVerification};
-use rust_p2p_core::endpoint::LoadBalance;
+use rustp2p_core::endpoint::LoadBalance;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;

@@ -21,7 +21,7 @@ pub struct Received {
 /// # Examples
 ///
 /// ```rust,no_run
-/// use rust_p2p_core::endpoint::{EndPoint, Config};
+/// use rustp2p_core::endpoint::{EndPoint, Config};
 ///
 /// # #[tokio::main]
 /// # async fn main() -> std::io::Result<()> {

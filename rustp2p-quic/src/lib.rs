@@ -59,7 +59,7 @@ pub use identity::{Identity, PeerId};
 pub use protocol::{classify_packet, PacketType};
 pub use quic::{IncomingBiStream, ReceivedMessage};
 pub use reliable::{ReliableRecvStream, ReliableSendStream};
-pub use rust_p2p_core::nat::NatInfo;
+pub use rustp2p_core::nat::NatInfo;
 pub use transport::{LinkInfo, LinkMode, PeerInfo, TransportHandle, TransportMessage};
 
 /// Re-exported result type.

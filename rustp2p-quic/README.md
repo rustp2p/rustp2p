@@ -1,7 +1,7 @@
 # rustp2p-quic
 
 `rustp2p-quic` is the PeerId-based QUIC layer for this workspace. It builds on
-`rustp2p-core` as the underlying transport without modifying core APIs.
+`rustp2p-core` as the underlying transport.
 
 The high-level API uses `PeerId` for all application traffic. Socket addresses are only used to
 bootstrap connectivity to a reachable node.
@@ -66,8 +66,10 @@ async fn main() -> rustp2p_quic::Result<()> {
 }
 ```
 
-`SkipCertificateVerification` is the default. Applications that need stricter TLS trust can provide
-their own verifier.
+`SkipCertificateVerification` is the default and accepts certificates in both directions. The QUIC
+setup requires client certificates and supports mutual certificate verification, but production
+applications should install a verifier that enforces their trust policy for both
+`verify_server_cert` and `verify_client_cert`.
 
 ## Main APIs
 
@@ -172,6 +174,10 @@ endpoint.send_to("node-d".into(), b"hello d").await?;
 Real socket addresses are only transport/bootstrap concerns. `Endpoint::transport()` is a low-level
 escape hatch for already encoded protocol wire bytes; it does not encrypt user payloads by itself.
 Application data should use `send_to` or `open_bi`.
+
+`TransportHandle::send_to_peer` is intended for protocol/control diagnostics and internal tooling.
+It should not be used as an application datagram API because it bypasses the QUIC/TLS user-data
+path.
 
 - `TransportHandle::local_addr()`
 - `TransportHandle::send_to_peer(peer_id, wire_bytes)`

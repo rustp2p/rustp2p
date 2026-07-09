@@ -17,7 +17,7 @@ use crate::route_table::Protocol;
 /// # Examples
 ///
 /// ```rust,no_run
-/// use rust_p2p_core::endpoint::Transport;
+/// use rustp2p_core::endpoint::Transport;
 ///
 /// # async fn example(transport: Transport) -> std::io::Result<()> {
 /// transport.send(b"hello").await?;

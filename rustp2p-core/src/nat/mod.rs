@@ -7,7 +7,7 @@
 //! # Examples
 //!
 //! ```rust,no_run
-//! use rust_p2p_core::nat::{NatType, NatInfo};
+//! use rustp2p_core::nat::{NatType, NatInfo};
 //!
 //! let nat_info = NatInfo {
 //!     nat_type: NatType::Cone,
@@ -44,7 +44,7 @@ use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 /// # Examples
 ///
 /// ```rust
-/// use rust_p2p_core::nat::NatType;
+/// use rustp2p_core::nat::NatType;
 ///
 /// let nat = NatType::Cone;
 /// assert!(nat.is_cone());

@@ -7,11 +7,11 @@ use bytes::{BufMut, BytesMut};
 use clap::Parser;
 use env_logger::Env;
 use parking_lot::Mutex;
-use rust_p2p_core::endpoint::{Config, EndPoint, Sender};
-use rust_p2p_core::idle::IdleRouteManager;
-use rust_p2p_core::nat::NatInfo;
-use rust_p2p_core::punch::{PunchInfo, PunchModel, Puncher};
-use rust_p2p_core::route_table::{RouteKey, RouteTable};
+use rustp2p_core::endpoint::{Config, EndPoint, Sender};
+use rustp2p_core::idle::IdleRouteManager;
+use rustp2p_core::nat::NatInfo;
+use rustp2p_core::punch::{PunchInfo, PunchModel, Puncher};
+use rustp2p_core::route_table::{RouteKey, RouteTable};
 
 /*Demo Protocol
    0                                            15                                              31
@@ -191,7 +191,7 @@ struct ContextHandler {
 }
 
 impl ContextHandler {
-    async fn handle(&self, received: rust_p2p_core::endpoint::Received) -> std::io::Result<()> {
+    async fn handle(&self, received: rustp2p_core::endpoint::Received) -> std::io::Result<()> {
         let data = &received.data;
         let addr = received.transport.remote_addr();
 
