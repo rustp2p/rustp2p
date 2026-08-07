@@ -107,6 +107,14 @@ impl<PeerID: Hash + Eq> RouteTable<PeerID> {
     pub fn get_route_by_id(&self, id: &PeerID) -> io::Result<Route> {
         if let Some(entry) = self.route_table.get(id) {
             let (count, routes) = entry.value();
+            // Always prefer direct routes (metric == 0) over relay routes.
+            // QUIC and other latency-sensitive traffic must use the direct
+            // path when available; relay routes are fallback only. This
+            // prevents QUIC handshake timeouts when a direct route exists
+            // alongside a stale relay route.
+            if let Some((route, _)) = routes.iter().find(|(r, _)| r.is_direct()) {
+                return Ok(*route);
+            }
             if LoadBalance::RoundRobin != self.load_balance {
                 if let Some((route, _)) = routes.first() {
                     return Ok(*route);

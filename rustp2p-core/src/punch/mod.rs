@@ -210,7 +210,7 @@ impl Puncher {
         match peer_nat_info.nat_type {
             NatType::Symmetric => {
                 let max_k1: usize = 60;
-                let mut max_k2: usize = rand::rng().random_range(600..800);
+                let mut max_k2: usize = rand::rng().random_range(1200..1500);
                 if count > 8 {
                     max_k2 = ((max_k2 * 8) / count.max(1)).max(max_k1);
                 }

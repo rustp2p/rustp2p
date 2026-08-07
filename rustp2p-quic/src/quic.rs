@@ -460,7 +460,7 @@ impl QuicEndpoint {
     async fn connect_quic_addr(&self, addr: SocketAddr) -> io::Result<Connection> {
         match self.endpoint.connect(addr, "localhost") {
             Ok(connecting) => {
-                let conn = tokio::time::timeout(Duration::from_secs(5), connecting)
+                let conn = tokio::time::timeout(Duration::from_secs(10), connecting)
                     .await
                     .map_err(|_| {
                         io::Error::new(io::ErrorKind::TimedOut, "QUIC handshake timed out")

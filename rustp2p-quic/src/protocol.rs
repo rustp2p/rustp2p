@@ -442,17 +442,29 @@ impl ProtocolLayer {
             self.max_ttl,
             payload,
         )?;
-        if self.transport.route_for(&peer_id).is_ok() {
-            return self.transport.try_send_wire(peer_id, packet.as_bytes());
-        }
-        if let Some(route) = self.route_candidates.get(&peer_id).map(|route| *route) {
-            self.transport
-                .try_send_wire_to_route(route, packet.as_bytes())
-        } else {
-            Err(io::Error::new(
-                io::ErrorKind::NotFound,
-                "peer route not found",
-            ))
+        // Prefer direct routes (metric == 0) for QUIC packets. Relay routes
+        // add extra latency that can cause QUIC handshake timeouts, especially
+        // during the initial connection setup after hole punching succeeds.
+        // When a direct route is available, bypass the outbound channel and
+        // send directly to the route_key for lower latency.
+        match self.transport.route_metric_for(&peer_id) {
+            Ok((route, 0)) => self
+                .transport
+                .try_send_wire_to_route(route.route_key(), packet.as_bytes()),
+            Ok(_) => self.transport.try_send_wire(peer_id, packet.as_bytes()),
+            Err(_) => {
+                // Fall back to unconfirmed route candidates (e.g., during QUIC
+                // handshake when the direct route is not yet confirmed).
+                if let Some(route) = self.route_candidates.get(&peer_id).map(|route| *route) {
+                    self.transport
+                        .try_send_wire_to_route(route, packet.as_bytes())
+                } else {
+                    Err(io::Error::new(
+                        io::ErrorKind::NotFound,
+                        "peer route not found",
+                    ))
+                }
+            }
         }
     }
 
@@ -770,46 +782,19 @@ impl ProtocolLayer {
                     self.route_candidates.insert(payload.src.clone(), route_key);
                 }
                 if self.punch_allowed(&payload.src) {
-                    // Store the peer's NatInfo from the punch payload so that
-                    // auto-punch can reuse it in future maintenance cycles.
-                    self.peer_nat
-                        .insert(payload.src.clone(), payload.nat_info.clone());
+                    // Execute punch with rate limiting and direct route
+                    // injection. The peer's NatInfo is already stored by
+                    // handle_punch_payload above.
+                    self.try_execute_punch(
+                        &payload.src,
+                        payload.nat_info.clone(),
+                        route_key,
+                        metric,
+                    )
+                    .await;
 
-                    // Skip execute_punch if we already have a confirmed direct
-                    // route — the hole is already open, no need to keep punching.
-                    // We still send the PunchReply so the peer can complete its
+                    // Always send PunchReply so the peer can complete its
                     // request/response exchange and confirm its own route.
-                    if !self.has_direct_route(&payload.src) {
-                        // When the PunchRequest arrives via direct route
-                        // (metric == 0), the route_key contains the peer's
-                        // ACTUAL current source address as seen by our socket.
-                        // For Symmetric NAT this is far more accurate than the
-                        // NatInfo's public_ipv4 (which comes from NatObserve
-                        // via a different peer and uses a different mapped
-                        // port).  Inject this address so Phase-1 port prediction
-                        // centers on the real port instead of a stale one.
-                        let mut nat_info = payload.nat_info.clone();
-                        if metric == 0 {
-                            if let SocketAddr::V4(addr) = route_key.addr() {
-                                let ip = *addr.ip();
-                                if !nat_info.public_ips.contains(&ip) {
-                                    nat_info.public_ips.push(ip);
-                                }
-                                let port = addr.port();
-                                if !nat_info.public_udp_ports.contains(&port) {
-                                    nat_info.public_udp_ports.push(port);
-                                }
-                            }
-                        }
-                        self.execute_punch(payload.src.clone(), nat_info).await?;
-                    } else {
-                        log::debug!(
-                            "PunchRequest from {} — direct route already \
-                             established, skipping execute_punch",
-                            payload.src
-                        );
-                    }
-
                     let reply = encode_punch_payload(
                         &self
                             .punch_payload_with_request_id(payload.src.clone(), payload.request_id),
@@ -839,44 +824,38 @@ impl ProtocolLayer {
                 );
                 if let Some((_, peer_id)) = self.pending_punch.remove(&payload.request_id) {
                     if peer_id == payload.src && metric == 0 {
-                        // Matching request id prevents unrelated punch traffic
-                        // from promoting a route to direct reachability.
-                        log::info!(
-                            "punch succeeded: direct route confirmed to {} via {:?}",
-                            payload.src,
-                            route_key
-                        );
-                        self.confirm_direct_and_promote(
-                            self.peer_info_from_packet(&payload.src, route_key, metric),
-                            route_key,
-                        );
+                        // Dedup: only log "punch succeeded" and promote if
+                        // this is the first confirmation of a direct route.
+                        // Multiple PunchReplies with different request_ids can
+                        // arrive in the same second after the hole is open;
+                        // only the first should trigger the log and promotion.
+                        if !self.has_direct_route(&payload.src) {
+                            log::info!(
+                                "punch succeeded: direct route confirmed to {} via {:?}",
+                                payload.src,
+                                route_key
+                            );
+                            self.confirm_direct_and_promote(
+                                self.peer_info_from_packet(&payload.src, route_key, metric),
+                                route_key,
+                            );
+                        } else {
+                            log::debug!(
+                                "punch reply confirms existing direct route to {} via {:?}",
+                                payload.src,
+                                route_key
+                            );
+                        }
                     }
                 }
                 if self.punch_allowed(&payload.src) {
-                    // Same as PunchRequest: store the peer's NatInfo so auto-punch
-                    // can reuse it later.
-                    self.peer_nat
-                        .insert(payload.src.clone(), payload.nat_info.clone());
-
-                    // Skip execute_punch if direct route is already confirmed
-                    // (which may have just happened via the pending_punch match
-                    // above).  No need to keep punching an open hole.
-                    if !self.has_direct_route(&payload.src) {
-                        let mut nat_info = payload.nat_info.clone();
-                        if metric == 0 {
-                            if let SocketAddr::V4(addr) = route_key.addr() {
-                                let ip = *addr.ip();
-                                if !nat_info.public_ips.contains(&ip) {
-                                    nat_info.public_ips.push(ip);
-                                }
-                                let port = addr.port();
-                                if !nat_info.public_udp_ports.contains(&port) {
-                                    nat_info.public_udp_ports.push(port);
-                                }
-                            }
-                        }
-                        self.execute_punch(payload.src, nat_info).await?;
-                    }
+                    self.try_execute_punch(
+                        &payload.src,
+                        payload.nat_info.clone(),
+                        route_key,
+                        metric,
+                    )
+                    .await;
                 }
             }
             ProtocolType::EchoRequest => {
@@ -1003,6 +982,70 @@ impl ProtocolLayer {
                 PunchInfo::new(PunchModel::all(), peer_nat_info),
             )
             .await
+    }
+
+    /// Execute punch toward a peer after receiving a PunchRequest or PunchReply.
+    /// Applies rate limiting for relay-arrived packets and injects the direct
+    /// route_key address when metric == 0. The has-direct-route check is
+    /// performed internally to avoid redundant punching of an already-open hole.
+    async fn try_execute_punch(
+        &self,
+        src: &PeerId,
+        nat_info: NatInfo,
+        route_key: RouteKey,
+        metric: u8,
+    ) {
+        if self.has_direct_route(src) {
+            log::debug!(
+                "punch from {} — direct route already established, skipping execute_punch",
+                src
+            );
+            return;
+        }
+        // Rate limit relay-arrived punches to avoid excessive traffic.
+        // Direct arrivals (metric == 0) bypass rate limiting because they
+        // represent the best opportunity to hit the correct port — the
+        // peer's actual source address is in the route_key.
+        if metric > 0 {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            if let Some(last) = self.last_punch_time.get(src) {
+                let elapsed = now.saturating_sub(*last);
+                if elapsed < 5 {
+                    log::debug!(
+                        "punch from {} — rate limited ({}s since last), skipping execute_punch",
+                        src,
+                        elapsed
+                    );
+                    return;
+                }
+            }
+            self.last_punch_time.insert(src.clone(), now);
+        }
+        // When the punch arrives via direct route (metric == 0), the
+        // route_key contains the peer's ACTUAL current source address as
+        // seen by our socket. For Symmetric NAT this is far more accurate
+        // than the NatInfo's public_ipv4 (which comes from NatObserve via
+        // a different peer and uses a different mapped port). Inject this
+        // address so Phase-1 port prediction centers on the real port.
+        let mut nat_info = nat_info;
+        if metric == 0 {
+            if let SocketAddr::V4(addr) = route_key.addr() {
+                let ip = *addr.ip();
+                if !nat_info.public_ips.contains(&ip) {
+                    nat_info.public_ips.push(ip);
+                }
+                let port = addr.port();
+                if !nat_info.public_udp_ports.contains(&port) {
+                    nat_info.public_udp_ports.push(port);
+                }
+            }
+        }
+        if let Err(e) = self.execute_punch(src.clone(), nat_info).await {
+            log::debug!("execute_punch failed for {}: {e}", src);
+        }
     }
 
     fn punch_payload(&self, dest: PeerId) -> PunchPayload {
