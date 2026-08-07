@@ -1143,12 +1143,7 @@ impl ProtocolLayer {
                     // Record pending hello so HelloReply handler can confirm
                     protocol.pending_hello_routes.insert(route_key);
                     let _ = protocol
-                        .send_protocol_to_route(
-                            peer_id,
-                            route_key,
-                            ProtocolType::HelloRequest,
-                            &[],
-                        )
+                        .send_protocol_to_route(peer_id, route_key, ProtocolType::HelloRequest, &[])
                         .await;
                 }
             }
