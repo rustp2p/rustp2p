@@ -187,13 +187,30 @@ learn the remote `PeerId`.
 
 ## Hole Punching
 
-Punching is controlled by a dynamic whitelist. A node only starts punch negotiation with peers that
-are currently allowed:
+Punching is controlled by a dynamic whitelist. By default the whitelist is `None`, meaning **all**
+discovered peers are allowed to punch — the protocol layer automatically attempts NAT hole punching
+for peers that only have a relay route. Set `Some(vec)` to restrict punching to specific peers:
 
 ```rust
-endpoint.allow_punch("node-b".into());
+// All peers allowed (default) — auto-punching enabled
+endpoint.set_punch_whitelist(None);
+
+// Only allow specific peers
+endpoint.set_punch_whitelist(Some(vec!["node-b".into()]));
+
+// Disable punching entirely
+endpoint.set_punch_whitelist(Some(vec![]));
+
+// Manual punch (also triggered automatically by the maintenance loop)
 endpoint.punch("node-b".into()).await?;
-endpoint.deny_punch("node-b".into());
+```
+
+For symmetric NAT, enable auxiliary UDP sockets so the puncher can send from multiple source ports:
+
+```rust
+Endpoint::builder()
+    .max_assistant_sockets(4)
+    // ...
 ```
 
 Punch negotiation is handled by the protocol layer. The transport layer only supplies core route

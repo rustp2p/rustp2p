@@ -73,6 +73,12 @@ impl Puncher {
                 std::net::Ipv4Addr::UNSPECIFIED,
                 0,
             )));
+        log::debug!(
+            "punch_now -> {} (nat={:?}, model={:?})",
+            peer,
+            punch_info.peer_nat_info.nat_type,
+            punch_info.punch_model
+        );
         {
             let mut stats = self.punch_stats.lock();
             let entry = stats.entry(peer).or_default();
@@ -173,6 +179,13 @@ impl Puncher {
         peer_nat_info: &NatInfo,
         _punch_model: &PunchModel,
     ) {
+        log::debug!(
+            "punch_udp count={} nat={:?} mapped_udp={:?} local_ipv4={:?}",
+            count,
+            peer_nat_info.nat_type,
+            peer_nat_info.mapping_udp_addr,
+            peer_nat_info.local_ipv4_addrs()
+        );
         // Send to mapped addresses
         if !peer_nat_info.mapping_udp_addr.is_empty() {
             let addrs: Vec<SocketAddr> = peer_nat_info

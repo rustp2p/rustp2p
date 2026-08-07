@@ -779,7 +779,7 @@ mod tests {
             PeerId::from("node-a"),
             transport,
             8,
-            Vec::new(),
+            None,
             Vec::new(),
             rustp2p_core::nat::NatInfo::default(),
         );

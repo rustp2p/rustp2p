@@ -9,13 +9,18 @@ fn loopback() -> SocketAddr {
 }
 
 async fn node(id: &str) -> Endpoint {
-    Endpoint::builder()
+    let endpoint = Endpoint::builder()
         .identity(Identity::new(id, format!("{id}-seed")).unwrap())
         .bind(loopback())
         .stun_servers(Vec::new())
         .build()
         .await
-        .unwrap()
+        .unwrap();
+    // Disable auto-punching in test nodes: tests that verify relay topology
+    // need deterministic routing without unexpected direct routes.
+    // Tests that exercise punching can re-enable it per-peer.
+    endpoint.set_punch_whitelist(Some(Vec::new()));
+    endpoint
 }
 
 async fn wait_for_peer(endpoint: &Endpoint, peer_id: &str) {
@@ -248,19 +253,29 @@ async fn punch_whitelist_can_be_changed_at_runtime() {
     let a = node("punch-api-a").await;
     let b = node("punch-api-b").await;
 
-    assert!(a.punch_whitelist().is_empty());
-    a.allow_punch(b.peer_id());
-    assert_eq!(a.punch_whitelist(), vec![b.peer_id()]);
+    // node() disables punching (Some([])); reset to None (all allowed)
+    a.set_punch_whitelist(None);
+    assert_eq!(a.punch_whitelist(), None);
 
+    // Switch to an explicit allow list containing only b
+    a.set_punch_whitelist(Some(vec![b.peer_id()]));
+    assert_eq!(a.punch_whitelist(), Some(vec![b.peer_id()]));
+
+    // Deny b → explicit set becomes empty
     a.deny_punch(b.peer_id());
-    assert!(a.punch_whitelist().is_empty());
+    assert_eq!(a.punch_whitelist(), Some(vec![]));
 
-    a.set_punch_whitelist(vec![b.peer_id()]);
-    assert_eq!(a.punch_whitelist(), vec![b.peer_id()]);
-
-    a.deny_punch(b.peer_id());
+    // punch should fail with PermissionDenied
     let err = a.punch(b.peer_id()).await.unwrap_err();
     assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
+
+    // Re-allow b
+    a.allow_punch(b.peer_id());
+    assert_eq!(a.punch_whitelist(), Some(vec![b.peer_id()]));
+
+    // Back to None (all allowed)
+    a.set_punch_whitelist(None);
+    assert_eq!(a.punch_whitelist(), None);
 
     close_all(&[&a, &b]).await;
 }

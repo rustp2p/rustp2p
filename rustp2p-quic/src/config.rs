@@ -40,8 +40,11 @@ pub struct Config {
     pub mapping_tcp_addrs: Vec<SocketAddr>,
     /// Route selection strategy for multiple available routes.
     pub load_balance: LoadBalance,
-    /// Initial peers allowed to perform direct hole punching.
-    pub punch_whitelist: Vec<PeerId>,
+    /// Peers allowed to participate in direct hole punching.
+    ///
+    /// `None` (default) means **all** discovered peers are allowed to punch.
+    /// `Some(vec)` restricts punching to the listed peers.
+    pub punch_whitelist: Option<Vec<PeerId>>,
     /// Direct peers allowed to act as public address observers. Empty means any direct peer.
     pub nat_observers: Vec<PeerId>,
     /// Maximum assistant UDP sockets enabled when the detected local NAT is symmetric.
@@ -72,9 +75,9 @@ impl Default for Config {
             mapping_udp_addrs: Vec::new(),
             mapping_tcp_addrs: Vec::new(),
             load_balance: LoadBalance::MinHopLowestLatency,
-            punch_whitelist: Vec::new(),
+            punch_whitelist: None,
             nat_observers: Vec::new(),
-            max_assistant_sockets: 0,
+            max_assistant_sockets: 4,
             certificate_verifier: Arc::new(SkipCertificateVerification),
             max_ttl: 8,
             high_level: false,

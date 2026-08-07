@@ -1,5 +1,5 @@
+use clap::Parser;
 use rustp2p_quic::{Endpoint, Identity, PeerId, ReliableRecvStream, ReliableSendStream};
-use std::env;
 use std::io;
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -11,27 +11,79 @@ const DEFAULT_STUN_SERVERS: &[&str] = &[
     "stun.hitv.com:3478",
 ];
 
+/// A simple P2P node example for rustp2p-quic.
+#[derive(Parser)]
+#[command(name = "node", about = "A simple P2P node example for rustp2p-quic")]
+struct Args {
+    /// Local node identity.
+    #[arg(long)]
+    id: String,
+
+    /// Seed for identity derivation (defaults to "{id}-seed").
+    #[arg(long)]
+    seed: Option<String>,
+
+    /// Local bind address.
+    #[arg(long, default_value = "127.0.0.1:0")]
+    bind: SocketAddr,
+
+    /// Bootstrap peer address (can be specified multiple times).
+    #[arg(long)]
+    bootstrap: Vec<SocketAddr>,
+
+    /// STUN server address (can be specified multiple times; replaces built-in defaults).
+    #[arg(long)]
+    stun: Vec<String>,
+
+    /// Disable STUN entirely.
+    #[arg(long)]
+    no_stun: bool,
+
+    /// Number of assistant UDP sockets for symmetric NAT punching.
+    #[arg(long, default_value_t = 4)]
+    max_assistant_sockets: usize,
+}
+
 #[tokio::main]
 async fn main() -> rustp2p_quic::Result<()> {
     env_logger::init();
 
-    let args = Args::parse()?;
+    let args = Args::parse();
+
+    let stun_servers = if args.no_stun {
+        Vec::new()
+    } else if args.stun.is_empty() {
+        DEFAULT_STUN_SERVERS
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect()
+    } else {
+        args.stun.clone()
+    };
+
+    let seed = args
+        .seed
+        .clone()
+        .unwrap_or_else(|| format!("{}-seed", args.id));
+
     let endpoint = Endpoint::builder()
-        .identity(Identity::new(args.id, args.seed)?)
+        .identity(Identity::new(args.id.clone(), seed)?)
         .bind(args.bind)
         .bootstrap(args.bootstrap.clone())
-        .stun_servers(args.stun_servers.clone())
+        .stun_servers(stun_servers.clone())
+        .max_assistant_sockets(args.max_assistant_sockets)
         .build()
         .await?;
 
     println!("peer_id={}", endpoint.peer_id());
     println!("addr={}", endpoint.local_addr().unwrap());
-    println!("stun_servers={:?}", args.stun_servers);
+    println!("stun_servers={:?}", stun_servers);
     println!("commands:");
     println!("  connect <addr>");
     println!("  send <peer_id> <message>");
     println!("  stream <peer_id> <message>");
     println!("  broadcast <message>");
+    println!("  punch <peer_id>");
     println!("  peers");
     println!("  quit");
 
@@ -111,37 +163,44 @@ async fn main() -> rustp2p_quic::Result<()> {
     Ok(())
 }
 
+/// Parse the rest of a command line as `<peer_id> <message>`.
+///
+/// The message preserves all spaces — only the first space separates the
+/// peer id from the payload.
+fn split_peer_and_payload(rest: &str) -> rustp2p_quic::Result<(&str, &str)> {
+    match rest.split_once(' ') {
+        Some((peer, payload)) if !peer.is_empty() && !payload.is_empty() => Ok((peer, payload)),
+        _ => Err(invalid("usage: <peer_id> <message>")),
+    }
+}
+
 async fn handle_command(endpoint: &Endpoint, line: &str) -> rustp2p_quic::Result<()> {
-    let mut parts = line.splitn(3, ' ');
-    match parts.next().unwrap_or_default() {
+    // Split into command + rest.  The rest preserves all remaining spaces so
+    // that multi-word messages (e.g. `broadcast hello world foo`) are not
+    // truncated.
+    let (cmd, rest) = match line.split_once(' ') {
+        Some((cmd, rest)) => (cmd, rest),
+        None => (line, ""),
+    };
+
+    match cmd {
         "connect" => {
-            let addr: SocketAddr = parts
-                .next()
-                .ok_or_else(|| invalid("usage: connect <addr>"))?
+            let addr: SocketAddr = rest
+                .trim()
                 .parse()
                 .map_err(|e| invalid(format!("invalid address: {e}")))?;
             let peer_id = endpoint.add_bootstrap(addr).await?;
             println!("connected {peer_id} at {addr}");
         }
         "send" => {
-            let peer = parts
-                .next()
-                .ok_or_else(|| invalid("usage: send <peer_id> <message>"))
-                .map(PeerId::from)?;
-            let payload = parts
-                .next()
-                .ok_or_else(|| invalid("usage: send <peer_id> <message>"))?;
+            let (peer_str, payload) = split_peer_and_payload(rest)?;
+            let peer = PeerId::from(peer_str);
             endpoint.send_to(peer.clone(), payload.as_bytes()).await?;
             println!("sent datagram to {peer}");
         }
         "stream" => {
-            let peer = parts
-                .next()
-                .ok_or_else(|| invalid("usage: stream <peer_id> <message>"))
-                .map(PeerId::from)?;
-            let payload = parts
-                .next()
-                .ok_or_else(|| invalid("usage: stream <peer_id> <message>"))?;
+            let (peer_str, payload) = split_peer_and_payload(rest)?;
+            let peer = PeerId::from(peer_str);
             let (mut send, mut recv) = endpoint.open_bi(peer.clone()).await?;
             write_frame(&mut send, payload.as_bytes()).await?;
             send.finish()?;
@@ -152,11 +211,22 @@ async fn handle_command(endpoint: &Endpoint, line: &str) -> rustp2p_quic::Result
             );
         }
         "broadcast" => {
-            let payload = parts
-                .next()
-                .ok_or_else(|| invalid("usage: broadcast <message>"))?;
-            endpoint.broadcast(payload.as_bytes()).await?;
+            if rest.is_empty() {
+                return Err(invalid("usage: broadcast <message>"));
+            }
+            endpoint.broadcast(rest.as_bytes()).await?;
             println!("broadcast sent");
+        }
+        "punch" => {
+            let peer_str = rest.trim();
+            if peer_str.is_empty() {
+                return Err(invalid("usage: punch <peer_id>"));
+            }
+            let peer = PeerId::from(peer_str);
+            match endpoint.punch(peer.clone()).await {
+                Ok(()) => println!("punch sent to {peer}"),
+                Err(e) => eprintln!("punch failed: {e}"),
+            }
         }
         "peers" => {
             for peer in endpoint.known_peers() {
@@ -171,90 +241,6 @@ async fn handle_command(endpoint: &Endpoint, line: &str) -> rustp2p_quic::Result
         }
     }
     Ok(())
-}
-
-struct Args {
-    id: String,
-    seed: String,
-    bind: SocketAddr,
-    bootstrap: Vec<SocketAddr>,
-    stun_servers: Vec<String>,
-}
-
-impl Args {
-    fn parse() -> io::Result<Self> {
-        let mut id = None;
-        let mut seed = None;
-        let mut bind = "127.0.0.1:0".parse().unwrap();
-        let mut bootstrap = Vec::new();
-        let mut stun_servers = DEFAULT_STUN_SERVERS
-            .iter()
-            .map(|server| (*server).to_string())
-            .collect::<Vec<_>>();
-        let mut stun_overridden = false;
-        let mut args = env::args().skip(1);
-
-        while let Some(arg) = args.next() {
-            match arg.as_str() {
-                "--id" => {
-                    id = Some(
-                        args.next()
-                            .ok_or_else(|| invalid("--id requires a value"))?,
-                    )
-                }
-                "--seed" => {
-                    seed = Some(
-                        args.next()
-                            .ok_or_else(|| invalid("--seed requires a value"))?,
-                    )
-                }
-                "--bind" => {
-                    bind = args
-                        .next()
-                        .ok_or_else(|| invalid("--bind requires an address"))?
-                        .parse()
-                        .map_err(|e| invalid(format!("invalid bind address: {e}")))?;
-                }
-                "--bootstrap" => {
-                    bootstrap.push(
-                        args.next()
-                            .ok_or_else(|| invalid("--bootstrap requires an address"))?
-                            .parse()
-                            .map_err(|e| invalid(format!("invalid bootstrap address: {e}")))?,
-                    );
-                }
-                "--stun" => {
-                    if !stun_overridden {
-                        stun_servers.clear();
-                        stun_overridden = true;
-                    }
-                    stun_servers.push(
-                        args.next()
-                            .ok_or_else(|| invalid("--stun requires a server address"))?,
-                    );
-                }
-                "--no-stun" => {
-                    stun_servers.clear();
-                    stun_overridden = true;
-                }
-                "--help" | "-h" => {
-                    print_usage();
-                    std::process::exit(0);
-                }
-                _ => return Err(invalid(format!("unknown argument: {arg}"))),
-            }
-        }
-
-        let id = id.ok_or_else(|| invalid("--id is required"))?;
-        let seed = seed.unwrap_or_else(|| format!("{id}-seed"));
-        Ok(Self {
-            id,
-            seed,
-            bind,
-            bootstrap,
-            stun_servers,
-        })
-    }
 }
 
 fn invalid(message: impl Into<String>) -> io::Error {
@@ -298,16 +284,4 @@ async fn read_exact(recv: &mut ReliableRecvStream, mut out: &mut [u8]) -> io::Re
         }
     }
     Ok(())
-}
-
-fn print_usage() {
-    println!("cargo run -p rustp2p-quic --example node -- --id node-a --seed seed-a --bind 127.0.0.1:7001");
-    println!("cargo run -p rustp2p-quic --example node -- --id node-b --seed seed-b --bind 127.0.0.1:7002 --bootstrap 127.0.0.1:7001");
-    println!("default example STUN servers:");
-    for server in DEFAULT_STUN_SERVERS {
-        println!("  {server}");
-    }
-    println!(
-        "use --stun <server> to replace/append explicit servers, or --no-stun to disable STUN"
-    );
 }

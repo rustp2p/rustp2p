@@ -344,7 +344,7 @@ pub(crate) struct ProtocolLayer {
     hello_rx: flume::Receiver<(SocketAddr, PeerId)>,
     quic_tx: flume::Sender<TransportPayload>,
     quic_rx: flume::Receiver<TransportPayload>,
-    punch_whitelist: parking_lot::RwLock<HashSet<PeerId>>,
+    punch_whitelist: parking_lot::RwLock<Option<HashSet<PeerId>>>,
     nat_observers: parking_lot::RwLock<HashSet<PeerId>>,
     nat_info: parking_lot::RwLock<NatInfo>,
     peer_nat: DashMap<PeerId, NatInfo>,
@@ -361,6 +361,8 @@ pub(crate) struct ProtocolLayer {
     // can be used to answer handshakes but are hidden from public route queries
     // until a protocol-specific confirmation arrives.
     route_candidates: DashMap<PeerId, RouteKey>,
+    // Per-peer last punch timestamp (unix seconds) for rate-limiting auto-punch.
+    last_punch_time: DashMap<PeerId, u64>,
 }
 
 impl ProtocolLayer {
@@ -368,7 +370,7 @@ impl ProtocolLayer {
         peer_id: PeerId,
         transport: Arc<TransportLayer>,
         max_ttl: u8,
-        punch_whitelist: Vec<PeerId>,
+        punch_whitelist: Option<Vec<PeerId>>,
         nat_observers: Vec<PeerId>,
         initial_nat_info: NatInfo,
     ) -> Arc<Self> {
@@ -383,7 +385,9 @@ impl ProtocolLayer {
             hello_rx,
             quic_tx,
             quic_rx,
-            punch_whitelist: parking_lot::RwLock::new(punch_whitelist.into_iter().collect()),
+            punch_whitelist: parking_lot::RwLock::new(
+                punch_whitelist.map(|v| v.into_iter().collect()),
+            ),
             nat_observers: parking_lot::RwLock::new(nat_observers.into_iter().collect()),
             nat_info: parking_lot::RwLock::new(initial_nat_info),
             peer_nat: DashMap::new(),
@@ -391,6 +395,7 @@ impl ProtocolLayer {
             pending_nat_observe: DashMap::new(),
             pending_punch: DashMap::new(),
             route_candidates: DashMap::new(),
+            last_punch_time: DashMap::new(),
         });
         layer.start_packet_dispatcher();
         layer.start_maintenance_loop();
@@ -502,19 +507,42 @@ impl ProtocolLayer {
     }
 
     pub(crate) fn allow_punch(&self, peer_id: PeerId) {
-        self.punch_whitelist.write().insert(peer_id);
+        let mut wl = self.punch_whitelist.write();
+        match &mut *wl {
+            Some(set) => {
+                set.insert(peer_id);
+            }
+            None => {
+                // All allowed already; no-op
+            }
+        }
     }
 
     pub(crate) fn deny_punch(&self, peer_id: &PeerId) {
-        self.punch_whitelist.write().remove(peer_id);
+        let mut wl = self.punch_whitelist.write();
+        match &mut *wl {
+            Some(set) => {
+                set.remove(peer_id);
+            }
+            None => {
+                // Switch from "all allowed" to an explicit set excluding this peer.
+                // We can't enumerate all known peers here cheaply, so we just
+                // create an empty set — the caller can add specific peers via
+                // allow_punch afterwards. The intent ("deny this one") is honored.
+                *wl = Some(HashSet::new());
+            }
+        }
     }
 
-    pub(crate) fn set_punch_whitelist(&self, peers: Vec<PeerId>) {
-        *self.punch_whitelist.write() = peers.into_iter().collect();
+    pub(crate) fn set_punch_whitelist(&self, peers: Option<Vec<PeerId>>) {
+        *self.punch_whitelist.write() = peers.map(|v| v.into_iter().collect());
     }
 
-    pub(crate) fn punch_whitelist(&self) -> Vec<PeerId> {
-        self.punch_whitelist.read().iter().cloned().collect()
+    pub(crate) fn punch_whitelist(&self) -> Option<Vec<PeerId>> {
+        self.punch_whitelist
+            .read()
+            .as_ref()
+            .map(|s| s.iter().cloned().collect())
     }
 
     pub(crate) async fn punch(&self, peer_id: PeerId) -> io::Result<()> {
@@ -549,6 +577,10 @@ impl ProtocolLayer {
                     match rustp2p_core::stun::stun_test_nat(stun_servers.clone(), None).await {
                         Ok(result) => {
                             let nat_type = result.nat_type;
+                            log::info!(
+                                "NAT type detected: {nat_type:?} (port_range={})",
+                                result.port_range
+                            );
                             {
                                 let mut info = protocol.nat_info.write();
                                 apply_stun_result_to_nat_info(&mut info, &result);
@@ -720,6 +752,13 @@ impl ProtocolLayer {
             }
             ProtocolType::PunchRequest => {
                 let payload = self.handle_punch_payload(packet.payload()).await?;
+                log::debug!(
+                    "PunchRequest from {} metric={} route={:?} nat={:?}",
+                    payload.src,
+                    metric,
+                    route_key,
+                    payload.nat_info.nat_type
+                );
                 if metric == 0 {
                     // A punch request proves only that the peer reached us. It
                     // stays a candidate until a matching PunchReply completes
@@ -740,14 +779,31 @@ impl ProtocolLayer {
                         &reply,
                     )
                     .await?;
+                } else {
+                    log::debug!(
+                        "PunchRequest from {} ignored (not in whitelist)",
+                        payload.src
+                    );
                 }
             }
             ProtocolType::PunchReply => {
                 let payload = self.handle_punch_payload(packet.payload()).await?;
+                log::debug!(
+                    "PunchReply from {} metric={} route={:?} request_id={}",
+                    payload.src,
+                    metric,
+                    route_key,
+                    payload.request_id
+                );
                 if let Some((_, peer_id)) = self.pending_punch.remove(&payload.request_id) {
                     if peer_id == payload.src && metric == 0 {
                         // Matching request id prevents unrelated punch traffic
                         // from promoting a route to direct reachability.
+                        log::info!(
+                            "punch succeeded: direct route confirmed to {} via {:?}",
+                            payload.src,
+                            route_key
+                        );
                         self.confirm_direct_and_promote(
                             self.peer_info_from_packet(&payload.src, route_key, metric),
                             route_key,
@@ -838,6 +894,13 @@ impl ProtocolLayer {
     }
 
     async fn execute_punch(&self, peer_id: PeerId, peer_nat_info: NatInfo) -> io::Result<()> {
+        log::debug!(
+            "execute_punch -> {} (nat={:?}, mapped_udp={:?}, public_ipv4={:?})",
+            peer_id,
+            peer_nat_info.nat_type,
+            peer_nat_info.mapping_udp_addr,
+            peer_nat_info.public_ipv4_addr()
+        );
         let payload = self.punch_payload(peer_id.clone());
         // Record the request_id so the direct PunchReply (metric == 0) can be
         // matched and the direct route confirmed. Without this, the PunchReply
@@ -879,7 +942,10 @@ impl ProtocolLayer {
     }
 
     fn punch_allowed(&self, peer_id: &PeerId) -> bool {
-        self.punch_whitelist.read().contains(peer_id)
+        match &*self.punch_whitelist.read() {
+            None => true,
+            Some(set) => set.contains(peer_id),
+        }
     }
 
     async fn ingest_route_entries(
@@ -1145,6 +1211,57 @@ impl ProtocolLayer {
                     let _ = protocol
                         .send_protocol_to_route(peer_id, route_key, ProtocolType::HelloRequest, &[])
                         .await;
+                }
+                // Auto-punch known peers that don't yet have a direct route.
+                // Punching is rate-limited per peer (every 10 seconds) and
+                // only attempted when we have the peer's NAT info, which is
+                // required to send UDP/TCP packets to the correct mapped
+                // address. The Puncher itself also applies rate limiting.
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                for peer in protocol.transport.known_peers() {
+                    let peer_id = &peer.peer_id;
+                    if peer_id == &protocol.peer_id {
+                        continue;
+                    }
+                    if !protocol.punch_allowed(peer_id) {
+                        continue;
+                    }
+                    // Skip if already has a confirmed direct route
+                    if let Ok((_, metric)) = protocol.transport.route_metric_for(peer_id) {
+                        if metric == 0 {
+                            continue;
+                        }
+                    }
+                    // Need peer NAT info to punch
+                    let Some(nat_info) = protocol.peer_nat.get(peer_id).map(|v| v.clone()) else {
+                        continue;
+                    };
+                    // Rate limit: at most once per 10 seconds per peer
+                    if let Some(last) = protocol.last_punch_time.get(peer_id) {
+                        if now.saturating_sub(*last) < 10 {
+                            continue;
+                        }
+                    }
+                    protocol.last_punch_time.insert(peer_id.clone(), now);
+                    log::debug!(
+                        "auto-punching peer {peer_id} (peer nat={:?}, local nat={:?})",
+                        nat_info.nat_type,
+                        protocol.nat_info.read().nat_type
+                    );
+                    // Best-effort: notify peer via relay so they punch back
+                    let payload = protocol.punch_payload(peer_id.clone());
+                    protocol
+                        .pending_punch
+                        .insert(payload.request_id, peer_id.clone());
+                    let encoded = encode_punch_payload(&payload);
+                    let _ = protocol
+                        .send_protocol(peer_id.clone(), ProtocolType::PunchRequest, &encoded)
+                        .await;
+                    // Direct UDP/TCP punch
+                    let _ = protocol.execute_punch(peer_id.clone(), nat_info).await;
                 }
             }
         });

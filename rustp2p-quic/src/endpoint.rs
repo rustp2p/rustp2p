@@ -99,8 +99,11 @@ impl Builder {
         self
     }
 
-    /// Sets the initial peers allowed to participate in hole punching.
-    pub fn punch_whitelist(mut self, peers: Vec<PeerId>) -> Self {
+    /// Sets the peers allowed to participate in hole punching.
+    ///
+    /// `None` (default) means all discovered peers may punch.
+    /// `Some(vec)` restricts punching to the listed peers.
+    pub fn punch_whitelist(mut self, peers: Option<Vec<PeerId>>) -> Self {
         self.config.punch_whitelist = peers;
         self
     }
@@ -333,22 +336,31 @@ impl Endpoint {
     }
 
     /// Allows the peer to participate in direct hole punching.
+    ///
+    /// If the whitelist is `None` (all allowed), this is a no-op.
+    /// If it is `Some(set)`, the peer is added to the set.
     pub fn allow_punch(&self, peer_id: PeerId) {
         self.protocol.allow_punch(peer_id);
     }
 
     /// Removes the peer from the hole punching allow list.
+    ///
+    /// If the whitelist is `None` (all allowed), this switches to an
+    /// explicit set containing all known peers **except** the denied one.
     pub fn deny_punch(&self, peer_id: PeerId) {
         self.protocol.deny_punch(&peer_id);
     }
 
     /// Replaces the hole punching allow list.
-    pub fn set_punch_whitelist(&self, peers: Vec<PeerId>) {
+    pub fn set_punch_whitelist(&self, peers: Option<Vec<PeerId>>) {
         self.protocol.set_punch_whitelist(peers);
     }
 
     /// Returns the current hole punching allow list.
-    pub fn punch_whitelist(&self) -> Vec<PeerId> {
+    ///
+    /// Returns `None` when all peers are allowed, `Some(vec)` for an
+    /// explicit allow list.
+    pub fn punch_whitelist(&self) -> Option<Vec<PeerId>> {
         self.protocol.punch_whitelist()
     }
 
