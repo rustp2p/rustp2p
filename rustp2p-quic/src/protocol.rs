@@ -770,6 +770,13 @@ impl ProtocolLayer {
                     self.route_candidates.insert(payload.src.clone(), route_key);
                 }
                 if self.punch_allowed(&payload.src) {
+                    // Store the peer's NatInfo from the punch payload so that
+                    // auto-punch can reuse it in future maintenance cycles.
+                    // Without this, peer_nat would only be populated via
+                    // HelloReply — which never happens between two NAT'd peers
+                    // that can't directly connect.
+                    self.peer_nat
+                        .insert(payload.src.clone(), payload.nat_info.clone());
                     self.execute_punch(payload.src.clone(), payload.nat_info)
                         .await?;
                     let reply = encode_punch_payload(
@@ -815,6 +822,10 @@ impl ProtocolLayer {
                     }
                 }
                 if self.punch_allowed(&payload.src) {
+                    // Same as PunchRequest: store the peer's NatInfo so auto-punch
+                    // can reuse it later.
+                    self.peer_nat
+                        .insert(payload.src.clone(), payload.nat_info.clone());
                     self.execute_punch(payload.src, payload.nat_info).await?;
                 }
             }
@@ -1251,32 +1262,53 @@ impl ProtocolLayer {
                             continue;
                         }
                     }
-                    // Need peer NAT info to punch
-                    let Some(nat_info) = protocol.peer_nat.get(peer_id).map(|v| v.clone()) else {
-                        continue;
-                    };
-                    // Need peer's public address (from NatObserve) to punch.
-                    // Without it, we don't know where to send punch packets.
-                    if nat_info.public_ips.is_empty() || nat_info.public_udp_ports.is_empty() {
-                        log::debug!(
-                            "auto-punch: skipping {peer_id} — no public address yet \
-                             (NatObserve may not have completed)"
-                        );
-                        continue;
-                    }
                     // Rate limit: at most once per 10 seconds per peer
                     if let Some(last) = protocol.last_punch_time.get(peer_id) {
                         if now.saturating_sub(*last) < 10 {
                             continue;
                         }
                     }
+
+                    // Check if we have the peer's NatInfo with usable public
+                    // addresses (required for execute_punch — sending UDP/TCP
+                    // packets to the peer's mapped address).
+                    let peer_nat = protocol.peer_nat.get(peer_id).map(|v| v.clone());
+                    let can_execute = peer_nat.as_ref().is_some_and(|n| {
+                        !n.public_ips.is_empty() && !n.public_udp_ports.is_empty()
+                    });
+
                     protocol.last_punch_time.insert(peer_id.clone(), now);
-                    log::debug!(
-                        "auto-punching peer {peer_id} (peer nat={:?}, local nat={:?})",
-                        nat_info.nat_type,
-                        protocol.nat_info.read().nat_type
-                    );
-                    // Best-effort: notify peer via relay so they punch back
+
+                    if can_execute {
+                        log::debug!(
+                            "auto-punching peer {peer_id} (peer nat={:?}, local nat={:?})",
+                            peer_nat.as_ref().unwrap().nat_type,
+                            protocol.nat_info.read().nat_type
+                        );
+                    } else {
+                        // Even without the peer's NatInfo, we still send a
+                        // PunchRequest via relay. The request carries OUR
+                        // NatInfo (including NatObserve public address), so the
+                        // peer can learn our address and punch back. This
+                        // breaks the chicken-and-egg problem where two NAT'd
+                        // peers can never exchange NatInfo because they can't
+                        // directly connect for HelloReply.
+                        let reason = match &peer_nat {
+                            None => "no peer NatInfo yet".to_string(),
+                            Some(n) if n.public_ips.is_empty() => "peer has no public IPs".to_string(),
+                            Some(n) if n.public_udp_ports.is_empty() => "peer has no public UDP ports".to_string(),
+                            _ => "unknown".to_string(),
+                        };
+                        log::debug!(
+                            "auto-punch: sending PunchRequest to {peer_id} via relay \
+                             for NatInfo exchange (cannot execute_punch: {reason})"
+                        );
+                    }
+
+                    // Always send PunchRequest via relay — it carries our
+                    // NatInfo so the peer can learn our public address and
+                    // punch back. The PunchRequest handler on the peer side
+                    // stores our NatInfo in peer_nat.
                     let payload = protocol.punch_payload(peer_id.clone());
                     protocol
                         .pending_punch
@@ -1285,8 +1317,17 @@ impl ProtocolLayer {
                     let _ = protocol
                         .send_protocol(peer_id.clone(), ProtocolType::PunchRequest, &encoded)
                         .await;
-                    // Direct UDP/TCP punch
-                    let _ = protocol.execute_punch(peer_id.clone(), nat_info).await;
+
+                    // Only execute direct punch if we have the peer's public
+                    // address (from NatObserve). Without it, we don't know
+                    // where to send UDP/TCP punch packets.
+                    if let Some(nat_info) = peer_nat {
+                        if !nat_info.public_ips.is_empty()
+                            && !nat_info.public_udp_ports.is_empty()
+                        {
+                            let _ = protocol.execute_punch(peer_id.clone(), nat_info).await;
+                        }
+                    }
                 }
             }
         });
