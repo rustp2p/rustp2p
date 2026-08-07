@@ -206,8 +206,16 @@ impl EndPoint {
         let local_udp_ports = self.local_udp_ports().await;
         let local_tcp_port = self.local_tcp_port();
 
-        let mut public_udp_ports = local_udp_ports.clone();
-        public_udp_ports.fill(0);
+        // public_udp_ports starts empty — STUN uses a temporary socket so its
+        // mapped ports do NOT correspond to the main QUIC socket.  The real
+        // public ports are discovered via NatObserve (which observes the actual
+        // QUIC connection's source address) and appended later.
+        //
+        // Previously this was `local_udp_ports.clone()` then `fill(0)`, which
+        // produced [0, 0, ...].  Those zeros are harmful: in punch_udp's
+        // Symmetric branch, base_port=0 with port_range=N yields a prediction
+        // window of [1, N] (wrong) or [1, 0] (empty), wasting prediction slots.
+        let public_udp_ports: Vec<u16> = Vec::new();
 
         Ok(crate::nat::NatInfo {
             nat_type: stun_result.nat_type,

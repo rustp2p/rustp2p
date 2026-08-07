@@ -614,6 +614,10 @@ impl ProtocolLayer {
                                 .pending_nat_observe
                                 .insert(peer.peer_id.clone(), route.route_key());
                         }
+                        log::debug!(
+                            "sending NatObserveRequest to {} (direct route)",
+                            peer.peer_id
+                        );
                         let _ = protocol
                             .send_protocol(peer.peer_id, ProtocolType::NatObserveRequest, &[])
                             .await;
@@ -836,9 +840,15 @@ impl ProtocolLayer {
             }
             ProtocolType::NatObserveRequest => {
                 if self.is_confirmed_or_candidate(&src, route_key, metric) {
-                    let payload = encode_nat_observe_reply_payload(&NatObserveReplyPayload {
-                        observation: self.observation_from_route(route_key),
-                    });
+                    let observation = self.observation_from_route(route_key);
+                    log::debug!(
+                        "NatObserveRequest from {} — observed addr {} via {:?}",
+                        src,
+                        observation.observed_addr,
+                        observation.observed_protocol
+                    );
+                    let payload =
+                        encode_nat_observe_reply_payload(&NatObserveReplyPayload { observation });
                     self.send_protocol_to_route(
                         src,
                         route_key,
@@ -852,6 +862,12 @@ impl ProtocolLayer {
                 if self.is_confirmed_or_pending_nat_observe(&src, route_key, metric) {
                     let reply = decode_nat_observe_reply_payload(packet.payload())?;
                     if reply.observation.observer_peer_id == src && self.should_observe_with(&src) {
+                        log::info!(
+                            "NatObserveReply from {} — observed our public addr as {} via {:?}",
+                            src,
+                            reply.observation.observed_addr,
+                            reply.observation.observed_protocol
+                        );
                         self.apply_observation(reply.observation);
                         if metric == 0 {
                             self.confirm_direct_and_promote(peer, route_key);
@@ -1239,6 +1255,15 @@ impl ProtocolLayer {
                     let Some(nat_info) = protocol.peer_nat.get(peer_id).map(|v| v.clone()) else {
                         continue;
                     };
+                    // Need peer's public address (from NatObserve) to punch.
+                    // Without it, we don't know where to send punch packets.
+                    if nat_info.public_ips.is_empty() || nat_info.public_udp_ports.is_empty() {
+                        log::debug!(
+                            "auto-punch: skipping {peer_id} — no public address yet \
+                             (NatObserve may not have completed)"
+                        );
+                        continue;
+                    }
                     // Rate limit: at most once per 10 seconds per peer
                     if let Some(last) = protocol.last_punch_time.get(peer_id) {
                         if now.saturating_sub(*last) < 10 {
@@ -1269,11 +1294,28 @@ impl ProtocolLayer {
 }
 
 fn apply_stun_result_to_nat_info(info: &mut NatInfo, result: &rustp2p_core::stun::StunResult) {
+    // STUN detection uses a *temporary* UDP socket (bound to 0.0.0.0:0), so
+    // the mapped port it discovers belongs to that temp socket — NOT the main
+    // QUIC socket.  Using those ports as punch targets would be wrong.
+    //
+    // STUN is only reliable for:
+    //   - NAT type classification (Cone vs Symmetric)
+    //   - port_range estimation (for Symmetric port prediction)
+    //
+    // Actual public IP / port come from NatObserve, which observes the real
+    // QUIC connection's source address.
     info.nat_type = result.nat_type;
     info.public_port_range = result.port_range;
 }
 
 fn apply_observation_to_nat_info(info: &mut NatInfo, observation: &NatObservation) {
+    log::debug!(
+        "applying NatObserve: addr={} proto={:?} — before: public_ips={:?} ports={:?}",
+        observation.observed_addr,
+        observation.observed_protocol,
+        info.public_ips,
+        info.public_udp_ports
+    );
     match observation.observed_addr {
         SocketAddr::V4(addr) => {
             let ip = *addr.ip();
@@ -1880,7 +1922,10 @@ mod tests {
     }
 
     #[test]
-    fn stun_update_does_not_fill_public_ports_or_ipv6() {
+    fn stun_only_updates_nat_type_and_port_range() {
+        // STUN uses a temporary socket, so it must NOT populate public IPs /
+        // ports — those come from NatObserve which observes the real QUIC
+        // connection's source address.
         let mut info = NatInfo::default();
         let result = StunResult {
             nat_type: NatType::Symmetric,
@@ -1894,6 +1939,7 @@ mod tests {
 
         assert_eq!(info.nat_type, NatType::Symmetric);
         assert_eq!(info.public_port_range, 42);
+        // Public IPs and ports must remain empty — they come from NatObserve
         assert!(info.public_ips.is_empty());
         assert!(info.public_udp_ports.is_empty());
         assert!(info.ipv6.is_none());

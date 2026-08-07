@@ -180,13 +180,14 @@ impl Puncher {
         _punch_model: &PunchModel,
     ) {
         log::debug!(
-            "punch_udp count={} nat={:?} mapped_udp={:?} local_ipv4={:?}",
+            "punch_udp count={} nat={:?} public_ips={:?} public_ports={:?} port_range={}",
             count,
             peer_nat_info.nat_type,
-            peer_nat_info.mapping_udp_addr,
-            peer_nat_info.local_ipv4_addrs()
+            peer_nat_info.public_ips,
+            peer_nat_info.public_udp_ports,
+            peer_nat_info.public_port_range
         );
-        // Send to mapped addresses
+        // Send to manually configured mapping addresses
         if !peer_nat_info.mapping_udp_addr.is_empty() {
             let addrs: Vec<SocketAddr> = peer_nat_info
                 .mapping_udp_addr
@@ -198,6 +199,7 @@ impl Puncher {
                 let _ = self.pool.send_to(buf, *addr).await;
             }
         }
+        // Send to local addresses (same LAN)
         if !peer_nat_info.local_ipv4_addrs().is_empty() {
             let addrs = peer_nat_info.local_ipv4_addrs();
             for addr in &addrs {
@@ -207,47 +209,64 @@ impl Puncher {
 
         match peer_nat_info.nat_type {
             NatType::Symmetric => {
-                let max_k1 = 60;
+                let max_k1: usize = 60;
                 let mut max_k2: usize = rand::rng().random_range(600..800);
                 if count > 8 {
-                    max_k2 = ((max_k2 * 8) / count.max(1)).max(max_k1 as usize);
+                    max_k2 = ((max_k2 * 8) / count.max(1)).max(max_k1);
                 }
-                let port = peer_nat_info.public_udp_ports.first().copied().unwrap_or(0);
-                if peer_nat_info.public_port_range < max_k1 * 3 {
-                    let min_port = if port > peer_nat_info.public_port_range {
-                        port - peer_nat_info.public_port_range
-                    } else {
-                        1
-                    };
-                    let (max_port, overflow) =
-                        port.overflowing_add(peer_nat_info.public_port_range);
-                    let max_port = if overflow { 65535 } else { max_port };
-                    let local_range = min_port..=max_port;
-                    let default_addr =
-                        SocketAddr::V4(SocketAddrV4::new(std::net::Ipv4Addr::UNSPECIFIED, 0));
-                    let pub_addr = peer_nat_info
-                        .public_ipv4_addr()
-                        .into_iter()
-                        .next()
-                        .unwrap_or(default_addr);
-                    let start = self.port_cursor.lock().get(&pub_addr).copied().unwrap_or(0);
-                    let end = (start + max_k1 as usize).min(self.shuffled_ports.len());
-                    let ports = &self.shuffled_ports[start..end];
-                    let valid_ports: Vec<u16> = ports
-                        .iter()
-                        .filter(|p| local_range.contains(p))
-                        .copied()
-                        .collect();
-                    if !valid_ports.is_empty() {
-                        let pub_ip = peer_nat_info
-                            .public_ips
-                            .first()
-                            .copied()
-                            .unwrap_or(std::net::Ipv4Addr::UNSPECIFIED);
-                        self.punch_symmetric(&valid_ports, buf, &[pub_ip], max_k1 as usize)
+
+                let pub_ips: Vec<std::net::Ipv4Addr> = peer_nat_info.public_ips.clone();
+                if pub_ips.is_empty() {
+                    log::warn!(
+                        "punch_udp: Symmetric NAT peer has no public IPs — \
+                         NatObserve may not have completed, cannot punch"
+                    );
+                    return;
+                }
+
+                // Phase 1: Predicted range punching.
+                //
+                // For each known port (from NatObserve), generate a prediction
+                // window [port - range, port + range] and send to random ports
+                // within that window.  The port_range from STUN estimates how
+                // much the NAT varies port allocation between destinations.
+                let port_range = peer_nat_info.public_port_range;
+                if !peer_nat_info.public_udp_ports.is_empty() && (port_range as usize) < max_k1 * 3
+                {
+                    let mut predicted_ports: Vec<u16> = Vec::new();
+                    for &base_port in &peer_nat_info.public_udp_ports {
+                        let min_port = if base_port > port_range {
+                            base_port - port_range
+                        } else {
+                            1
+                        };
+                        let (max_port, overflow) = base_port.overflowing_add(port_range);
+                        let max_port = if overflow { 65535 } else { max_port };
+                        predicted_ports.extend(min_port..=max_port);
+                    }
+                    // Deduplicate and shuffle for randomized sending order
+                    predicted_ports.sort_unstable();
+                    predicted_ports.dedup();
+                    predicted_ports.shuffle(&mut rand::rng());
+
+                    let k = max_k1.min(predicted_ports.len());
+                    if k > 0 {
+                        log::debug!(
+                            "punch_symmetric phase 1: sending to {} predicted ports \
+                             (base_ports={:?}, range=±{}, ips={:?})",
+                            k,
+                            peer_nat_info.public_udp_ports,
+                            port_range,
+                            pub_ips
+                        );
+                        self.punch_symmetric(&predicted_ports[..k], buf, &pub_ips, k)
                             .await;
                     }
                 }
+
+                // Phase 2: Global random scan — send to random ports across
+                // the full 1-65535 range.  The cursor persists across punch
+                // attempts so we don't re-scan the same ports every time.
                 let default_addr =
                     SocketAddr::V4(SocketAddrV4::new(std::net::Ipv4Addr::UNSPECIFIED, 0));
                 let pub_addr = peer_nat_info
@@ -257,14 +276,15 @@ impl Puncher {
                     .unwrap_or(default_addr);
                 let start = self.port_cursor.lock().get(&pub_addr).copied().unwrap_or(0);
                 let end = (start + max_k2).min(self.shuffled_ports.len());
+                log::debug!(
+                    "punch_symmetric phase 2: global scan {} ports (range [{}, {}))",
+                    end - start,
+                    start,
+                    end
+                );
                 let mut index = start
                     + self
-                        .punch_symmetric(
-                            &self.shuffled_ports[start..end],
-                            buf,
-                            &peer_nat_info.public_ips,
-                            max_k2,
-                        )
+                        .punch_symmetric(&self.shuffled_ports[start..end], buf, &pub_ips, max_k2)
                         .await;
                 if index >= self.shuffled_ports.len() {
                     index = 0;
@@ -274,8 +294,17 @@ impl Puncher {
                 }
             }
             NatType::Cone => {
-                if let Some(addr) = peer_nat_info.public_ipv4_addr().into_iter().next() {
-                    self.pool.try_send_via_all(buf, addr).await;
+                // Send to ALL known public addresses, not just the first
+                let addrs = peer_nat_info.public_ipv4_addr();
+                if addrs.is_empty() {
+                    log::warn!(
+                        "punch_udp: Cone NAT peer has no public addresses — \
+                         NatObserve may not have completed, cannot punch"
+                    );
+                }
+                for addr in &addrs {
+                    log::debug!("punch_cone: sending to {addr}");
+                    self.pool.try_send_via_all(buf, *addr).await;
                 }
             }
         }

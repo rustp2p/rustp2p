@@ -102,6 +102,21 @@ pub async fn stun_test_nat(
             Ok(result) => {
                 if result.nat_type == NatType::Symmetric {
                     nat_type = NatType::Symmetric;
+                    // Extract data BEFORE breaking — port_range is critical for
+                    // Symmetric NAT port prediction.  Without this, port_range
+                    // stays at 0 and Phase-1 predicted-range punching is useless.
+                    for ip in result.public_ipv4 {
+                        ipv4_set.insert(ip);
+                    }
+                    for port in result.public_udp_ports {
+                        public_ports.insert(port);
+                    }
+                    if result.public_ipv6.is_some() && ipv6_addr.is_none() {
+                        ipv6_addr = result.public_ipv6;
+                    }
+                    if port_range < result.port_range {
+                        port_range = result.port_range;
+                    }
                     break;
                 }
                 for ip in result.public_ipv4 {
@@ -150,6 +165,19 @@ pub async fn stun_test_nat_with_socket(
             Ok(result) => {
                 if result.nat_type == NatType::Symmetric {
                     nat_type = NatType::Symmetric;
+                    // Same fix as stun_test_nat: extract before break.
+                    for ip in result.public_ipv4 {
+                        ipv4_set.insert(ip);
+                    }
+                    for port in result.public_udp_ports {
+                        public_ports.insert(port);
+                    }
+                    if result.public_ipv6.is_some() && ipv6_addr.is_none() {
+                        ipv6_addr = result.public_ipv6;
+                    }
+                    if port_range < result.port_range {
+                        port_range = result.port_range;
+                    }
                     break;
                 }
                 for ip in result.public_ipv4 {
