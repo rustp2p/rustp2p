@@ -772,13 +772,44 @@ impl ProtocolLayer {
                 if self.punch_allowed(&payload.src) {
                     // Store the peer's NatInfo from the punch payload so that
                     // auto-punch can reuse it in future maintenance cycles.
-                    // Without this, peer_nat would only be populated via
-                    // HelloReply — which never happens between two NAT'd peers
-                    // that can't directly connect.
                     self.peer_nat
                         .insert(payload.src.clone(), payload.nat_info.clone());
-                    self.execute_punch(payload.src.clone(), payload.nat_info)
-                        .await?;
+
+                    // Skip execute_punch if we already have a confirmed direct
+                    // route — the hole is already open, no need to keep punching.
+                    // We still send the PunchReply so the peer can complete its
+                    // request/response exchange and confirm its own route.
+                    if !self.has_direct_route(&payload.src) {
+                        // When the PunchRequest arrives via direct route
+                        // (metric == 0), the route_key contains the peer's
+                        // ACTUAL current source address as seen by our socket.
+                        // For Symmetric NAT this is far more accurate than the
+                        // NatInfo's public_ipv4 (which comes from NatObserve
+                        // via a different peer and uses a different mapped
+                        // port).  Inject this address so Phase-1 port prediction
+                        // centers on the real port instead of a stale one.
+                        let mut nat_info = payload.nat_info.clone();
+                        if metric == 0 {
+                            if let SocketAddr::V4(addr) = route_key.addr() {
+                                let ip = *addr.ip();
+                                if !nat_info.public_ips.contains(&ip) {
+                                    nat_info.public_ips.push(ip);
+                                }
+                                let port = addr.port();
+                                if !nat_info.public_udp_ports.contains(&port) {
+                                    nat_info.public_udp_ports.push(port);
+                                }
+                            }
+                        }
+                        self.execute_punch(payload.src.clone(), nat_info).await?;
+                    } else {
+                        log::debug!(
+                            "PunchRequest from {} — direct route already \
+                             established, skipping execute_punch",
+                            payload.src
+                        );
+                    }
+
                     let reply = encode_punch_payload(
                         &self
                             .punch_payload_with_request_id(payload.src.clone(), payload.request_id),
@@ -826,7 +857,26 @@ impl ProtocolLayer {
                     // can reuse it later.
                     self.peer_nat
                         .insert(payload.src.clone(), payload.nat_info.clone());
-                    self.execute_punch(payload.src, payload.nat_info).await?;
+
+                    // Skip execute_punch if direct route is already confirmed
+                    // (which may have just happened via the pending_punch match
+                    // above).  No need to keep punching an open hole.
+                    if !self.has_direct_route(&payload.src) {
+                        let mut nat_info = payload.nat_info.clone();
+                        if metric == 0 {
+                            if let SocketAddr::V4(addr) = route_key.addr() {
+                                let ip = *addr.ip();
+                                if !nat_info.public_ips.contains(&ip) {
+                                    nat_info.public_ips.push(ip);
+                                }
+                                let port = addr.port();
+                                if !nat_info.public_udp_ports.contains(&port) {
+                                    nat_info.public_udp_ports.push(port);
+                                }
+                            }
+                        }
+                        self.execute_punch(payload.src, nat_info).await?;
+                    }
                 }
             }
             ProtocolType::EchoRequest => {
@@ -1295,8 +1345,12 @@ impl ProtocolLayer {
                         // directly connect for HelloReply.
                         let reason = match &peer_nat {
                             None => "no peer NatInfo yet".to_string(),
-                            Some(n) if n.public_ips.is_empty() => "peer has no public IPs".to_string(),
-                            Some(n) if n.public_udp_ports.is_empty() => "peer has no public UDP ports".to_string(),
+                            Some(n) if n.public_ips.is_empty() => {
+                                "peer has no public IPs".to_string()
+                            }
+                            Some(n) if n.public_udp_ports.is_empty() => {
+                                "peer has no public UDP ports".to_string()
+                            }
                             _ => "unknown".to_string(),
                         };
                         log::debug!(
@@ -1322,8 +1376,7 @@ impl ProtocolLayer {
                     // address (from NatObserve). Without it, we don't know
                     // where to send UDP/TCP punch packets.
                     if let Some(nat_info) = peer_nat {
-                        if !nat_info.public_ips.is_empty()
-                            && !nat_info.public_udp_ports.is_empty()
+                        if !nat_info.public_ips.is_empty() && !nat_info.public_udp_ports.is_empty()
                         {
                             let _ = protocol.execute_punch(peer_id.clone(), nat_info).await;
                         }
