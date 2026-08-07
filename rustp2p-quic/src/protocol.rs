@@ -646,7 +646,16 @@ impl ProtocolLayer {
 
         match packet.protocol()? {
             ProtocolType::HelloRequest => {
-                self.confirm_tcp_route(&peer, route_key, metric);
+                // A HelloRequest proves the remote peer reached us. For direct
+                // routes (metric == 0) the subsequent HelloReply we send back
+                // through the same route key completes a bidirectional exchange,
+                // so we confirm the route for both TCP and UDP. For relayed
+                // hello requests only TCP is confirmed (connection-oriented).
+                if metric == 0 {
+                    self.confirm_direct_and_promote(peer.clone(), route_key);
+                } else {
+                    self.confirm_tcp_route(&peer, route_key, metric);
+                }
                 let payload = encode_hello_payload(
                     &self
                         .hello_payload(&src, Some(self.observation_from_route(route_key)))
@@ -670,7 +679,7 @@ impl ProtocolLayer {
                 if metric == 0 && pending {
                     // A reply to our raw-address hello proves we can send to the
                     // peer and receive from it over the same direct route.
-                    self.transport.confirm_peer_route(hello.peer, route_key, 0);
+                    self.confirm_direct_and_promote(hello.peer, route_key);
                 } else {
                     self.transport.upsert_peer_info(hello.peer);
                 }
@@ -739,10 +748,9 @@ impl ProtocolLayer {
                     if peer_id == payload.src && metric == 0 {
                         // Matching request id prevents unrelated punch traffic
                         // from promoting a route to direct reachability.
-                        self.transport.confirm_peer_route(
+                        self.confirm_direct_and_promote(
                             self.peer_info_from_packet(&payload.src, route_key, metric),
                             route_key,
-                            0,
                         );
                     }
                 }
@@ -790,7 +798,7 @@ impl ProtocolLayer {
                     if reply.observation.observer_peer_id == src && self.should_observe_with(&src) {
                         self.apply_observation(reply.observation);
                         if metric == 0 {
-                            self.transport.confirm_peer_route(peer, route_key, 0);
+                            self.confirm_direct_and_promote(peer, route_key);
                         }
                     }
                 }
@@ -830,7 +838,16 @@ impl ProtocolLayer {
     }
 
     async fn execute_punch(&self, peer_id: PeerId, peer_nat_info: NatInfo) -> io::Result<()> {
-        let payload = encode_punch_payload(&self.punch_payload(peer_id.clone()));
+        let payload = self.punch_payload(peer_id.clone());
+        // Record the request_id so the direct PunchReply (metric == 0) can be
+        // matched and the direct route confirmed. Without this, the PunchReply
+        // echoes execute_punch's request_id which never matches pending_punch
+        // (which only held the original punch()'s relay request_id), so direct
+        // routes discovered via NAT hole punching were never confirmed through
+        // the punch mechanism itself.
+        self.pending_punch
+            .insert(payload.request_id, peer_id.clone());
+        let payload = encode_punch_payload(&payload);
         let packet = Packet::build(
             ProtocolType::PunchRequest,
             self.peer_id.clone(),
@@ -1036,9 +1053,19 @@ impl ProtocolLayer {
         if route_key.protocol().is_tcp() && metric == 0 {
             // TCP transports are connection-oriented, so a valid direct control
             // packet on TCP is enough to confirm bidirectional reachability.
-            self.transport
-                .confirm_peer_route(peer.clone(), route_key, metric);
+            self.confirm_direct_and_promote(peer.clone(), route_key);
         }
+    }
+
+    /// Confirm a direct (metric == 0) route and remove the corresponding
+    /// candidate entry. Called after a protocol exchange proves bidirectional
+    /// reachability (HelloRequest→HelloReply, PunchRequest→PunchReply, or
+    /// TCP control packet). Removing the candidate prevents redundant probing
+    /// and avoids stale entries lingering after confirmation.
+    fn confirm_direct_and_promote(&self, peer: PeerInfo, route_key: RouteKey) {
+        let peer_id = peer.peer_id.clone();
+        self.transport.confirm_peer_route(peer, route_key, 0);
+        self.route_candidates.remove(&peer_id);
     }
 
     fn confirm_relay_route_from_control(&self, peer: &PeerInfo, route_key: RouteKey, metric: u8) {
@@ -1088,10 +1115,41 @@ impl ProtocolLayer {
                 if protocol.closed.load(Ordering::Relaxed) {
                     break;
                 }
+                // Query confirmed peers for route discovery updates
                 for peer in protocol.transport.known_peers() {
                     if peer.peer_id != protocol.peer_id {
                         let _ = protocol.query_routes(peer.peer_id).await;
                     }
+                }
+                // Probe route candidates that aren't yet confirmed.
+                // Sending HelloRequest to a candidate and receiving HelloReply
+                // back proves bidirectional reachability, promoting the
+                // candidate to a confirmed direct route. This is
+                // transport-agnostic: it works regardless of whether the
+                // candidate was discovered via bootstrap, NAT hole punching,
+                // or forwarded traffic. The existing HelloReply handler checks
+                // pending_hello_routes and calls confirm_direct_and_promote.
+                let candidates: Vec<(PeerId, RouteKey)> = protocol
+                    .route_candidates
+                    .iter()
+                    .filter(|e| *e.key() != protocol.peer_id)
+                    .map(|e| (e.key().clone(), *e.value()))
+                    .collect();
+                for (peer_id, route_key) in candidates {
+                    // Skip if already confirmed — candidate has been promoted
+                    if protocol.transport.route_for(&peer_id).is_ok() {
+                        continue;
+                    }
+                    // Record pending hello so HelloReply handler can confirm
+                    protocol.pending_hello_routes.insert(route_key);
+                    let _ = protocol
+                        .send_protocol_to_route(
+                            peer_id,
+                            route_key,
+                            ProtocolType::HelloRequest,
+                            &[],
+                        )
+                        .await;
                 }
             }
         });

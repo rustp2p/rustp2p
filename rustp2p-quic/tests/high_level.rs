@@ -264,3 +264,140 @@ async fn punch_whitelist_can_be_changed_at_runtime() {
 
     close_all(&[&a, &b]).await;
 }
+
+#[tokio::test]
+#[serial]
+async fn one_way_bootstrap_both_directions_can_send() {
+    let a = node("oneway-send-a").await;
+    let b = node("oneway-send-b").await;
+
+    // Only b bootstraps to a -- one-way route confirmation
+    b.add_bootstrap(a.local_addr().unwrap()).await.unwrap();
+
+    // Wait for a to discover b
+    wait_for_peer(&a, "oneway-send-b").await;
+
+    // b -> a should succeed (b has a's confirmed route via HelloReply)
+    b.send_to(a.peer_id(), b"hello from b").await.unwrap();
+    let msg = tokio::time::timeout(Duration::from_secs(5), a.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(msg.src, b.peer_id());
+    assert_eq!(msg.payload.as_ref(), b"hello from b");
+
+    // a -> b should also succeed after the fix (a confirms b's route
+    // when it receives the HelloRequest and sends HelloReply back)
+    a.send_to(b.peer_id(), b"hello from a").await.unwrap();
+    let msg = tokio::time::timeout(Duration::from_secs(5), b.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(msg.src, a.peer_id());
+    assert_eq!(msg.payload.as_ref(), b"hello from a");
+
+    // Verify is_direct is correctly set on both sides
+    let peers_a = a.known_peers();
+    let peer_b = peers_a
+        .iter()
+        .find(|p| p.peer_id == b.peer_id())
+        .expect("node-a should know node-b");
+    assert!(
+        peer_b.is_direct,
+        "node-a should see node-b as direct after fix"
+    );
+
+    let peers_b = b.known_peers();
+    let peer_a = peers_b
+        .iter()
+        .find(|p| p.peer_id == a.peer_id())
+        .expect("node-b should know node-a");
+    assert!(peer_a.is_direct, "node-b should see node-a as direct");
+
+    close_all(&[&a, &b]).await;
+}
+
+#[tokio::test]
+#[serial]
+async fn one_way_bootstrap_stream_works() {
+    let a = node("oneway-stream-a").await;
+    let b = node("oneway-stream-b").await;
+
+    // Only b bootstraps to a -- one-way route confirmation
+    b.add_bootstrap(a.local_addr().unwrap()).await.unwrap();
+
+    // Wait for a to discover b
+    wait_for_peer(&a, "oneway-stream-b").await;
+
+    // b opens a reliable stream to a
+    let (mut send, _recv) = b.open_bi(a.peer_id()).await.unwrap();
+    send.write_all(b"stream data").await.unwrap();
+    send.finish().unwrap();
+
+    // a should receive the stream
+    let mut inbound = tokio::time::timeout(Duration::from_secs(15), a.accept_bi())
+        .await
+        .expect("timed out waiting for stream")
+        .expect("accept_bi failed");
+    assert_eq!(inbound.peer_id, b.peer_id());
+
+    let mut buf = [0u8; 32];
+    let n = inbound.recv.read(&mut buf).await.unwrap().unwrap();
+    assert_eq!(&buf[..n], b"stream data");
+
+    close_all(&[&a, &b]).await;
+}
+
+#[tokio::test]
+#[serial]
+async fn direct_and_relay_routes_coexist() {
+    let a = node("coexist-a").await;
+    let b = node("coexist-b").await;
+    let c = node("coexist-c").await;
+
+    // Form a chain: A — B — C
+    a.add_bootstrap(b.local_addr().unwrap()).await.unwrap();
+    b.add_bootstrap(a.local_addr().unwrap()).await.unwrap();
+    b.add_bootstrap(c.local_addr().unwrap()).await.unwrap();
+    c.add_bootstrap(b.local_addr().unwrap()).await.unwrap();
+
+    // Wait for A to discover C via B (relay route)
+    wait_for_peer(&a, "coexist-c").await;
+
+    // A should see C as Relay (no direct route yet)
+    assert_eq!(
+        a.link_mode(c.peer_id()),
+        Some(LinkMode::Relay),
+        "A should only have a relay route to C before direct bootstrap"
+    );
+
+    // Now A bootstraps directly to C, creating a direct route
+    a.add_bootstrap(c.local_addr().unwrap()).await.unwrap();
+
+    // Wait for the direct route to be confirmed
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if a.link_mode(c.peer_id()) == Some(LinkMode::Direct) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("timed out waiting for direct route to C");
+
+    // A should now see C as Direct (preferred over relay by sort_key)
+    assert_eq!(a.link_mode(c.peer_id()), Some(LinkMode::Direct));
+
+    // A should have BOTH routes: direct and relay (coexistence)
+    let routes = a.routes(c.peer_id());
+    let direct_count = routes.iter().filter(|r| r.is_direct()).count();
+    let relay_count = routes.iter().filter(|r| r.is_relay()).count();
+    assert_eq!(direct_count, 1, "should have exactly one direct route to C");
+    assert!(
+        relay_count >= 1,
+        "should have at least one relay route to C (coexistence)"
+    );
+
+    close_all(&[&a, &b, &c]).await;
+}

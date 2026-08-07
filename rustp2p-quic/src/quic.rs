@@ -609,7 +609,13 @@ impl QuicEndpoint {
                 "stream destination peer mismatch",
             ));
         }
-        self.protocol.ensure_peer_reachable(&header.src)?;
+        // Use route_metric_for (which falls back to route_candidates) instead
+        // of ensure_peer_reachable (which only checks confirmed routes). The
+        // stream has already arrived over an established QUIC connection whose
+        // TLS handshake verified the peer's identity, so accepting it from a
+        // candidate is safe — consistent with how handle_incoming_datagram
+        // uses route_metric_for for the same purpose.
+        let _ = self.protocol.route_metric_for(&header.src)?;
         let incoming = IncomingBiStream {
             peer_id: header.src,
             send: ReliableSendStream::new(send),

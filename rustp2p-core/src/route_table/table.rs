@@ -368,13 +368,27 @@ impl<PeerID: Hash + Eq + Clone> RouteTable<PeerID> {
         let (peer_id, (_, list)) = route_table.pair_mut();
         let mut exist_index = None;
         for (index, (x, time)) in list.iter_mut().enumerate() {
-            if x.metric < route.metric && self.load_balance != LoadBalance::LowestLatency {
-                // When not preferring latency, new route must not be longer than existing
+            if x.metric < route.metric
+                && self.load_balance != LoadBalance::LowestLatency
+                && x.is_direct() == route.is_direct()
+            {
+                // When not preferring latency, reject a new route only if a
+                // shorter route of the *same type* (direct vs relay) already
+                // exists. This allows direct and relay routes to coexist.
                 return false;
             }
             if x.route_key() == key {
                 time.store(Instant::now());
                 if only_if_absent {
+                    return true;
+                }
+                // Don't downgrade a direct route (metric 0) to a relay route
+                // (metric > 0) when the same physical path is already known
+                // to be direct. Route discovery responses can arrive via the
+                // same route_key but carry a higher metric (the advertised
+                // peer's own metric + 1), which does not change the physical
+                // reachability of this path.
+                if x.is_direct() && !route.is_direct() {
                     return true;
                 }
                 x.metric = route.metric;
@@ -385,24 +399,38 @@ impl<PeerID: Hash + Eq + Clone> RouteTable<PeerID> {
         }
         if let Some(index) = exist_index {
             if self.load_balance != LoadBalance::MostRecent {
-                list.sort_by_key(|(k, _)| k.rtt);
+                if self.load_balance == LoadBalance::LowestLatency {
+                    list.sort_by_key(|(k, _)| k.rtt);
+                } else {
+                    list.sort_by_key(|(k, _)| k.sort_key());
+                }
             } else {
                 list.swap(0, index);
             }
         } else {
-            if self.load_balance != LoadBalance::LowestLatency && route.is_direct() {
-                // When not preferring latency, keep only direct routes if a direct route is added
-                list.retain(|(k, _)| k.is_direct());
-            };
+            // Direct and relay routes coexist. When a direct route is added,
+            // existing relay routes are retained as fallback so that
+            // communication can continue if the direct path becomes stale
+            // (e.g. NAT mapping expires).
             if route.is_direct() {
                 self.route_key_table
                     .insert(route.route_key(), peer_id.clone());
             }
-            if self.load_balance == LoadBalance::MostRecent {
-                list.insert(0, (route, AtomicCell::new(Instant::now())));
-            } else {
-                list.sort_by_key(|(k, _)| k.rtt);
-                list.push((route, AtomicCell::new(Instant::now())));
+            list.push((route, AtomicCell::new(Instant::now())));
+            // Sort after push so the newly added route is included in the
+            // ordering. For MinHopLowestLatency this places direct routes
+            // (metric 0) ahead of relay routes.
+            match self.load_balance {
+                LoadBalance::MostRecent => {
+                    let last = list.len() - 1;
+                    list.swap(0, last);
+                }
+                LoadBalance::LowestLatency => {
+                    list.sort_by_key(|(k, _)| k.rtt);
+                }
+                _ => {
+                    list.sort_by_key(|(k, _)| k.sort_key());
+                }
             }
         }
         true
