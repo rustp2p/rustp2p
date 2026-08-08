@@ -929,7 +929,7 @@ impl ProtocolLayer {
                             .routes(src.clone())
                             .into_iter()
                             .find(|r| r.route_key() == route_key)
-                            .map(|r| r.rtt())
+                            .and_then(|r| r.rtt())
                             .unwrap_or(DEFAULT_RTT);
                         // Only log if RTT changed significantly (> 10ms delta)
                         if (rtt as i64 - old_rtt as i64).abs() > 10 {

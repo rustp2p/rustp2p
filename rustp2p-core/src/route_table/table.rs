@@ -46,16 +46,18 @@ impl Route {
     pub fn is_relay(&self) -> bool {
         self.metric > 0
     }
-    pub fn rtt(&self) -> u32 {
-        self.rtt
-    }
-    /// Returns true if a real RTT measurement is available.
+    /// Returns the measured round-trip time, or `None` if no measurement
+    /// has been taken yet.
     ///
-    /// Routes that have not yet been measured carry the sentinel
-    /// [`DEFAULT_RTT`] value; this method distinguishes a measured
-    /// route from one whose RTT is still unknown.
-    pub fn has_rtt(&self) -> bool {
-        self.rtt != DEFAULT_RTT
+    /// Routes start with an internal sentinel value; this method
+    /// translates that into a clean `Option` so callers never need to
+    /// know the sentinel or compare against magic numbers.
+    pub fn rtt(&self) -> Option<u32> {
+        if self.rtt != DEFAULT_RTT {
+            Some(self.rtt)
+        } else {
+            None
+        }
     }
     pub fn metric(&self) -> u8 {
         self.metric

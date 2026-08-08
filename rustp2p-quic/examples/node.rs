@@ -251,11 +251,10 @@ async fn handle_command(endpoint: &Endpoint, line: &str) -> rustp2p_quic::Result
                 }
                 for route in &routes {
                     let kind = if route.is_direct() { "direct" } else { "relay" };
-                    let rtt = if route.has_rtt() {
-                        format!("{}ms", route.rtt())
-                    } else {
-                        "-".to_string()
-                    };
+                    let rtt = route
+                        .rtt()
+                        .map(|v| format!("{}ms", v))
+                        .unwrap_or_else(|| "-".to_string());
                     println!(
                         "  [{:>5}] {} metric={} rtt={}",
                         kind,
