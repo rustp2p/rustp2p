@@ -22,57 +22,24 @@
 
 rustp2p simplifies NAT into two categories: **Cone NAT** and **Symmetric NAT**.
 
-<svg viewBox="0 0 680 310" width="100%" xmlns="http://www.w3.org/2000/svg" role="img">
-  <title>NAT type comparison: Cone vs Symmetric</title>
-  <desc>Cone NAT uses the same mapped port for all destinations; Symmetric NAT assigns different ports per destination.</desc>
-  <defs>
-    <marker id="a1" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-      <path d="M2 1L8 5L2 9" fill="none" stroke="#666666" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-    </marker>
-  </defs>
-  <rect x="20" y="10" width="310" height="290" rx="12" fill="#E6F1FB" stroke="#85B7EB" stroke-width="0.5"/>
-  <text x="175" y="35" text-anchor="middle" font-family="sans-serif" font-size="14" font-weight="500" fill="#0C447C">Cone NAT</text>
-  <text x="175" y="52" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#185FA5">Same port for all destinations</text>
-  <rect x="95" y="68" width="160" height="36" rx="8" fill="#B5D4F4" stroke="#378ADD" stroke-width="0.5"/>
-  <text x="175" y="86" text-anchor="middle" font-family="sans-serif" font-size="13" fill="#0C447C">10.0.0.5:51820</text>
-  <line x1="175" y1="104" x2="175" y2="128" stroke="#378ADD" stroke-width="1.5" marker-end="url(#a1)"/>
-  <rect x="95" y="130" width="160" height="36" rx="8" fill="#378ADD" stroke="#185FA5" stroke-width="0.5"/>
-  <text x="175" y="148" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="500" fill="#FFFFFF">NAT 203.0.113.10</text>
-  <line x1="130" y1="166" x2="100" y2="195" stroke="#378ADD" stroke-width="1.5" marker-end="url(#a1)"/>
-  <line x1="175" y1="166" x2="175" y2="195" stroke="#378ADD" stroke-width="1.5" marker-end="url(#a1)"/>
-  <line x1="220" y1="166" x2="250" y2="195" stroke="#378ADD" stroke-width="1.5" marker-end="url(#a1)"/>
-  <rect x="55" y="200" width="90" height="40" rx="6" fill="#E6F1FB" stroke="#85B7EB" stroke-width="0.5"/>
-  <text x="100" y="216" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#0C447C">STUN A</text>
-  <text x="100" y="232" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="500" fill="#185FA5">:40000</text>
-  <rect x="130" y="200" width="90" height="40" rx="6" fill="#E6F1FB" stroke="#85B7EB" stroke-width="0.5"/>
-  <text x="175" y="216" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#0C447C">Peer X</text>
-  <text x="175" y="232" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="500" fill="#185FA5">:40000</text>
-  <rect x="205" y="200" width="90" height="40" rx="6" fill="#E6F1FB" stroke="#85B7EB" stroke-width="0.5"/>
-  <text x="250" y="216" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#0C447C">Peer Y</text>
-  <text x="250" y="232" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="500" fill="#185FA5">:40000</text>
-  <text x="175" y="275" text-anchor="middle" font-family="sans-serif" font-size="12" font-style="italic" fill="#185FA5">All destinations see the same port</text>
-  <rect x="350" y="10" width="310" height="290" rx="12" fill="#FAEEDA" stroke="#FAC775" stroke-width="0.5"/>
-  <text x="505" y="35" text-anchor="middle" font-family="sans-serif" font-size="14" font-weight="500" fill="#633806">Symmetric NAT</text>
-  <text x="505" y="52" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#854F0B">Different port per destination</text>
-  <rect x="425" y="68" width="160" height="36" rx="8" fill="#FAC775" stroke="#EF9F27" stroke-width="0.5"/>
-  <text x="505" y="86" text-anchor="middle" font-family="sans-serif" font-size="13" fill="#633806">10.0.0.5:51820</text>
-  <line x1="505" y1="104" x2="505" y2="128" stroke="#EF9F27" stroke-width="1.5" marker-end="url(#a1)"/>
-  <rect x="425" y="130" width="160" height="36" rx="8" fill="#EF9F27" stroke="#854F0B" stroke-width="0.5"/>
-  <text x="505" y="148" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="500" fill="#FFFFFF">NAT 198.51.100.20</text>
-  <line x1="460" y1="166" x2="430" y2="195" stroke="#EF9F27" stroke-width="1.5" marker-end="url(#a1)"/>
-  <line x1="505" y1="166" x2="505" y2="195" stroke="#EF9F27" stroke-width="1.5" marker-end="url(#a1)"/>
-  <line x1="550" y1="166" x2="580" y2="195" stroke="#EF9F27" stroke-width="1.5" marker-end="url(#a1)"/>
-  <rect x="385" y="200" width="90" height="40" rx="6" fill="#FAEEDA" stroke="#FAC775" stroke-width="0.5"/>
-  <text x="430" y="216" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#633806">STUN A</text>
-  <text x="430" y="232" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="500" fill="#854F0B">:40001</text>
-  <rect x="460" y="200" width="90" height="40" rx="6" fill="#FAEEDA" stroke="#FAC775" stroke-width="0.5"/>
-  <text x="505" y="216" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#633806">Peer X</text>
-  <text x="505" y="232" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="500" fill="#854F0B">:40012</text>
-  <rect x="535" y="200" width="90" height="40" rx="6" fill="#FAEEDA" stroke="#FAC775" stroke-width="0.5"/>
-  <text x="580" y="216" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#633806">Peer Y</text>
-  <text x="580" y="232" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="500" fill="#854F0B">:40018</text>
-  <text x="505" y="275" text-anchor="middle" font-family="sans-serif" font-size="12" font-style="italic" fill="#854F0B">Each destination sees a different port</text>
-</svg>
+```mermaid
+flowchart TD
+    subgraph Cone["Cone NAT — Same port for all destinations"]
+        direction TB
+        C1["10.0.0.5:51820"] --> C2["NAT 203.0.113.10"]
+        C2 --> C3["STUN A :40000"]
+        C2 --> C4["Peer X :40000"]
+        C2 --> C5["Peer Y :40000"]
+    end
+
+    subgraph Sym["Symmetric NAT — Different port per destination"]
+        direction TB
+        S1["10.0.0.5:51820"] --> S2["NAT 198.51.100.20"]
+        S2 --> S3["STUN A :40001"]
+        S2 --> S4["Peer X :40012"]
+        S2 --> S5["Peer Y :40018"]
+    end
+```
 
 ### 1.1 Cone NAT
 
@@ -130,39 +97,26 @@ Cone NAT can be further classified into three subtypes (rustp2p does not differe
 
 The core principle of UDP hole punching: **Both peers simultaneously send packets to each other, each creating an outbound mapping on their own NAT. This mapping allows the other peer's inbound packets to pass through.**
 
-<svg viewBox="0 0 680 380" width="100%" xmlns="http://www.w3.org/2000/svg" role="img">
-  <title>Bidirectional simultaneous hole punching</title>
-  <desc>Two peers behind NATs simultaneously send packets to each other, creating mappings that allow inbound traffic.</desc>
-  <defs>
-    <marker id="a2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-      <path d="M2 1L8 5L2 9" fill="none" stroke="#666666" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-    </marker>
-  </defs>
-  <text x="340" y="25" text-anchor="middle" font-family="sans-serif" font-size="14" font-weight="500" fill="#333333">Bidirectional simultaneous hole punching</text>
-  <rect x="50" y="50" width="140" height="44" rx="8" fill="#B5D4F4" stroke="#378ADD" stroke-width="0.5"/>
-  <text x="120" y="68" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="500" fill="#0C447C">node-c</text>
-  <text x="120" y="84" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#185FA5">10.0.0.5:51820</text>
-  <line x1="120" y1="94" x2="120" y2="118" stroke="#378ADD" stroke-width="1.5" marker-end="url(#a2)"/>
-  <rect x="50" y="120" width="140" height="40" rx="8" fill="#378ADD" stroke="#185FA5" stroke-width="0.5"/>
-  <text x="120" y="138" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="500" fill="#FFFFFF">NAT-C (Cone)</text>
-  <text x="120" y="153" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#E6F1FB">203.0.113.10:40000</text>
-  <rect x="490" y="50" width="140" height="44" rx="8" fill="#FAC775" stroke="#EF9F27" stroke-width="0.5"/>
-  <text x="560" y="68" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="500" fill="#633806">node-b</text>
-  <text x="560" y="84" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#854F0B">10.1.0.5:51820</text>
-  <line x1="560" y1="94" x2="560" y2="118" stroke="#EF9F27" stroke-width="1.5" marker-end="url(#a2)"/>
-  <rect x="490" y="120" width="140" height="40" rx="8" fill="#EF9F27" stroke="#854F0B" stroke-width="0.5"/>
-  <text x="560" y="138" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="500" fill="#FFFFFF">NAT-B (Symmetric)</text>
-  <text x="560" y="153" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#FAEEDA">198.51.100.20:???</text>
-  <line x1="190" y1="195" x2="490" y2="195" stroke="#378ADD" stroke-width="2" marker-end="url(#a2)"/>
-  <text x="340" y="185" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="500" fill="#0C447C">Step 1: node-c sends (port prediction)</text>
-  <text x="340" y="212" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#185FA5">NAT-C creates mapping: allow inbound from 198.51.100.20</text>
-  <line x1="490" y1="245" x2="190" y2="245" stroke="#EF9F27" stroke-width="2" marker-end="url(#a2)"/>
-  <text x="340" y="235" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="500" fill="#633806">Step 2: node-b sends (direct to fixed port)</text>
-  <text x="340" y="262" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#854F0B">NAT-B creates mapping: allow inbound from 203.0.113.10</text>
-  <rect x="170" y="290" width="340" height="60" rx="12" fill="#EAF3DE" stroke="#97C459" stroke-width="0.5"/>
-  <text x="340" y="312" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="500" fill="#27500A">Step 3: Direct connection established!</text>
-  <text x="340" y="332" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#3B6D11">Both NAT mappings active, packets flow freely in both directions</text>
-</svg>
+```mermaid
+flowchart TD
+    subgraph C["node-c (Cone NAT)"]
+        direction TB
+        C1["node-c<br/>10.0.0.5:51820"]
+        C2["NAT-C (Cone)<br/>203.0.113.10:40000"]
+        C1 --> C2
+    end
+
+    subgraph B["node-b (Symmetric NAT)"]
+        direction TB
+        B1["node-b<br/>10.1.0.5:51820"]
+        B2["NAT-B (Symmetric)<br/>198.51.100.20:???"]
+        B1 --> B2
+    end
+
+    C2 -->|Step 1: node-c sends<br/>port prediction| B2
+    B2 -->|Step 2: node-b sends<br/>direct to fixed port| C2
+    C2 -->|Step 3: Direct connection!<br/>Both NAT mappings active| B2
+```
 
 ```
               Public Internet
@@ -205,36 +159,23 @@ Only when node-c **also sends packets to node-b's IP** will node-c's NAT create 
 
 Different NAT type combinations have different success rates:
 
-<svg viewBox="0 0 680 310" width="100%" xmlns="http://www.w3.org/2000/svg" role="img">
-  <title>NAT combination punching strategies</title>
-  <desc>Three NAT combinations: Cone-Cone (direct both ways), Cone-Symmetric (prediction + direct), Symmetric-Symmetric (bidirectional prediction).</desc>
-  <defs>
-    <marker id="a3" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-      <path d="M2 1L8 5L2 9" fill="none" stroke="#666666" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-    </marker>
-  </defs>
-  <rect x="20" y="15" width="640" height="75" rx="10" fill="#E6F1FB" stroke="#85B7EB" stroke-width="0.5"/>
-  <text x="40" y="38" font-family="sans-serif" font-size="13" font-weight="500" fill="#0C447C">Cone <-> Cone</text>
-  <text x="40" y="56" font-family="sans-serif" font-size="12" fill="#185FA5">node-c (Cone :40000) <-> node-b (Cone :50000)</text>
-  <text x="40" y="72" font-family="sans-serif" font-size="11" fill="#185FA5">Strategy: direct send both ways</text>
-  <rect x="520" y="30" width="120" height="44" rx="8" fill="#97C459" stroke="#639922" stroke-width="0.5"/>
-  <text x="580" y="48" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="500" fill="#173404">Success rate</text>
-  <text x="580" y="64" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="500" fill="#27500A">~100%</text>
-  <rect x="20" y="105" width="640" height="75" rx="10" fill="#F1EFE8" stroke="#B4B2A9" stroke-width="0.5"/>
-  <text x="40" y="128" font-family="sans-serif" font-size="13" font-weight="500" fill="#444441">Cone <-> Symmetric</text>
-  <text x="40" y="146" font-family="sans-serif" font-size="12" fill="#5F5E5A">node-c (Cone :40000) <-> node-b (Symmetric :???)</text>
-  <text x="40" y="162" font-family="sans-serif" font-size="11" fill="#5F5E5A">Strategy: node-c predicts ports | node-b sends direct</text>
-  <rect x="520" y="120" width="120" height="44" rx="8" fill="#FAC775" stroke="#EF9F27" stroke-width="0.5"/>
-  <text x="580" y="138" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="500" fill="#633806">Success rate</text>
-  <text x="580" y="154" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="500" fill="#854F0B">60-90%</text>
-  <rect x="20" y="195" width="640" height="75" rx="10" fill="#FAEEDA" stroke="#FAC775" stroke-width="0.5"/>
-  <text x="40" y="218" font-family="sans-serif" font-size="13" font-weight="500" fill="#633806">Symmetric <-> Symmetric</text>
-  <text x="40" y="236" font-family="sans-serif" font-size="12" fill="#854F0B">node-c (Symmetric :???) <-> node-b (Symmetric :???)</text>
-  <text x="40" y="252" font-family="sans-serif" font-size="11" fill="#854F0B">Strategy: both predict ports + assistant sockets</text>
-  <rect x="520" y="210" width="120" height="44" rx="8" fill="#F0997B" stroke="#D85A30" stroke-width="0.5"/>
-  <text x="580" y="228" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="500" fill="#4A1B0C">Success rate</text>
-  <text x="580" y="244" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="500" fill="#712B13">Lower</text>
-</svg>
+```mermaid
+flowchart TD
+    subgraph CC["Cone &lt;-&gt; Cone — Strategy: direct send both ways"]
+        CC1["node-c (Cone :40000) &lt;-&gt; node-b (Cone :50000)"]
+        CC2["Success rate: ~100%"]
+    end
+
+    subgraph CS["Cone &lt;-&gt; Symmetric — Strategy: node-c predicts ports, node-b sends direct"]
+        CS1["node-c (Cone :40000) &lt;-&gt; node-b (Symmetric :???)"]
+        CS2["Success rate: 60-90%"]
+    end
+
+    subgraph SS["Symmetric &lt;-&gt; Symmetric — Strategy: both predict ports + assistant sockets"]
+        SS1["node-c (Symmetric :???) &lt;-&gt; node-b (Symmetric :???)"]
+        SS2["Success rate: Lower"]
+    end
+```
 
 ### 3.1 Cone <-> Cone (Easiest)
 
@@ -407,35 +348,31 @@ Trigger 3: Application-layer explicit call
 
 #### 4.5.2 UDP Punching Strategy
 
-<svg viewBox="0 0 680 380" width="100%" xmlns="http://www.w3.org/2000/svg" role="img">
-  <title>Port prediction strategy for Symmetric NAT</title>
-  <desc>Two-phase port prediction: Phase 1 generates candidates around known port, Phase 2 scans globally.</desc>
-  <defs>
-    <marker id="a4" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-      <path d="M2 1L8 5L2 9" fill="none" stroke="#666666" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-    </marker>
-  </defs>
-  <text x="340" y="25" text-anchor="middle" font-family="sans-serif" font-size="14" font-weight="500" fill="#333333">Port prediction strategy (Symmetric NAT peer)</text>
-  <rect x="140" y="40" width="400" height="40" rx="8" fill="#F1EFE8" stroke="#B4B2A9" stroke-width="0.5"/>
-  <text x="340" y="58" text-anchor="middle" font-family="sans-serif" font-size="12" fill="#444441">Known: 198.51.100.20:40012 (via NatObserve), port_range = 4 (via STUN)</text>
-  <text x="340" y="73" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#5F5E5A">predict_range = max(port_range x 10, 100) = 100</text>
-  <line x1="340" y1="80" x2="340" y2="100" stroke="#888780" stroke-width="1.5" marker-end="url(#a4)"/>
-  <rect x="40" y="105" width="600" height="100" rx="10" fill="#FAEEDA" stroke="#FAC775" stroke-width="0.5"/>
-  <text x="60" y="128" font-family="sans-serif" font-size="13" font-weight="500" fill="#633806">Phase 1: Range Prediction (max 60 ports per round)</text>
-  <text x="60" y="148" font-family="sans-serif" font-size="12" fill="#854F0B">1. Candidate range: [40012 - 100, 40012 + 100] = [39912, 40112]</text>
-  <text x="60" y="166" font-family="sans-serif" font-size="12" fill="#854F0B">2. Generate 201 candidate ports, deduplicate, random shuffle</text>
-  <text x="60" y="184" font-family="sans-serif" font-size="12" fill="#854F0B">3. Send first 60 via try_send_via_all (main + assistant sockets)</text>
-  <text x="60" y="200" font-family="sans-serif" font-size="11" fill="#854F0B">Each outbound packet creates a NAT mapping on sender's side</text>
-  <line x1="340" y1="205" x2="340" y2="225" stroke="#888780" stroke-width="1.5" marker-end="url(#a4)"/>
-  <rect x="40" y="230" width="600" height="100" rx="10" fill="#E6F1FB" stroke="#85B7EB" stroke-width="0.5"/>
-  <text x="60" y="253" font-family="sans-serif" font-size="13" font-weight="500" fill="#0C447C">Phase 2: Global Random Scan (1200-1500 ports per round)</text>
-  <text x="60" y="273" font-family="sans-serif" font-size="12" fill="#185FA5">1. Pre-generated shuffled_ports[1..65535], cursor-based iteration</text>
-  <text x="60" y="291" font-family="sans-serif" font-size="12" fill="#185FA5">2. Take 1200-1500 ports from cursor position, no repeat across rounds</text>
-  <text x="60" y="309" font-family="sans-serif" font-size="12" fill="#185FA5">3. 2ms interval per packet, via try_send_via_all</text>
-  <text x="60" y="325" font-family="sans-serif" font-size="11" fill="#185FA5">Wraps around to 0 when reaching the end</text>
-  <rect x="140" y="345" width="400" height="28" rx="8" fill="#EAF3DE" stroke="#97C459" stroke-width="0.5"/>
-  <text x="340" y="363" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="500" fill="#27500A">Both phases use try_send_via_all (main + assistant sockets)</text>
-</svg>
+```mermaid
+flowchart TD
+    K["Known: 198.51.100.20:40012 (via NatObserve), port_range = 4 (via STUN)<br/>predict_range = max(port_range x 10, 100) = 100"]
+    K --> P1
+    P1 --> P2
+    P2 --> R
+
+    subgraph P1["Phase 1: Range Prediction (max 60 ports per round)"]
+        P1A["1. Candidate range: 40012 - 100 ... 40012 + 100 = 39912..40112"]
+        P1B["2. Generate 201 candidate ports, deduplicate, random shuffle"]
+        P1C["3. Send first 60 via try_send_via_all (main + assistant sockets)<br/>Each outbound packet creates a NAT mapping on sender's side"]
+        P1A --> P1B
+        P1B --> P1C
+    end
+
+    subgraph P2["Phase 2: Global Random Scan (1200-1500 ports per round)"]
+        P2A["1. Pre-generated shuffled_ports 1..65535, cursor-based iteration"]
+        P2B["2. Take 1200-1500 ports from cursor position, no repeat across rounds"]
+        P2C["3. 2ms interval per packet, via try_send_via_all<br/>Wraps around to 0 when reaching the end"]
+        P2A --> P2B
+        P2B --> P2C
+    end
+
+    R["Both phases use try_send_via_all (main + assistant sockets)"]
+```
 
 ```
 punch_udp() selects strategy based on peer's NAT type:
@@ -501,40 +438,14 @@ Phase 2 Global Scan:
 
 ### 4.6 Phase 5: Route Confirmation
 
-<svg viewBox="0 0 680 360" width="100%" xmlns="http://www.w3.org/2000/svg" role="img">
-  <title>Route confirmation flow</title>
-  <desc>PunchRequest with metric=0 immediately confirms direct route; PunchReply deduplicates if already confirmed.</desc>
-  <defs>
-    <marker id="a5" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-      <path d="M2 1L8 5L2 9" fill="none" stroke="#666666" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-    </marker>
-  </defs>
-  <text x="340" y="25" text-anchor="middle" font-family="sans-serif" font-size="14" font-weight="500" fill="#333333">Route confirmation flow</text>
-  <rect x="40" y="45" width="280" height="130" rx="10" fill="#EAF3DE" stroke="#97C459" stroke-width="0.5"/>
-  <text x="180" y="68" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="500" fill="#27500A">PunchRequest arrives (metric=0)</text>
-  <text x="55" y="88" font-family="sans-serif" font-size="11" fill="#3B6D11">metric=0 = arrived directly (not relayed)</text>
-  <text x="55" y="106" font-family="sans-serif" font-size="11" fill="#3B6D11">-> Received = bidirectional reachable</text>
-  <text x="55" y="124" font-family="sans-serif" font-size="11" fill="#3B6D11">-> confirm_direct_and_promote()</text>
-  <text x="55" y="142" font-family="sans-serif" font-size="11" fill="#3B6D11">-> Store route_key address in NatInfo</text>
-  <text x="55" y="160" font-family="sans-serif" font-size="11" fill="#3B6D11">-> Send PunchReply + reverse punch</text>
-  <rect x="360" y="45" width="280" height="130" rx="10" fill="#E6F1FB" stroke="#85B7EB" stroke-width="0.5"/>
-  <text x="500" y="68" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="500" fill="#0C447C">PunchReply arrives (metric=0)</text>
-  <text x="375" y="88" font-family="sans-serif" font-size="11" fill="#185FA5">Remove request_id from pending_punch</text>
-  <text x="375" y="106" font-family="sans-serif" font-size="11" fill="#185FA5">First time:</text>
-  <text x="375" y="120" font-family="sans-serif" font-size="11" fill="#185FA5">  -> confirm_direct_and_promote() + log</text>
-  <text x="375" y="138" font-family="sans-serif" font-size="11" fill="#185FA5">Already confirmed:</text>
-  <text x="375" y="152" font-family="sans-serif" font-size="11" fill="#185FA5">  -> debug log only (dedup via has_direct_route)</text>
-  <text x="375" y="170" font-family="sans-serif" font-size="11" fill="#185FA5">-> try_execute_punch (reverse punch)</text>
-  <rect x="140" y="200" width="400" height="80" rx="10" fill="#F1EFE8" stroke="#B4B2A9" stroke-width="0.5"/>
-  <text x="340" y="222" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="500" fill="#444441">confirm_direct_and_promote()</text>
-  <text x="340" y="240" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#5F5E5A">transport.confirm_peer_route(peer, route_key, metric=0)</text>
-  <text x="340" y="256" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#5F5E5A">route_candidates.remove(peer_id)</text>
-  <text x="340" y="272" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#5F5E5A">QUIC packets now prefer metric=0 direct route</text>
-  <rect x="190" y="305" width="300" height="44" rx="8" fill="#EAF3DE" stroke="#97C459" stroke-width="0.5"/>
-  <text x="340" y="323" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="500" fill="#27500A">Received metric=0 = direct connection OK</text>
-  <text x="340" y="340" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#3B6D11">No need to wait for Reply confirmation</text>
-</svg>
-
+```mermaid
+flowchart TD
+    PR["PunchRequest arrives (metric=0)<br/>metric=0 = arrived directly (not relayed)<br/>&rarr; Received = bidirectional reachable<br/>&rarr; confirm_direct_and_promote()<br/>&rarr; Store route_key address in NatInfo<br/>&rarr; Send PunchReply + reverse punch"]
+    PR --> CD
+    PR2["PunchReply arrives (metric=0)<br/>Remove request_id from pending_punch<br/>First time: confirm_direct_and_promote + log<br/>Already confirmed: debug log only (dedup via has_direct_route)<br/>&rarr; try_execute_punch (reverse punch)"]
+    PR2 --> CD
+    CD["confirm_direct_and_promote()<br/>transport.confirm_peer_route(peer, route_key, metric=0)<br/>route_candidates.remove(peer_id)<br/>QUIC packets now prefer metric=0 direct route"]
+    CD --> OK["Received metric=0 = direct connection OK<br/>No need to wait for Reply confirmation"]
 ```
 +-------------------------------------------------------------+
 |                    Route Confirmation Flow                   |
@@ -591,50 +502,22 @@ node-b sends PunchRequest -> node-c
 
 ### 5.1 Assistant Socket
 
-<svg viewBox="0 0 680 340" width="100%" xmlns="http://www.w3.org/2000/svg" role="img">
-  <title>Assistant socket mechanism</title>
-  <desc>Symmetric NAT node uses multiple sockets, each with a different mapped port, increasing hit probability for port prediction.</desc>
-  <defs>
-    <marker id="a6" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-      <path d="M2 1L8 5L2 9" fill="none" stroke="#666666" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-    </marker>
-  </defs>
-  <text x="340" y="25" text-anchor="middle" font-family="sans-serif" font-size="14" font-weight="500" fill="#333333">Assistant socket: 3x prediction targets</text>
-  <rect x="40" y="45" width="150" height="36" rx="8" fill="#FAC775" stroke="#EF9F27" stroke-width="0.5"/>
-  <text x="115" y="63" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="500" fill="#633806">Socket 0 (main)</text>
-  <text x="115" y="78" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#854F0B">10.0.0.5:51820</text>
-  <rect x="40" y="90" width="150" height="36" rx="8" fill="#FAC775" stroke="#EF9F27" stroke-width="0.5"/>
-  <text x="115" y="108" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="500" fill="#633806">Socket 1 (asst)</text>
-  <text x="115" y="123" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#854F0B">10.0.0.5:41322</text>
-  <rect x="40" y="135" width="150" height="36" rx="8" fill="#FAC775" stroke="#EF9F27" stroke-width="0.5"/>
-  <text x="115" y="153" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="500" fill="#633806">Socket 2 (asst)</text>
-  <text x="115" y="168" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#854F0B">10.0.0.5:51901</text>
-  <line x1="190" y1="68" x2="250" y2="68" stroke="#EF9F27" stroke-width="1.5" marker-end="url(#a6)"/>
-  <line x1="190" y1="108" x2="250" y2="108" stroke="#EF9F27" stroke-width="1.5" marker-end="url(#a6)"/>
-  <line x1="190" y1="153" x2="250" y2="153" stroke="#EF9F27" stroke-width="1.5" marker-end="url(#a6)"/>
-  <rect x="250" y="45" width="140" height="145" rx="8" fill="#EF9F27" stroke="#854F0B" stroke-width="0.5"/>
-  <text x="320" y="110" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="500" fill="#FFFFFF">NAT-B</text>
-  <text x="320" y="128" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#FAEEDA">(Symmetric)</text>
-  <text x="320" y="148" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#FAEEDA">198.51.100.20</text>
-  <text x="320" y="168" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#FAEEDA">:40012 / :40045 / :40078</text>
-  <line x1="390" y1="68" x2="460" y2="68" stroke="#EF9F27" stroke-width="1.5" marker-end="url(#a6)"/>
-  <line x1="390" y1="108" x2="460" y2="108" stroke="#EF9F27" stroke-width="1.5" marker-end="url(#a6)"/>
-  <line x1="390" y1="153" x2="460" y2="153" stroke="#EF9F27" stroke-width="1.5" marker-end="url(#a6)"/>
-  <text x="425" y="62" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#854F0B">:40012</text>
-  <text x="425" y="102" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#854F0B">:40045</text>
-  <text x="425" y="147" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#854F0B">:40078</text>
-  <rect x="460" y="45" width="170" height="145" rx="8" fill="#B5D4F4" stroke="#378ADD" stroke-width="0.5"/>
-  <text x="545" y="110" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="500" fill="#0C447C">node-c</text>
-  <text x="545" y="128" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#185FA5">(Cone NAT)</text>
-  <text x="545" y="148" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#185FA5">203.0.113.10:40000</text>
-  <text x="545" y="168" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#185FA5">Receives from 3 ports</text>
-  <rect x="40" y="210" width="600" height="110" rx="10" fill="#EAF3DE" stroke="#97C459" stroke-width="0.5"/>
-  <text x="60" y="232" font-family="sans-serif" font-size="12" font-weight="500" fill="#27500A">Result: node-c observes 3 source ports from node-b (40012, 40045, 40078)</text>
-  <text x="60" y="252" font-family="sans-serif" font-size="11" fill="#3B6D11">Reverse punch Phase 1 covers: [40012+/-100, 40045+/-100, 40078+/-100]</text>
-  <text x="60" y="270" font-family="sans-serif" font-size="11" fill="#3B6D11">-> 3 independent prediction ranges -> ~3x hit probability</text>
-  <text x="60" y="290" font-family="sans-serif" font-size="11" fill="#3B6D11">All 3 sockets are listening: any hit on any socket's port = direct connection</text>
-  <text x="60" y="308" font-family="sans-serif" font-size="11" font-weight="500" fill="#27500A">Only enabled under Symmetric NAT (Cone NAT has fixed port, no need)</text>
-</svg>
+```mermaid
+flowchart LR
+    subgraph B["node-b (Symmetric NAT)"]
+        direction TB
+        S0["Socket 0 (main)<br/>10.0.0.5:51820"]
+        S1["Socket 1 (asst)<br/>10.0.0.5:41322"]
+        S2["Socket 2 (asst)<br/>10.0.0.5:51901"]
+        NATB["NAT-B (Symmetric)<br/>198.51.100.20<br/>:40012 / :40045 / :40078"]
+        S0 --> NATB
+        S1 --> NATB
+        S2 --> NATB
+    end
+
+    NATB -->|3 mapped ports| C["node-c (Cone NAT)<br/>203.0.113.10:40000<br/>Receives from 3 ports"]
+    C --> R["Result: node-c observes 3 source ports (40012, 40045, 40078)<br/>Reverse punch Phase 1 covers [40012+/-100, 40045+/-100, 40078+/-100]<br/>~3x hit probability<br/>Only enabled under Symmetric NAT"]
+```
 
 ```
 +--------------------------------------------------------+
@@ -836,38 +719,18 @@ Both cases result in:
 
 The health check mechanism has been implemented with three key components: heartbeat with RTT measurement, NAT mapping keepalive, and route idle eviction via IdleRouteManager.
 
-<svg viewBox="0 0 680 400" width="100%" xmlns="http://www.w3.org/2000/svg" role="img">
-  <title>Health check mechanism</title>
-  <desc>Heartbeat loop sends EchoRequest every 15s, EchoReply calculates RTT, route idle detection (IdleRouteManager) handles stale route eviction and re-punching.</desc>
-  <defs>
-    <marker id="a7" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-      <path d="M2 1L8 5L2 9" fill="none" stroke="#666666" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-    </marker>
-  </defs>
-  <text x="340" y="25" text-anchor="middle" font-family="sans-serif" font-size="14" font-weight="500" fill="#333333">Health check mechanism (implemented)</text>
-  <rect x="40" y="45" width="600" height="56" rx="10" fill="#E6F1FB" stroke="#85B7EB" stroke-width="0.5"/>
-  <text x="60" y="68" font-family="sans-serif" font-size="13" font-weight="500" fill="#0C447C">Heartbeat loop (start_heartbeat_loop, every 15s)</text>
-  <text x="60" y="86" font-family="sans-serif" font-size="11" fill="#185FA5">Finds all peers with direct routes -> sends EchoRequest (8-byte timestamp payload) via direct route_key</text>
-  <text x="60" y="98" font-family="sans-serif" font-size="11" fill="#185FA5">Packets traverse underlying UDP socket -> refreshes NAT mapping on both sides</text>
-  <line x1="340" y1="101" x2="340" y2="118" stroke="#378ADD" stroke-width="1.5" marker-end="url(#a7)"/>
-  <rect x="40" y="120" width="600" height="50" rx="10" fill="#EAF3DE" stroke="#97C459" stroke-width="0.5"/>
-  <text x="60" y="142" font-family="sans-serif" font-size="13" font-weight="500" fill="#27500A">Peer receives EchoRequest -> sends EchoReply (echoes back original timestamp)</text>
-  <text x="60" y="160" font-family="sans-serif" font-size="11" fill="#3B6D11">Also calls confirm_tcp_route() to ensure direct route is registered</text>
-  <line x1="340" y1="170" x2="340" y2="187" stroke="#97C459" stroke-width="1.5" marker-end="url(#a7)"/>
-  <rect x="40" y="189" width="600" height="56" rx="10" fill="#FAEEDA" stroke="#FAC775" stroke-width="0.5"/>
-  <text x="60" y="212" font-family="sans-serif" font-size="13" font-weight="500" fill="#633806">EchoReply handler: RTT calculation</text>
-  <text x="60" y="230" font-family="sans-serif" font-size="11" fill="#854F0B">rtt = now_millis() - sent_timestamp (discards replies older than 60s)</text>
-  <text x="60" y="243" font-family="sans-serif" font-size="11" fill="#854F0B">-> transport.update_route_rtt(peer, route_key, rtt) updates RouteTable</text>
-  <line x1="340" y1="245" x2="340" y2="262" stroke="#FAC775" stroke-width="1.5" marker-end="url(#a7)"/>
-  <rect x="40" y="264" width="600" height="56" rx="10" fill="#F1EFE8" stroke="#B4B2A9" stroke-width="0.5"/>
-  <text x="60" y="287" font-family="sans-serif" font-size="13" font-weight="500" fill="#444441">RouteTable::update_rtt()</text>
-  <text x="60" y="305" font-family="sans-serif" font-size="11" fill="#5F5E5A">Updates Route.rtt for the specific route_key</text>
-  <text x="60" y="318" font-family="sans-serif" font-size="11" fill="#5F5E5A">If LoadBalance::LowestLatency -> re-sorts routes by RTT</text>
-  <line x1="340" y1="320" x2="340" y2="337" stroke="#888780" stroke-width="1.5" marker-end="url(#a7)"/>
-  <rect x="40" y="339" width="600" height="50" rx="10" fill="#FAECE7" stroke="#F0997B" stroke-width="0.5"/>
-  <text x="60" y="361" font-family="sans-serif" font-size="13" font-weight="500" fill="#712B13">Route idle -> IdleRouteManager detects read-idle timeout</text>
-  <text x="60" y="379" font-family="sans-serif" font-size="11" fill="#993C1D">-> remove_route() evicts stale route -> maintenance loop detects gap -> re-punch</text>
-</svg>
+```mermaid
+flowchart TD
+    HB["Heartbeat loop (start_heartbeat_loop, every 15s)<br/>Finds all peers with direct routes -> sends EchoRequest (8-byte timestamp)<br/>via direct route_key. Packets traverse UDP socket -> refreshes NAT mapping"]
+    HB -->|EchoRequest via direct route_key| PEER
+    PEER["Peer receives EchoRequest -> sends EchoReply (echoes back original timestamp)<br/>Also calls confirm_tcp_route() to ensure direct route is registered"]
+    PEER -->|EchoReply (metric=0)| RTT
+    RTT["EchoReply handler: RTT calculation<br/>rtt = now_millis() - sent_timestamp (discards replies older than 60s)<br/>-> transport.update_route_rtt(peer, route_key, rtt)"]
+    RTT -->|updates route| TBL
+    TBL["RouteTable::update_rtt()<br/>Updates Route.rtt for the specific route_key<br/>If LoadBalance::LowestLatency -> re-sorts routes by RTT"]
+    TBL -->|if no read activity| IDLE
+    IDLE["Route idle -> IdleRouteManager detects read-idle timeout<br/>-> remove_route() evicts stale route -> maintenance loop detects gap -> re-punch"]
+```
 
 ### 7.2 Heartbeat + RTT Measurement
 
@@ -1006,41 +869,19 @@ The heartbeat loop (Section 7.2) serves a dual role here: every `EchoRequest` /
 
 ### 7.6 Per-Route QUIC Connections
 
-<svg viewBox="0 0 680 360" width="100%" xmlns="http://www.w3.org/2000/svg" role="img">
-  <title>Per-route QUIC connection mechanism</title>
-  <desc>VirtualPeer binds a synthetic address to a specific RouteKey. All QUIC packets for that connection traverse the specified route, independent of the route table's default selection.</desc>
-  <defs>
-    <marker id="a8" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-      <path d="M2 1L8 5L2 9" fill="none" stroke="#666666" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-    </marker>
-  </defs>
-  <text x="340" y="25" text-anchor="middle" font-family="sans-serif" font-size="14" font-weight="500" fill="#333333">Per-route QUIC: binding a connection to a specific route</text>
-  <rect x="30" y="45" width="250" height="120" rx="10" fill="#E6F1FB" stroke="#85B7EB" stroke-width="0.5"/>
-  <text x="155" y="68" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="500" fill="#0C447C">VirtualPeer registration</text>
-  <text x="50" y="90" font-family="sans-serif" font-size="11" fill="#185FA5">register_virtual_peer_via(peer, route_key)</text>
-  <text x="50" y="108" font-family="sans-serif" font-size="11" fill="#185FA5">-> Allocates synthetic address (e.g. 127.0.0.1:9999)</text>
-  <text x="50" y="126" font-family="sans-serif" font-size="11" fill="#185FA5">-> VirtualPeer { peer_id, route_key: Some(rk) }</text>
-  <text x="50" y="144" font-family="sans-serif" font-size="11" fill="#185FA5">-> via_virtual_addrs[(peer, rk)] = addr</text>
-  <line x1="280" y1="105" x2="370" y2="105" stroke="#378ADD" stroke-width="1.5" marker-end="url(#a8)"/>
-  <text x="325" y="98" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#0C447C">binds</text>
-  <rect x="370" y="45" width="280" height="120" rx="10" fill="#EAF3DE" stroke="#97C459" stroke-width="0.5"/>
-  <text x="510" y="68" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="500" fill="#27500A">Quinn endpoint binds to synthetic addr</text>
-  <text x="390" y="90" font-family="sans-serif" font-size="11" fill="#3B6D11">Quinn thinks it sends to 127.0.0.1:9999</text>
-  <text x="390" y="108" font-family="sans-serif" font-size="11" fill="#3B6D11">QuicPeerSocket::try_send intercepts:</text>
-  <text x="390" y="126" font-family="sans-serif" font-size="11" fill="#3B6D11">-> finds VirtualPeer by destination addr</text>
-  <text x="390" y="144" font-family="sans-serif" font-size="11" fill="#3B6D11">-> route_key=Some -> try_send_quic_payload_via</text>
-  <rect x="30" y="185" width="620" height="56" rx="10" fill="#FAEEDA" stroke="#FAC775" stroke-width="0.5"/>
-  <text x="340" y="208" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="500" fill="#633806">try_send_quic_payload_via bypasses the route table</text>
-  <text x="340" y="226" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#854F0B">Wraps payload as QuicRelay packet -> try_send_wire_to_route(route_key) -> direct UDP send on that path</text>
-  <rect x="30" y="260" width="290" height="80" rx="10" fill="#F1EFE8" stroke="#B4B2A9" stroke-width="0.5"/>
-  <text x="175" y="283" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="500" fill="#444441">Default connection (route_key=None)</text>
-  <text x="175" y="303" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#5F5E5A">Uses route table default (lowest metric)</text>
-  <text x="175" y="320" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#5F5E5A">try_send_quic_payload -> route table lookup</text>
-  <rect x="360" y="260" width="290" height="80" rx="10" fill="#E6F1FB" stroke="#85B7EB" stroke-width="0.5"/>
-  <text x="505" y="283" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="500" fill="#0C447C">Via connection (route_key=Some)</text>
-  <text x="505" y="303" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#185FA5">Bypasses route table entirely</text>
-  <text x="505" y="320" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#185FA5">try_send_quic_payload_via -> direct wire send</text>
-</svg>
+```mermaid
+flowchart TB
+    REG[<b>VirtualPeer registration</b><br/>register_virtual_peer_via(peer, route_key)<br/>→ allocates synthetic address 127.0.0.1:9999<br/>→ VirtualPeer { peer_id, route_key: Some(rk) }<br/>→ via_virtual_addrs[(peer, rk)] = addr]
+    QUI[<b>Quinn endpoint binds to synthetic addr</b><br/>Quinn thinks it sends to 127.0.0.1:9999<br/>QuicPeerSocket::try_send intercepts:<br/>→ finds VirtualPeer by destination addr<br/>→ route_key=Some → try_send_quic_payload_via]
+    BYP[<b>try_send_quic_payload_via bypasses the route table</b><br/>Wraps payload as QuicRelay packet → try_send_wire_to_route(route_key) → direct UDP send on that path]
+    DEF[<b>Default connection (route_key=None)</b><br/>Uses route table default (lowest metric)<br/>try_send_quic_payload → route table lookup]
+    VIA[<b>Via connection (route_key=Some)</b><br/>Bypasses route table entirely<br/>try_send_quic_payload_via → direct wire send]
+
+    REG -->|binds| QUI
+    QUI --> BYP
+    BYP --> DEF
+    BYP --> VIA
+```
 
 The per-route QUIC mechanism allows applications to open a dedicated QUIC connection over a
 **specific route** (e.g., a particular direct path or relay path), bypassing the route table's
