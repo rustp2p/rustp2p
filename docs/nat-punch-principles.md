@@ -447,6 +447,7 @@ flowchart TD
     CD["confirm_direct_and_promote()<br/>transport.confirm_peer_route(peer, route_key, metric=0)<br/>route_candidates.remove(peer_id)<br/>QUIC packets now prefer metric=0 direct route"]
     CD --> OK["Received metric=0 = direct connection OK<br/>No need to wait for Reply confirmation"]
 ```
+```
 +-------------------------------------------------------------+
 |                    Route Confirmation Flow                   |
 |                                                             |
