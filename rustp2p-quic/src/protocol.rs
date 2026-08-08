@@ -776,9 +776,23 @@ impl ProtocolLayer {
                     payload.nat_info.nat_type
                 );
                 if metric == 0 {
-                    // A punch request proves only that the peer reached us. It
-                    // stays a candidate until a matching PunchReply completes
-                    // the request/response exchange.
+                    // A PunchRequest arriving via direct route (metric == 0)
+                    // proves bidirectional reachability just as strongly as a
+                    // PunchReply — the peer's packet reached us directly.
+                    // Confirm the direct route immediately instead of waiting
+                    // for a matching PunchReply, which may take many seconds
+                    // to arrive due to NAT mapping delays.
+                    if !self.has_direct_route(&payload.src) {
+                        log::info!(
+                            "punch succeeded: direct route confirmed to {} via {:?} (from PunchRequest)",
+                            payload.src,
+                            route_key
+                        );
+                        self.confirm_direct_and_promote(
+                            self.peer_info_from_packet(&payload.src, route_key, metric),
+                            route_key,
+                        );
+                    }
                     self.route_candidates.insert(payload.src.clone(), route_key);
                 }
                 if self.punch_allowed(&payload.src) {

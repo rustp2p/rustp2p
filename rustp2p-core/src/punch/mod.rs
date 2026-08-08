@@ -210,10 +210,11 @@ impl Puncher {
         match peer_nat_info.nat_type {
             NatType::Symmetric => {
                 let max_k1: usize = 60;
-                let mut max_k2: usize = rand::rng().random_range(1200..1500);
-                if count > 8 {
-                    max_k2 = ((max_k2 * 8) / count.max(1)).max(max_k1);
-                }
+                // Keep Phase 2 batch size constant. The need_punch() backoff
+                // already reduces punch frequency over time, so shrinking the
+                // batch as well causes a compounding slowdown that makes later
+                // rounds nearly useless (e.g., 300 ports/round at count=30).
+                let max_k2: usize = rand::rng().random_range(1200..1500);
 
                 let pub_ips: Vec<std::net::Ipv4Addr> = peer_nat_info.public_ips.clone();
                 if pub_ips.is_empty() {
@@ -227,20 +228,27 @@ impl Puncher {
                 // Phase 1: Predicted range punching.
                 //
                 // For each known port (from NatObserve), generate a prediction
-                // window [port - range, port + range] and send to random ports
-                // within that window.  The port_range from STUN estimates how
-                // much the NAT varies port allocation between destinations.
+                // window and send to random ports within that window.
+                //
+                // The port_range from STUN estimates how much the NAT varies
+                // port allocation between destinations *for the same socket*.
+                // However, when the peer has multiple sockets (main + assistant),
+                // each socket gets an independent port allocation that can differ
+                // by tens or hundreds of ports.  To account for this, we expand
+                // the prediction range well beyond port_range.
                 let port_range = peer_nat_info.public_port_range;
-                if !peer_nat_info.public_udp_ports.is_empty() && (port_range as usize) < max_k1 * 3
+                let predict_range = (port_range as usize * 10).max(100) as u16;
+                if !peer_nat_info.public_udp_ports.is_empty()
+                    && (predict_range as usize) < max_k1 * 3
                 {
                     let mut predicted_ports: Vec<u16> = Vec::new();
                     for &base_port in &peer_nat_info.public_udp_ports {
-                        let min_port = if base_port > port_range {
-                            base_port - port_range
+                        let min_port = if base_port > predict_range {
+                            base_port - predict_range
                         } else {
                             1
                         };
-                        let (max_port, overflow) = base_port.overflowing_add(port_range);
+                        let (max_port, overflow) = base_port.overflowing_add(predict_range);
                         let max_port = if overflow { 65535 } else { max_port };
                         predicted_ports.extend(min_port..=max_port);
                     }
@@ -256,7 +264,7 @@ impl Puncher {
                              (base_ports={:?}, range=±{}, ips={:?})",
                             k,
                             peer_nat_info.public_udp_ports,
-                            port_range,
+                            predict_range,
                             pub_ips
                         );
                         self.punch_symmetric(&predicted_ports[..k], buf, &pub_ips, k)
