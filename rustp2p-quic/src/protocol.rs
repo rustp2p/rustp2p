@@ -1272,23 +1272,44 @@ impl ProtocolLayer {
         let mut addrs = Vec::new();
 
         // Filter out non-routable bind addresses (0.0.0.0 / ::).
-        // A socket bound to INADDR_ANY reports 0.0.0.0 via getsockname,
-        // but remote peers cannot use 0.0.0.0 as a destination.  When the
-        // bind address is unspecified, fall back to the public IP
-        // discovered via STUN or NatObserve so peers still get a usable
-        // address.
-        if !local.ip().is_unspecified() {
-            addrs.push(local);
+        // A socket bound to INADDR_ANY (0.0.0.0) reports 0.0.0.0 via getsockname,
+        // but remote peers cannot use 0.0.0.0 as a destination. When the bind
+        // address is unspecified, fall back to the public IP discovered via STUN
+        // or NatObserve so peers still get a usable address.
+        //
+        // This is the root-cause fix for the 0.0.0.0 address leak. Without
+        // this filter, a directly-connected bootstrap node (metric == 0, never
+        // relayed) would broadcast 0.0.0.0 in its HelloReply. Because direct
+        // routes only *append* route_key.addr() without ever calling addrs.clear(),
+        // the leaked 0.0.0.0 persists in the peer's view. NAT'd nodes discovered
+        // first via a relay (metric > 0) are immune because confirm_peer_route
+        // calls addrs.clear() on the relay step, wiping the leaked address.
+        let advertised_ip = if !local.ip().is_unspecified() {
+            Some(local.ip())
         } else {
-            let nat = self.nat_info();
-            if let Some(&ip) = nat.public_ips.first() {
-                addrs.push(SocketAddr::new(std::net::IpAddr::V4(ip), local.port()));
-            }
+            self.nat_info()
+                .public_ips
+                .first()
+                .map(|ip| std::net::IpAddr::V4(*ip))
+        };
+
+        if let Some(ip) = advertised_ip {
+            addrs.push(SocketAddr::new(ip, local.port()));
         }
 
+        // TCP addr: when the local bind IP is unspecified, local_tcp_addr()
+        // constructs 0.0.0.0:tcp_port from self.local_addr.ip(). Use the same
+        // advertised_ip fallback so peers learn a routable TCP address too.
         if let Some(addr) = self.transport.local_tcp_addr() {
-            if !addr.ip().is_unspecified() && !addrs.contains(&addr) {
-                addrs.push(addr);
+            let tcp_addr = if addr.ip().is_unspecified() {
+                advertised_ip.map(|ip| SocketAddr::new(ip, addr.port()))
+            } else {
+                Some(addr)
+            };
+            if let Some(tcp_addr) = tcp_addr {
+                if !addrs.contains(&tcp_addr) {
+                    addrs.push(tcp_addr);
+                }
             }
         }
 
