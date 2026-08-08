@@ -689,7 +689,10 @@ impl ProtocolLayer {
         });
     }
 
-    async fn handle_transport_packet(&self, received: RawTransportPacket) -> io::Result<()> {
+    async fn handle_transport_packet(
+        self: &Arc<Self>,
+        received: RawTransportPacket,
+    ) -> io::Result<()> {
         let Some(first) = received.data.first().copied() else {
             return Ok(());
         };
@@ -1164,10 +1167,13 @@ impl ProtocolLayer {
                 self.peer_nat
                     .insert(item.peer.peer_id.clone(), nat_info.clone());
             }
+            // The RouteEntry metric is the advertiser's own overlay
+            // distance to the advertised peer. We add 1 for the hop
+            // from us to the advertiser (the next hop via `via`), so the
+            // total metric equals the number of intermediate relay nodes
+            // between us and the advertised peer. This is consistent with
+            // the TTL-based metric computed in confirm_relay_route_from_control.
             let metric = item.metric.saturating_add(1);
-            // Route replies advertise transport reachability. The next hop is
-            // the route used to receive this reply, while metric records the
-            // additional overlay hop distance to the advertised peer.
             self.transport
                 .confirm_peer_route(item.peer.clone(), via, metric);
         }
@@ -1182,17 +1188,23 @@ impl ProtocolLayer {
         })
         .chain(self.transport.known_peers().into_iter().filter_map(|peer| {
             if &peer.peer_id == requester {
-                None
-            } else {
-                let metric = self
-                    .transport
-                    .routes(peer.peer_id.clone())
-                    .into_iter()
-                    .next()
-                    .map(|route| route.metric().saturating_add(1))
-                    .unwrap_or(1);
-                Some(RouteEntry { peer, metric })
+                return None;
             }
+            // Report our local route metric for this peer as-is.
+            // ingest_route_entries will add 1 hop for the
+            // advertiser-to-receiver distance, so we must NOT
+            // pre-increment here — that would double-count the hop
+            // and produce metric=N+2 for a path with only N relay
+            // hops. Only advertise peers for which we have a
+            // confirmed route; peers without routes are silently
+            // skipped.
+            let metric = self
+                .transport
+                .routes(peer.peer_id.clone())
+                .into_iter()
+                .next()
+                .map(|route| route.metric())?;
+            Some(RouteEntry { peer, metric })
         }))
         .collect();
         Ok(peers)
@@ -1318,7 +1330,7 @@ impl ProtocolLayer {
         }
     }
 
-    fn confirm_tcp_route(&self, peer: &PeerInfo, route_key: RouteKey, metric: u8) {
+    fn confirm_tcp_route(self: &Arc<Self>, peer: &PeerInfo, route_key: RouteKey, metric: u8) {
         if route_key.protocol().is_tcp() && metric == 0 {
             // TCP transports are connection-oriented, so a valid direct control
             // packet on TCP is enough to confirm bidirectional reachability.
@@ -1331,10 +1343,59 @@ impl ProtocolLayer {
     /// reachability (HelloRequest→HelloReply, PunchRequest→PunchReply, or
     /// TCP control packet). Removing the candidate prevents redundant probing
     /// and avoids stale entries lingering after confirmation.
-    fn confirm_direct_and_promote(&self, peer: PeerInfo, route_key: RouteKey) {
+    ///
+    /// After confirming, we fire-and-forget an EchoRequest to obtain an RTT
+    /// measurement. Without this, the newly confirmed direct route would sit
+    /// without an RTT value until the next 15-second heartbeat tick, creating
+    /// an unnecessary gap during which the route cannot be used optimally for
+    /// load-balanced or lowest-latency routing decisions.
+    ///
+    /// The probe is spawned as a detached task so that route confirmation is
+    /// NOT blocked by the packet send. This is critical because
+    /// `confirm_direct_and_promote` is called from the protocol packet handler
+    /// path, and blocking on the probe would stall processing of subsequent
+    /// inbound packets.
+    fn confirm_direct_and_promote(self: &Arc<Self>, peer: PeerInfo, route_key: RouteKey) {
         let peer_id = peer.peer_id.clone();
         self.transport.confirm_peer_route(peer, route_key, 0);
         self.route_candidates.remove(&peer_id);
+        self.spawn_probe_rtt(peer_id, route_key);
+    }
+
+    /// Spawn a fire-and-forget task to send an EchoRequest for RTT measurement.
+    /// If the route already has a real RTT measurement (not the DEFAULT_RTT
+    /// sentinel), the probe is skipped to avoid redundant packets on
+    /// re-confirmations (e.g. when a HelloReply re-confirms an already-direct
+    /// route).
+    fn spawn_probe_rtt(self: &Arc<Self>, peer_id: PeerId, route_key: RouteKey) {
+        // Skip if we already have a real RTT measurement.
+        let already_measured = self
+            .transport
+            .routes(peer_id.clone())
+            .into_iter()
+            .any(|r| r.route_key() == route_key && r.rtt().is_some());
+        if already_measured {
+            log::debug!(
+                "RTT probe to {} skipped — route already has RTT via {:?}",
+                peer_id,
+                route_key
+            );
+            return;
+        }
+        let protocol = self.clone();
+        tokio::spawn(async move {
+            let ts = now_millis();
+            protocol.pending_echo.insert(peer_id.clone(), ts);
+            let payload = ts.to_be_bytes();
+            log::debug!(
+                "RTT probe: sending EchoRequest to {} via {:?}",
+                peer_id,
+                route_key
+            );
+            let _ = protocol
+                .send_protocol_to_route(peer_id, route_key, ProtocolType::EchoRequest, &payload)
+                .await;
+        });
     }
 
     fn confirm_relay_route_from_control(&self, peer: &PeerInfo, route_key: RouteKey, metric: u8) {
