@@ -478,9 +478,14 @@ impl TransportLayer {
         }
         let mut merged = peer.clone();
         merged.last_seen = now_millis();
+        // Defense-in-depth: strip any unspecified addresses (0.0.0.0 / ::) from
+        // both the incoming and existing addr lists. This prevents stale
+        // 0.0.0.0 entries from older peers (or pre-fix versions) from surviving
+        // the union merge and propagating further.
+        merged.addrs.retain(|a| !a.ip().is_unspecified());
         if let Some(existing) = self.state.peers.get(&peer.peer_id) {
             for addr in &existing.addrs {
-                if !merged.addrs.contains(addr) {
+                if !addr.ip().is_unspecified() && !merged.addrs.contains(addr) {
                     merged.addrs.push(*addr);
                 }
             }
