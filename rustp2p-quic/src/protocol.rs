@@ -1268,12 +1268,30 @@ impl ProtocolLayer {
     }
 
     fn self_peer_info(&self) -> PeerInfo {
-        let mut addrs = vec![self.transport.local_addr()];
+        let local = self.transport.local_addr();
+        let mut addrs = Vec::new();
+
+        // Filter out non-routable bind addresses (0.0.0.0 / ::).
+        // A socket bound to INADDR_ANY reports 0.0.0.0 via getsockname,
+        // but remote peers cannot use 0.0.0.0 as a destination.  When the
+        // bind address is unspecified, fall back to the public IP
+        // discovered via STUN or NatObserve so peers still get a usable
+        // address.
+        if !local.ip().is_unspecified() {
+            addrs.push(local);
+        } else {
+            let nat = self.nat_info();
+            if let Some(&ip) = nat.public_ips.first() {
+                addrs.push(SocketAddr::new(std::net::IpAddr::V4(ip), local.port()));
+            }
+        }
+
         if let Some(addr) = self.transport.local_tcp_addr() {
-            if !addrs.contains(&addr) {
+            if !addr.ip().is_unspecified() && !addrs.contains(&addr) {
                 addrs.push(addr);
             }
         }
+
         PeerInfo {
             peer_id: self.peer_id.clone(),
             addrs,
