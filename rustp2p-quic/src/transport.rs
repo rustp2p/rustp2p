@@ -485,7 +485,13 @@ impl TransportLayer {
                 }
             }
             merged.is_direct |= existing.is_direct;
-            if merged.relay_hint.is_none() {
+            // Once the merged result is direct, any relay_hint is stale —
+            // clear it so the peers command reports relay=None for directly
+            // reachable peers. A self-referential hint (relay == self) is
+            // especially misleading and must never persist.
+            if merged.is_direct {
+                merged.relay_hint = None;
+            } else if merged.relay_hint.is_none() {
                 merged.relay_hint = existing.relay_hint.clone();
             }
             if merged.nat_info.is_none() {
@@ -501,6 +507,9 @@ impl TransportLayer {
         // final peer's socket address as directly reachable.
         if metric == 0 {
             peer.is_direct = true;
+            // A confirmed direct route means no relay is needed.
+            // Clear any stale relay_hint left over from relay discovery.
+            peer.relay_hint = None;
             if !peer.addrs.contains(&route_key.addr()) {
                 peer.addrs.push(route_key.addr());
             }

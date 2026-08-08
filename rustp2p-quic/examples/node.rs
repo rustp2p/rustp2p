@@ -85,6 +85,7 @@ async fn main() -> rustp2p_quic::Result<()> {
     println!("  broadcast <message>");
     println!("  punch <peer_id>");
     println!("  peers");
+    println!("  routes");
     println!("  quit");
 
     let recv_endpoint = endpoint.clone();
@@ -234,6 +235,35 @@ async fn handle_command(endpoint: &Endpoint, line: &str) -> rustp2p_quic::Result
                     "{} direct={} relay={:?} addrs={:?}",
                     peer.peer_id, peer.is_direct, peer.relay_hint, peer.addrs
                 );
+            }
+        }
+        "routes" => {
+            let peers = endpoint.known_peers();
+            if peers.is_empty() {
+                println!("no known peers");
+            }
+            for peer in &peers {
+                let routes = endpoint.routes(peer.peer_id.clone());
+                println!("── {} ──", peer.peer_id);
+                if routes.is_empty() {
+                    println!("  (no routes)");
+                    continue;
+                }
+                for route in &routes {
+                    let kind = if route.is_direct() { "direct" } else { "relay" };
+                    let rtt = if route.has_rtt() {
+                        format!("{}ms", route.rtt())
+                    } else {
+                        "-".to_string()
+                    };
+                    println!(
+                        "  [{:>5}] {} metric={} rtt={}",
+                        kind,
+                        route.route_key(),
+                        route.metric(),
+                        rtt
+                    );
+                }
             }
         }
         _ => {

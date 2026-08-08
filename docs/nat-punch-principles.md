@@ -22,15 +22,12 @@
 
 rustp2p simplifies NAT into two categories: **Cone NAT** and **Symmetric NAT**.
 
-<details>
-<summary>SVG diagram: NAT type comparison</summary>
-
 <svg viewBox="0 0 680 310" width="100%" xmlns="http://www.w3.org/2000/svg" role="img">
   <title>NAT type comparison: Cone vs Symmetric</title>
   <desc>Cone NAT uses the same mapped port for all destinations; Symmetric NAT assigns different ports per destination.</desc>
   <defs>
     <marker id="a1" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-      <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M2 1L8 5L2 9" fill="none" stroke="#666666" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
     </marker>
   </defs>
   <rect x="20" y="10" width="310" height="290" rx="12" fill="#E6F1FB" stroke="#85B7EB" stroke-width="0.5"/>
@@ -76,7 +73,6 @@ rustp2p simplifies NAT into two categories: **Cone NAT** and **Symmetric NAT**.
   <text x="580" y="232" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="500" fill="#854F0B">:40018</text>
   <text x="505" y="275" text-anchor="middle" font-family="sans-serif" font-size="12" font-style="italic" fill="#854F0B">Each destination sees a different port</text>
 </svg>
-</details>
 
 ### 1.1 Cone NAT
 
@@ -134,15 +130,12 @@ Cone NAT can be further classified into three subtypes (rustp2p does not differe
 
 The core principle of UDP hole punching: **Both peers simultaneously send packets to each other, each creating an outbound mapping on their own NAT. This mapping allows the other peer's inbound packets to pass through.**
 
-<details>
-<summary>SVG diagram: Bidirectional simultaneous hole punching</summary>
-
 <svg viewBox="0 0 680 380" width="100%" xmlns="http://www.w3.org/2000/svg" role="img">
   <title>Bidirectional simultaneous hole punching</title>
   <desc>Two peers behind NATs simultaneously send packets to each other, creating mappings that allow inbound traffic.</desc>
   <defs>
     <marker id="a2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-      <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M2 1L8 5L2 9" fill="none" stroke="#666666" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
     </marker>
   </defs>
   <text x="340" y="25" text-anchor="middle" font-family="sans-serif" font-size="14" font-weight="500" fill="#333333">Bidirectional simultaneous hole punching</text>
@@ -170,7 +163,6 @@ The core principle of UDP hole punching: **Both peers simultaneously send packet
   <text x="340" y="312" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="500" fill="#27500A">Step 3: Direct connection established!</text>
   <text x="340" y="332" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#3B6D11">Both NAT mappings active, packets flow freely in both directions</text>
 </svg>
-</details>
 
 ```
               Public Internet
@@ -213,15 +205,12 @@ Only when node-c **also sends packets to node-b's IP** will node-c's NAT create 
 
 Different NAT type combinations have different success rates:
 
-<details>
-<summary>SVG diagram: NAT combination strategies</summary>
-
 <svg viewBox="0 0 680 310" width="100%" xmlns="http://www.w3.org/2000/svg" role="img">
   <title>NAT combination punching strategies</title>
   <desc>Three NAT combinations: Cone-Cone (direct both ways), Cone-Symmetric (prediction + direct), Symmetric-Symmetric (bidirectional prediction).</desc>
   <defs>
     <marker id="a3" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-      <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M2 1L8 5L2 9" fill="none" stroke="#666666" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
     </marker>
   </defs>
   <rect x="20" y="15" width="640" height="75" rx="10" fill="#E6F1FB" stroke="#85B7EB" stroke-width="0.5"/>
@@ -246,7 +235,6 @@ Different NAT type combinations have different success rates:
   <text x="580" y="228" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="500" fill="#4A1B0C">Success rate</text>
   <text x="580" y="244" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="500" fill="#712B13">Lower</text>
 </svg>
-</details>
 
 ### 3.1 Cone <-> Cone (Easiest)
 
@@ -419,15 +407,12 @@ Trigger 3: Application-layer explicit call
 
 #### 4.5.2 UDP Punching Strategy
 
-<details>
-<summary>SVG diagram: Port prediction strategy</summary>
-
 <svg viewBox="0 0 680 380" width="100%" xmlns="http://www.w3.org/2000/svg" role="img">
   <title>Port prediction strategy for Symmetric NAT</title>
   <desc>Two-phase port prediction: Phase 1 generates candidates around known port, Phase 2 scans globally.</desc>
   <defs>
     <marker id="a4" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-      <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M2 1L8 5L2 9" fill="none" stroke="#666666" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
     </marker>
   </defs>
   <text x="340" y="25" text-anchor="middle" font-family="sans-serif" font-size="14" font-weight="500" fill="#333333">Port prediction strategy (Symmetric NAT peer)</text>
@@ -451,7 +436,6 @@ Trigger 3: Application-layer explicit call
   <rect x="140" y="345" width="400" height="28" rx="8" fill="#EAF3DE" stroke="#97C459" stroke-width="0.5"/>
   <text x="340" y="363" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="500" fill="#27500A">Both phases use try_send_via_all (main + assistant sockets)</text>
 </svg>
-</details>
 
 ```
 punch_udp() selects strategy based on peer's NAT type:
@@ -517,15 +501,12 @@ Phase 2 Global Scan:
 
 ### 4.6 Phase 5: Route Confirmation
 
-<details>
-<summary>SVG diagram: Route confirmation flow</summary>
-
 <svg viewBox="0 0 680 360" width="100%" xmlns="http://www.w3.org/2000/svg" role="img">
   <title>Route confirmation flow</title>
   <desc>PunchRequest with metric=0 immediately confirms direct route; PunchReply deduplicates if already confirmed.</desc>
   <defs>
     <marker id="a5" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-      <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M2 1L8 5L2 9" fill="none" stroke="#666666" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
     </marker>
   </defs>
   <text x="340" y="25" text-anchor="middle" font-family="sans-serif" font-size="14" font-weight="500" fill="#333333">Route confirmation flow</text>
@@ -553,7 +534,6 @@ Phase 2 Global Scan:
   <text x="340" y="323" text-anchor="middle" font-family="sans-serif" font-size="12" font-weight="500" fill="#27500A">Received metric=0 = direct connection OK</text>
   <text x="340" y="340" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#3B6D11">No need to wait for Reply confirmation</text>
 </svg>
-</details>
 
 ```
 +-------------------------------------------------------------+
@@ -611,15 +591,12 @@ node-b sends PunchRequest -> node-c
 
 ### 5.1 Assistant Socket
 
-<details>
-<summary>SVG diagram: Assistant socket mechanism</summary>
-
 <svg viewBox="0 0 680 340" width="100%" xmlns="http://www.w3.org/2000/svg" role="img">
   <title>Assistant socket mechanism</title>
   <desc>Symmetric NAT node uses multiple sockets, each with a different mapped port, increasing hit probability for port prediction.</desc>
   <defs>
     <marker id="a6" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-      <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M2 1L8 5L2 9" fill="none" stroke="#666666" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
     </marker>
   </defs>
   <text x="340" y="25" text-anchor="middle" font-family="sans-serif" font-size="14" font-weight="500" fill="#333333">Assistant socket: 3x prediction targets</text>
@@ -658,7 +635,6 @@ node-b sends PunchRequest -> node-c
   <text x="60" y="290" font-family="sans-serif" font-size="11" fill="#3B6D11">All 3 sockets are listening: any hit on any socket's port = direct connection</text>
   <text x="60" y="308" font-family="sans-serif" font-size="11" font-weight="500" fill="#27500A">Only enabled under Symmetric NAT (Cone NAT has fixed port, no need)</text>
 </svg>
-</details>
 
 ```
 +--------------------------------------------------------+
@@ -858,17 +834,14 @@ Both cases result in:
 
 ### 7.1 Implemented Mechanism Overview
 
-The health check mechanism has been implemented with three key components: heartbeat with RTT measurement, NAT mapping keepalive, and automatic connection failure cleanup.
-
-<details>
-<summary>SVG diagram: Health check mechanism</summary>
+The health check mechanism has been implemented with three key components: heartbeat with RTT measurement, NAT mapping keepalive, and route idle eviction via IdleRouteManager.
 
 <svg viewBox="0 0 680 400" width="100%" xmlns="http://www.w3.org/2000/svg" role="img">
   <title>Health check mechanism</title>
-  <desc>Heartbeat loop sends EchoRequest every 15s, EchoReply calculates RTT, connection drop triggers route cleanup and re-punching.</desc>
+  <desc>Heartbeat loop sends EchoRequest every 15s, EchoReply calculates RTT, route idle detection (IdleRouteManager) handles stale route eviction and re-punching.</desc>
   <defs>
     <marker id="a7" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-      <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M2 1L8 5L2 9" fill="none" stroke="#666666" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
     </marker>
   </defs>
   <text x="340" y="25" text-anchor="middle" font-family="sans-serif" font-size="14" font-weight="500" fill="#333333">Health check mechanism (implemented)</text>
@@ -892,10 +865,9 @@ The health check mechanism has been implemented with three key components: heart
   <text x="60" y="318" font-family="sans-serif" font-size="11" fill="#5F5E5A">If LoadBalance::LowestLatency -> re-sorts routes by RTT</text>
   <line x1="340" y1="320" x2="340" y2="337" stroke="#888780" stroke-width="1.5" marker-end="url(#a7)"/>
   <rect x="40" y="339" width="600" height="50" rx="10" fill="#FAECE7" stroke="#F0997B" stroke-width="0.5"/>
-  <text x="60" y="361" font-family="sans-serif" font-size="13" font-weight="500" fill="#712B13">QUIC connection drops -> cleanup_connection()</text>
-  <text x="60" y="379" font-family="sans-serif" font-size="11" fill="#993C1D">-> remove_direct_routes() removes metric=0 routes -> maintenance loop detects gap -> re-punch</text>
+  <text x="60" y="361" font-family="sans-serif" font-size="13" font-weight="500" fill="#712B13">Route idle -> IdleRouteManager detects read-idle timeout</text>
+  <text x="60" y="379" font-family="sans-serif" font-size="11" fill="#993C1D">-> remove_route() evicts stale route -> maintenance loop detects gap -> re-punch</text>
 </svg>
-</details>
 
 ### 7.2 Heartbeat + RTT Measurement
 
@@ -940,36 +912,84 @@ Additional indirect keepalive mechanisms:
 - **Quinn internal PING frames**: Default behavior sends PING frames when idle (~30s timeout)
 - **Application-layer data**: Continuous data transmission naturally keeps mappings active
 
-### 7.4 Connection Failure Auto-Cleanup
+### 7.4 Route Lifecycle and Idle Eviction
 
-When a QUIC connection drops, `cleanup_connection` automatically removes direct routes to trigger re-punching:
+#### 7.4.1 Why Connection Drop Does NOT Remove Routes
+
+The QUIC application-layer connection lifecycle is **deliberately separated** from the
+underlying UDP/TCP path lifecycle. When a QUIC connection drops (idle timeout, local close,
+etc.), the NAT mapping and the physical path may still be alive. Therefore,
+`cleanup_connection` **intentionally does not touch the route table**:
 
 ```rust
 fn cleanup_connection(&self, stable_id: usize, peer_id: Option<PeerId>) {
     self.connection_tasks.remove(&stable_id);
     if let Some(peer_id) = peer_id {
-        self.connections.remove(&peer_id);
-        self.socket.release_virtual_peer(&peer_id);
-        // Remove direct routes so the maintenance loop re-punches.
-        // Relay routes are kept as fallback so communication can continue.
-        self.protocol.remove_direct_routes(&peer_id);
+        // Only remove the cache entry if it still points to *this*
+        // connection. A newer connection may have already replaced it.
+        let removed = self
+            .connections
+            .remove_if(&peer_id, |_, conn| conn.quinn().stable_id() == stable_id);
+        if removed.is_some() {
+            self.socket.release_virtual_peer(&peer_id);
+        }
+        // Intentionally do NOT remove direct routes here.
+        //
+        // QUIC application-layer connection lifecycle is separate from
+        // the underlying UDP/TCP path. The route table has its own read-idle
+        // detection (IdleRouteManager) and heartbeat-driven activity refresh,
+        // which are the correct mechanisms for route lifecycle.
     }
 }
 ```
 
-`remove_direct_routes` logic:
-1. Queries all routes for the peer via `transport.routes(peer_id)`
-2. Filters for direct routes (`is_direct()`, i.e., metric=0)
-3. Removes each direct route via `transport.remove_route(peer_id, route_key)`
-4. Removes stale echo tracking via `pending_echo.remove(peer_id)`
-5. Logs the removal count
+What `cleanup_connection` actually does:
+1. Removes the connection task handle from `connection_tasks`
+2. Removes the QUIC connection from `connections` **only if** it still points to the same connection (prevents removing a newer replacement)
+3. Releases the virtual peer socket binding via `release_virtual_peer`
 
-**Relay routes are intentionally preserved** as fallback, so communication can continue through the relay while the maintenance loop re-punches.
+#### 7.4.2 IdleRouteManager — The Real Route Lifecycle Manager
 
-After direct routes are removed:
-- The maintenance loop detects `has_direct_route = false` for the peer
-- Auto-punch is triggered (subject to rate limiting)
-- Once re-punching succeeds, the direct route is re-established
+Route eviction is handled by `IdleRouteManager` in `rustp2p-core`, which monitors read-idle
+timeouts independently of QUIC connection state:
+
+```
+IdleRouteManager
+  +- read_idle: Duration               (configured idle threshold)
+  +- route_table: RouteTable<PeerID>   (shared with TransportLayer)
+
+  next_idle() -> (PeerID, Route, Instant)
+    +- Returns the next route whose last-read time exceeds read_idle
+    +- Called by the maintenance loop to detect stale routes
+
+  delay(peer_id, route_key) -> bool
+    +- Pushes the route's read deadline forward (resets idle timer)
+    +- Called when any traffic arrives on this route
+
+  remove_route(peer_id, route_key)
+    +- Evicts a single stale route from the route table
+    +- This is what triggers re-punching
+```
+
+The flow from idle detection to re-punching:
+
+```
+1. IdleRouteManager detects route with no read activity for > read_idle
+2. -> remove_route(peer_id, route_key) evicts the stale route
+3. -> If it was the last direct route: has_direct_route(peer_id) = false
+4. -> Maintenance loop detects the gap on next cycle (every 10s)
+5. -> Auto-punch triggered (subject to rate limiting)
+6. -> Relay routes preserved as fallback throughout
+```
+
+#### 7.4.3 Heartbeat Keeps Active Routes Alive
+
+The heartbeat loop (Section 7.2) serves a dual role here: every `EchoRequest` /
+`EchoReply` exchange calls `update_read_time()`, which in turn calls
+`IdleRouteManager::delay()`, pushing the route's idle deadline forward. This means:
+
+- **Active routes with working heartbeat** → never evicted (idle timer constantly refreshed)
+- **Routes where heartbeat stops arriving** → NAT mapping likely dead → idle eviction → re-punch
 
 ### 7.5 Summary
 
@@ -978,9 +998,136 @@ After direct routes are removed:
 | Heartbeat / Keepalive | **Implemented** | `start_heartbeat_loop` sends EchoRequest every 15s to direct peers |
 | RTT measurement | **Implemented** | EchoReply handler calculates RTT, calls `update_route_rtt()` |
 | NAT mapping keepalive | **Implemented** | Heartbeat packets traverse UDP socket, refreshing NAT mappings |
-| Connection failure cleanup | **Implemented** | `cleanup_connection` calls `remove_direct_routes()`, triggering re-punch |
+| Route idle eviction | **Implemented** | `IdleRouteManager` monitors read-idle timeout, evicts stale routes via `remove_route()` |
+| Route read-time refresh | **Implemented** | Heartbeat exchange calls `update_read_time()` → `IdleRouteManager::delay()` |
+| Connection cleanup (cache only) | **Implemented** | `cleanup_connection` removes QUIC connection cache + virtual peer, **preserves route table** |
 | Route table RTT sorting | **Implemented** | `update_rtt()` re-sorts routes when `LoadBalance::LowestLatency` is active |
-| Route pin (user-specified routing) | **Implemented** | `route_pin: DashMap` + `pin_route`/`unpin_route`/`send_to_via`/`open_bi_via` API |
+| Per-route QUIC connections | **Implemented** | `VirtualPeer.route_key` binding + `via_connections` + `send_to_via` / `try_send_to_via` / `open_bi_via` API |
+
+### 7.6 Per-Route QUIC Connections
+
+<svg viewBox="0 0 680 360" width="100%" xmlns="http://www.w3.org/2000/svg" role="img">
+  <title>Per-route QUIC connection mechanism</title>
+  <desc>VirtualPeer binds a synthetic address to a specific RouteKey. All QUIC packets for that connection traverse the specified route, independent of the route table's default selection.</desc>
+  <defs>
+    <marker id="a8" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M2 1L8 5L2 9" fill="none" stroke="#666666" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+  </defs>
+  <text x="340" y="25" text-anchor="middle" font-family="sans-serif" font-size="14" font-weight="500" fill="#333333">Per-route QUIC: binding a connection to a specific route</text>
+  <rect x="30" y="45" width="250" height="120" rx="10" fill="#E6F1FB" stroke="#85B7EB" stroke-width="0.5"/>
+  <text x="155" y="68" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="500" fill="#0C447C">VirtualPeer registration</text>
+  <text x="50" y="90" font-family="sans-serif" font-size="11" fill="#185FA5">register_virtual_peer_via(peer, route_key)</text>
+  <text x="50" y="108" font-family="sans-serif" font-size="11" fill="#185FA5">-> Allocates synthetic address (e.g. 127.0.0.1:9999)</text>
+  <text x="50" y="126" font-family="sans-serif" font-size="11" fill="#185FA5">-> VirtualPeer { peer_id, route_key: Some(rk) }</text>
+  <text x="50" y="144" font-family="sans-serif" font-size="11" fill="#185FA5">-> via_virtual_addrs[(peer, rk)] = addr</text>
+  <line x1="280" y1="105" x2="370" y2="105" stroke="#378ADD" stroke-width="1.5" marker-end="url(#a8)"/>
+  <text x="325" y="98" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#0C447C">binds</text>
+  <rect x="370" y="45" width="280" height="120" rx="10" fill="#EAF3DE" stroke="#97C459" stroke-width="0.5"/>
+  <text x="510" y="68" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="500" fill="#27500A">Quinn endpoint binds to synthetic addr</text>
+  <text x="390" y="90" font-family="sans-serif" font-size="11" fill="#3B6D11">Quinn thinks it sends to 127.0.0.1:9999</text>
+  <text x="390" y="108" font-family="sans-serif" font-size="11" fill="#3B6D11">QuicPeerSocket::try_send intercepts:</text>
+  <text x="390" y="126" font-family="sans-serif" font-size="11" fill="#3B6D11">-> finds VirtualPeer by destination addr</text>
+  <text x="390" y="144" font-family="sans-serif" font-size="11" fill="#3B6D11">-> route_key=Some -> try_send_quic_payload_via</text>
+  <rect x="30" y="185" width="620" height="56" rx="10" fill="#FAEEDA" stroke="#FAC775" stroke-width="0.5"/>
+  <text x="340" y="208" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="500" fill="#633806">try_send_quic_payload_via bypasses the route table</text>
+  <text x="340" y="226" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#854F0B">Wraps payload as QuicRelay packet -> try_send_wire_to_route(route_key) -> direct UDP send on that path</text>
+  <rect x="30" y="260" width="290" height="80" rx="10" fill="#F1EFE8" stroke="#B4B2A9" stroke-width="0.5"/>
+  <text x="175" y="283" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="500" fill="#444441">Default connection (route_key=None)</text>
+  <text x="175" y="303" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#5F5E5A">Uses route table default (lowest metric)</text>
+  <text x="175" y="320" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#5F5E5A">try_send_quic_payload -> route table lookup</text>
+  <rect x="360" y="260" width="290" height="80" rx="10" fill="#E6F1FB" stroke="#85B7EB" stroke-width="0.5"/>
+  <text x="505" y="283" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="500" fill="#0C447C">Via connection (route_key=Some)</text>
+  <text x="505" y="303" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#185FA5">Bypasses route table entirely</text>
+  <text x="505" y="320" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#185FA5">try_send_quic_payload_via -> direct wire send</text>
+</svg>
+
+The per-route QUIC mechanism allows applications to open a dedicated QUIC connection over a
+**specific route** (e.g., a particular direct path or relay path), bypassing the route table's
+default selection.
+
+#### How It Works
+
+The mechanism is built on **synthetic address binding**:
+
+```
+1. Application calls endpoint.open_bi_via(peer_id, route_key)
+2. -> QuicEndpoint::connection_to_via(peer_id, route_key)
+3. -> register_virtual_peer_via(peer_id, route_key)
+     Allocates a synthetic SocketAddr (e.g. 127.0.0.1:XXXX)
+     Creates VirtualPeer { peer_id, route_key: Some(route_key) }
+     Stores in via_virtual_addrs[(peer_id, route_key)]
+4. -> Quinn Endpoint connects to the synthetic address
+5. -> All QUIC packets (handshake, stream data, datagrams, ACKs)
+     go through QuicPeerSocket::try_send
+6. -> try_send looks up VirtualPeer by destination address
+7. -> If route_key is Some -> try_send_quic_payload_via()
+     Wraps payload as QuicRelay Packet
+     Calls transport.try_send_wire_to_route(route_key)
+     -> Sends directly on the specified UDP/TCP path
+```
+
+#### Key Data Structures
+
+```
+VirtualPeer {
+    peer_id: PeerId,
+    route_key: Option<RouteKey>,   // None = default, Some = pinned to route
+}
+
+QuicPeerSocket {
+    virtual_by_addr:  DashMap<SocketAddr, VirtualPeer>,        // synthetic addr -> peer
+    virtual_by_peer:  DashMap<PeerId, SocketAddr>,              // peer -> default synthetic addr
+    via_virtual_addrs: DashMap<(PeerId, RouteKey), SocketAddr>, // per-route synthetic addr
+}
+```
+
+#### Public API
+
+| Method | Layer | Description |
+|--------|-------|-------------|
+| `send_to_via(peer_id, route_key, payload)` | `QuicEndpoint` | Send a datagram over a specific route (async, may await connection) |
+| `try_send_to_via(peer_id, route_key, payload)` | `QuicEndpoint` | Non-blocking variant of `send_to_via` |
+| `open_bi_via(peer_id, route_key)` | `QuicEndpoint` | Open a bidirectional stream over a specific route |
+| `connection_to_via(peer_id, route_key)` | `QuicEndpoint` (internal) | Get/create per-route QUIC connection |
+
+#### Connection Lifecycle
+
+Per-route QUIC connections are cached in `via_connections: DashMap<(PeerId, RouteKey), Connection>`.
+When a per-route connection drops:
+
+```rust
+fn cleanup_via_connection(&self, stable_id: usize, peer_id: Option<PeerId>, route_key: RouteKey) {
+    self.connection_tasks.remove(&stable_id);
+    if let Some(peer_id) = peer_id {
+        let key = (peer_id.clone(), route_key);
+        let removed = self
+            .via_connections
+            .remove_if(&key, |_, conn| conn.quinn().stable_id() == stable_id);
+        if removed.is_some() {
+            self.socket.release_virtual_peer_via(&peer_id, &route_key);
+        }
+    }
+}
+```
+
+Similar to the default connection cleanup, **routes are not removed** — only the per-route
+connection cache and synthetic address binding are released. The route remains in the route
+table and can be reused by calling `send_to_via` / `open_bi_via` again.
+
+#### Obtaining RouteKeys
+
+Applications obtain `RouteKey` values from the route table:
+
+```rust
+let routes: Vec<Route> = endpoint.routes(&peer_id)?;
+// Each Route has .route_key() and .metric()
+// Filter for direct routes (metric == 0) or relay routes as needed
+let direct_route_key = routes
+    .into_iter()
+    .find(|r| r.is_direct())
+    .map(|r| r.route_key());
+```
 
 ---
 
@@ -997,16 +1144,30 @@ After direct routes are removed:
 | PunchReply handler | `rustp2p-quic/src/protocol.rs` | Dedup via has_direct_route, confirm_direct_and_promote |
 | try_execute_punch | `rustp2p-quic/src/protocol.rs` | Rate limiting: 5s for relay, unlimited for direct |
 | confirm_direct_and_promote | `rustp2p-quic/src/protocol.rs` | Promotes route to metric=0 in route table |
+| has_direct_route | `rustp2p-quic/src/protocol.rs` | Checks if any metric=0 route exists for peer |
+| confirm_tcp_route | `rustp2p-quic/src/protocol.rs` | TCP metric=0 confirmation delegates to confirm_direct_and_promote |
+| try_send_quic_payload | `rustp2p-quic/src/protocol.rs` | Route-table-based QUIC send (direct first, then via try_send_wire, then route_candidates) |
+| try_send_quic_payload_via | `rustp2p-quic/src/protocol.rs` | Per-route QUIC send bypassing route table |
+| route_metric_for | `rustp2p-quic/src/protocol.rs` | Returns route for QUIC receive when route may still be candidate |
 | start_maintenance_loop | `rustp2p-quic/src/protocol.rs` | Auto-punch every 10s/peer, NatObserve, IDRouteQuery |
 | start_heartbeat_loop | `rustp2p-quic/src/protocol.rs` | EchoRequest heartbeat every 15s, RTT measurement |
 | EchoReply handler | `rustp2p-quic/src/protocol.rs` | RTT calculation, update_route_rtt() |
-| remove_direct_routes | `rustp2p-quic/src/protocol.rs` | Remove metric=0 routes on QUIC connection drop |
-| route_pin | `rustp2p-quic/src/protocol.rs` | DashMap for user-specified route selection |
-| pin_route / unpin_route | `rustp2p-quic/src/endpoint.rs` | Public API for persistent route pinning |
-| send_to_via / try_send_to_via | `rustp2p-quic/src/endpoint.rs` | One-shot route-specified send |
-| open_bi_via | `rustp2p-quic/src/endpoint.rs` | Route-specified bidirectional stream |
+| cleanup_connection | `rustp2p-quic/src/quic.rs` | QUIC connection drop handler — releases cache + virtual peer only, **preserves route table** |
+| cleanup_via_connection | `rustp2p-quic/src/quic.rs` | Per-route QUIC connection drop handler — releases via cache + synthetic addr, preserves route table |
+| send_to_via / try_send_to_via | `rustp2p-quic/src/endpoint.rs` | Public per-route QUIC datagram send API |
+| open_bi_via | `rustp2p-quic/src/endpoint.rs` | Public per-route QUIC bidirectional stream API |
+| register_virtual_peer_via | `rustp2p-quic/src/quic.rs` | Allocates synthetic address bound to a RouteKey for per-route QUIC |
+| routes | `rustp2p-quic/src/endpoint.rs` | Returns Vec<Route> for a peer, providing RouteKey values for via API |
+| confirm_peer_route | `rustp2p-quic/src/transport.rs` | Confirms route in route table + updates PeerInfo (direct/relay) |
+| update_route_rtt | `rustp2p-quic/src/transport.rs` | Calls RouteTable::update_rtt for RTT tracking |
+| update_route_read_time | `rustp2p-quic/src/transport.rs` | Calls IdleRouteManager::delay to refresh idle timer |
+| IdleRouteManager | `rustp2p-core/src/idle.rs` | Read-idle timeout detection — evicts stale routes via remove_route |
+| IdleRouteManager::next_idle | `rustp2p-core/src/idle.rs` | Returns next route exceeding read_idle threshold |
+| IdleRouteManager::remove_route | `rustp2p-core/src/idle.rs` | Evicts a stale route (triggers re-punch via maintenance loop) |
+| RouteTable::remove_route | `rustp2p-core/src/route_table/table.rs` | Remove specific route by route_key from route table |
 | RouteTable::update_rtt | `rustp2p-core/src/route_table/table.rs` | RTT update + LowestLatency re-sort |
-| RouteTable::remove_route | `rustp2p-core/src/route_table/table.rs` | Remove specific route by route_key |
-| cleanup_connection | `rustp2p-quic/src/quic.rs` | QUIC connection drop handler, calls remove_direct_routes |
+| RouteKey | `rustp2p-core/src/route_table/mod.rs` | Protocol + SocketAddr, uniquely identifies a path |
+| Route::is_direct | `rustp2p-core/src/route_table/table.rs` | Returns true if metric == 0 (direct route) |
+| Route::is_relay | `rustp2p-core/src/route_table/table.rs` | Returns true if metric > 0 (relay route) |
 | apply_stun_result_to_nat_info | `rustp2p-quic/src/protocol.rs` | Only saves nat_type + port_range from STUN |
 | apply_observation_to_nat_info | `rustp2p-quic/src/protocol.rs` | Saves public_ips + public_udp_ports from NatObserve |

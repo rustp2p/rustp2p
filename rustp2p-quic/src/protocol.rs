@@ -6,7 +6,7 @@ use dashmap::{DashMap, DashSet};
 use prost::Message;
 use rustp2p_core::nat::{NatInfo, NatType};
 use rustp2p_core::punch::{PunchInfo, PunchModel};
-use rustp2p_core::route_table::{Protocol, RouteKey};
+use rustp2p_core::route_table::{Protocol, RouteKey, DEFAULT_RTT};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::io;
@@ -930,7 +930,7 @@ impl ProtocolLayer {
                             .into_iter()
                             .find(|r| r.route_key() == route_key)
                             .map(|r| r.rtt())
-                            .unwrap_or(9999);
+                            .unwrap_or(DEFAULT_RTT);
                         // Only log if RTT changed significantly (> 10ms delta)
                         if (rtt as i64 - old_rtt as i64).abs() > 10 {
                             log::debug!(

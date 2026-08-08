@@ -49,6 +49,14 @@ impl Route {
     pub fn rtt(&self) -> u32 {
         self.rtt
     }
+    /// Returns true if a real RTT measurement is available.
+    ///
+    /// Routes that have not yet been measured carry the sentinel
+    /// [`DEFAULT_RTT`] value; this method distinguishes a measured
+    /// route from one whose RTT is still unknown.
+    pub fn has_rtt(&self) -> bool {
+        self.rtt != DEFAULT_RTT
+    }
     pub fn metric(&self) -> u8 {
         self.metric
     }
