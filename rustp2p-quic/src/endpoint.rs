@@ -249,10 +249,9 @@ impl Endpoint {
 
     /// Returns confirmed routes for a peer.
     ///
-    /// Routes can be used with [`pin_route`](Self::pin_route),
-    /// [`send_to_via`](Self::send_to_via), [`try_send_to_via`](Self::try_send_to_via),
-    /// and [`open_bi_via`](Self::open_bi_via) to send data through a specific
-    /// path instead of the automatically selected one.
+    /// Routes can be used with [`send_to_via`](Self::send_to_via) and
+    /// [`try_send_to_via`](Self::try_send_to_via) to send data through a
+    /// specific path instead of the automatically selected one.
     ///
     /// Candidate routes are intentionally hidden until protocol control traffic
     /// confirms reachability.
@@ -332,13 +331,20 @@ impl Endpoint {
         self.quic.open_bi(peer_id).await
     }
 
-    /// Pins a specific route for a peer.
+    /// Sends a user payload via a specific route, bypassing QUIC.
     ///
-    /// All subsequent QUIC packets sent to this peer (via `send_to`,
-    /// `try_send_to`, `open_bi`, or their `_via` variants) will go through
-    /// the specified route, overriding automatic route-table selection.
+    /// The payload is wrapped in a `MessageData` protocol packet and sent
+    /// directly through the specified `route_key`. This method is completely
+    /// stateless: it does not use a QUIC connection, does not modify any
+    /// shared state, and is safe to call concurrently from multiple threads.
     ///
-    /// Use [`unpin_route`](Self::unpin_route) to revert to automatic selection.
+    /// Use [`routes`](Self::routes) to obtain available `RouteKey`s for a peer.
+    ///
+    /// **Trade-off**: Because QUIC is bypassed, the payload is not
+    /// QUIC-encrypted. For direct routes (metric == 0) the packet travels
+    /// directly between peers. For relayed routes, intermediate relay nodes
+    /// can observe the payload. Use [`send_to`](Self::send_to) when you need
+    /// end-to-end encryption and don't need to control the route.
     ///
     /// # Example
     /// ```no_run
@@ -346,24 +352,10 @@ impl Endpoint {
     /// # async fn example(ep: Endpoint, peer_id: rustp2p_quic::PeerId) {
     /// let routes = ep.routes(peer_id.clone());
     /// if let Some(direct) = routes.iter().find(|r| r.is_direct()) {
-    ///     ep.pin_route(peer_id.clone(), direct.route_key());
+    ///     ep.send_to_via(peer_id, direct.route_key(), b"hello").await.unwrap();
     /// }
     /// # }
     /// ```
-    pub fn pin_route(&self, peer_id: PeerId, route_key: RouteKey) {
-        self.quic.pin_route(peer_id, route_key);
-    }
-
-    /// Removes a previously pinned route, reverting to automatic selection.
-    pub fn unpin_route(&self, peer_id: PeerId) {
-        self.quic.unpin_route(&peer_id);
-    }
-
-    /// Sends an encrypted QUIC DATAGRAM via a specific route.
-    ///
-    /// This is a convenience method that temporarily pins the route, sends
-    /// the datagram, then unpins. For persistent route selection, use
-    /// [`pin_route`](Self::pin_route) instead.
     pub async fn send_to_via(
         &self,
         peer_id: PeerId,
@@ -373,10 +365,11 @@ impl Endpoint {
         self.quic.send_to_via(peer_id, route_key, payload).await
     }
 
-    /// Attempts to send an encrypted QUIC DATAGRAM via a specific route
-    /// without waiting.
+    /// Attempts to send a user payload via a specific route without waiting.
     ///
-    /// Temporarily pins the route, attempts the send, then unpins.
+    /// Stateless synchronous variant of [`send_to_via`](Self::send_to_via).
+    /// Returns `WouldBlock` if the underlying transport cannot accept the
+    /// packet immediately.
     pub fn try_send_to_via(
         &self,
         peer_id: PeerId,
@@ -384,19 +377,6 @@ impl Endpoint {
         payload: &[u8],
     ) -> crate::Result<()> {
         self.quic.try_send_to_via(peer_id, route_key, payload)
-    }
-
-    /// Opens a bidirectional QUIC stream via a specific route.
-    ///
-    /// Pins the route for the peer. The pin stays active after this call so
-    /// that all stream data flows through the specified route. Call
-    /// [`unpin_route`](Self::unpin_route) to revert to automatic selection.
-    pub async fn open_bi_via(
-        &self,
-        peer_id: PeerId,
-        route_key: RouteKey,
-    ) -> crate::Result<(crate::ReliableSendStream, crate::ReliableRecvStream)> {
-        self.quic.open_bi_via(peer_id, route_key).await
     }
 
     /// Accepts the next inbound end-to-end bidirectional QUIC stream.

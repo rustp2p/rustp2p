@@ -318,6 +318,7 @@ impl QuicEndpoint {
         });
         quic.start_accept_loop();
         quic.start_transport_loop();
+        quic.start_message_loop();
         Ok(quic)
     }
 
@@ -415,60 +416,37 @@ impl QuicEndpoint {
         Ok((ReliableSendStream::new(send), ReliableRecvStream::new(recv)))
     }
 
-    /// Sends a QUIC DATAGRAM via a specific route.
+    /// Sends a user payload via a specific route, bypassing QUIC entirely.
     ///
-    /// Temporarily pins the route, sends the datagram, then unpins to revert
-    /// to automatic route selection. If the QUIC connection was already
-    /// established through a different route, the datagram will still go
-    /// through the pinned route (QUIC supports packet-level path switching
-    /// via connection IDs).
+    /// The payload is wrapped in a `MessageData` protocol packet and sent
+    /// directly through the specified route_key. This is completely stateless:
+    /// no QUIC connection is used, no shared state is modified, and the method
+    /// is safe to call concurrently from multiple threads.
+    ///
+    /// The trade-off is that the payload is not encrypted by QUIC. For direct
+    /// routes the packet travels directly between peers; for relayed routes
+    /// the relay can observe the payload.
     pub(crate) async fn send_to_via(
-        self: &Arc<Self>,
+        &self,
         peer_id: PeerId,
         route_key: RouteKey,
         payload: &[u8],
     ) -> io::Result<()> {
-        self.protocol.pin_route(peer_id.clone(), route_key);
-        let result = self.send_to(peer_id.clone(), payload).await;
-        self.protocol.unpin_route(&peer_id);
-        result
+        self.protocol
+            .send_message_via(peer_id, route_key, payload)
+            .await
     }
 
-    /// Tries to send a QUIC DATAGRAM via a specific route without waiting.
-    ///
-    /// Pins the route, attempts the send, then unpins.
+    /// Synchronous variant of [`send_to_via`]. Returns `WouldBlock` if the
+    /// underlying transport cannot accept the packet immediately.
     pub(crate) fn try_send_to_via(
         &self,
         peer_id: PeerId,
         route_key: RouteKey,
         payload: &[u8],
     ) -> io::Result<()> {
-        self.protocol.pin_route(peer_id.clone(), route_key);
-        let result = self.try_send_to(peer_id.clone(), payload);
-        self.protocol.unpin_route(&peer_id);
-        result
-    }
-
-    /// Opens a bidirectional QUIC stream via a specific route.
-    ///
-    /// Pins the route for the peer. The pin stays active after this call so
-    /// that all stream data flows through the specified route. Call
-    /// `unpin_route` to revert to automatic route selection.
-    pub(crate) async fn open_bi_via(
-        self: &Arc<Self>,
-        peer_id: PeerId,
-        route_key: RouteKey,
-    ) -> io::Result<(ReliableSendStream, ReliableRecvStream)> {
-        self.protocol.pin_route(peer_id.clone(), route_key);
-        self.open_bi(peer_id).await
-    }
-
-    pub(crate) fn unpin_route(&self, peer_id: &PeerId) {
-        self.protocol.unpin_route(peer_id);
-    }
-
-    pub(crate) fn pin_route(&self, peer_id: PeerId, route_key: RouteKey) {
-        self.protocol.pin_route(peer_id, route_key);
+        self.protocol
+            .try_send_message_via(peer_id, route_key, payload)
     }
 
     pub(crate) async fn accept_bi(&self) -> io::Result<IncomingBiStream> {
@@ -565,6 +543,59 @@ impl QuicEndpoint {
                 let virtual_addr = quic.socket.register_virtual_peer(payload.src);
                 quic.socket
                     .inject_routed_quic(payload.payload, virtual_addr);
+            }
+        });
+    }
+
+    /// Receives `MessageData` packets (from `send_to_via`) and delivers them
+    /// to the user's inbox. These packets bypass QUIC entirely — the payload
+    /// is the raw user data sent through a caller-specified route.
+    fn start_message_loop(self: &Arc<Self>) {
+        let quic = self.clone();
+        tokio::spawn(async move {
+            loop {
+                if quic.closed.load(Ordering::Relaxed) {
+                    break;
+                }
+                let payload = match quic.protocol.recv_message_payload().await {
+                    Ok(payload) => payload,
+                    Err(e) => {
+                        log::debug!("message data loop ended: {e}");
+                        break;
+                    }
+                };
+                // Look up route metadata for the ReceivedMessage fields.
+                // Fall back to defaults if the route is not in the table
+                // (e.g., the packet arrived via a candidate route).
+                let (route, metric) =
+                    quic.protocol
+                        .route_metric_for(&payload.src)
+                        .unwrap_or_else(|_| {
+                            (
+                                rustp2p_core::route_table::RouteKey::new(
+                                    rustp2p_core::route_table::Protocol::UDP,
+                                    std::net::SocketAddr::new(
+                                        std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED),
+                                        0,
+                                    ),
+                                ),
+                                0,
+                            )
+                        });
+                let max_ttl = quic.protocol.max_ttl();
+                let _ = quic
+                    .inbox_tx
+                    .send_async(ReceivedMessage {
+                        payload: payload.payload,
+                        src: payload.src,
+                        dest: quic.peer_id.clone(),
+                        route,
+                        ttl: max_ttl.saturating_sub(metric),
+                        max_ttl,
+                        is_relay: metric > 0,
+                        is_broadcast: false,
+                    })
+                    .await;
             }
         });
     }

@@ -363,13 +363,14 @@ pub(crate) struct ProtocolLayer {
     route_candidates: DashMap<PeerId, RouteKey>,
     // Per-peer last punch timestamp (unix seconds) for rate-limiting auto-punch.
     last_punch_time: DashMap<PeerId, u64>,
-    // Pinned route per peer. When set, all QUIC packets for that peer are sent
-    // through this route_key, overriding the normal route-table selection.
-    // This enables send_to_via / open_bi_via and user-controlled route selection.
-    route_pin: DashMap<PeerId, RouteKey>,
     // Pending EchoRequest timestamps for RTT measurement.
     // Keyed by (peer_id, timestamp_millis) so that stale echoes can be discarded.
     pending_echo: DashMap<PeerId, u64>,
+    // Channel for delivering MessageData packets (from send_to_via) to the
+    // QuicEndpoint's inbox. This bypasses QUIC entirely — the payload is sent
+    // as a raw rustp2p protocol packet through the caller-specified route.
+    message_tx: flume::Sender<TransportPayload>,
+    message_rx: flume::Receiver<TransportPayload>,
 }
 
 impl ProtocolLayer {
@@ -383,6 +384,7 @@ impl ProtocolLayer {
     ) -> Arc<Self> {
         let (hello_tx, hello_rx) = flume::bounded(128);
         let (quic_tx, quic_rx) = flume::bounded(512);
+        let (message_tx, message_rx) = flume::bounded(512);
         let layer = Arc::new(Self {
             transport,
             peer_id,
@@ -403,8 +405,9 @@ impl ProtocolLayer {
             pending_punch: DashMap::new(),
             route_candidates: DashMap::new(),
             last_punch_time: DashMap::new(),
-            route_pin: DashMap::new(),
             pending_echo: DashMap::new(),
+            message_tx,
+            message_rx,
         });
         layer.start_packet_dispatcher();
         layer.start_maintenance_loop();
@@ -428,16 +431,61 @@ impl ProtocolLayer {
         self.transport.route_for(peer_id).map(|_| ())
     }
 
-    /// Pin a specific route for a peer. All subsequent QUIC packets sent to
-    /// this peer will go through the specified route_key, overriding normal
-    /// route-table selection.
-    pub(crate) fn pin_route(&self, peer_id: PeerId, route_key: RouteKey) {
-        self.route_pin.insert(peer_id, route_key);
+    /// Send a user payload as a `MessageData` packet through the specified
+    /// route. This bypasses QUIC entirely — the payload is wrapped in a
+    /// rustp2p protocol packet and sent directly through the given route_key.
+    ///
+    /// Unlike QUIC-based `send_to`, this method is completely stateless: it
+    /// does not create or use a QUIC connection, does not modify any shared
+    /// state, and is safe to call concurrently from multiple threads.
+    ///
+    /// The trade-off is that the payload is not encrypted by QUIC. For direct
+    /// routes (metric == 0) the packet travels directly between peers; for
+    /// relayed routes the relay node can observe the payload.
+    pub(crate) async fn send_message_via(
+        &self,
+        peer_id: PeerId,
+        route_key: RouteKey,
+        payload: &[u8],
+    ) -> io::Result<()> {
+        let packet = Packet::build(
+            ProtocolType::MessageData,
+            self.peer_id.clone(),
+            peer_id,
+            self.max_ttl,
+            payload,
+        )?;
+        self.transport
+            .send_wire_to_route(route_key, packet.as_bytes())
+            .await
     }
 
-    /// Remove a previously pinned route, reverting to automatic route selection.
-    pub(crate) fn unpin_route(&self, peer_id: &PeerId) {
-        self.route_pin.remove(peer_id);
+    /// Synchronous variant of [`send_message_via`]. Returns `WouldBlock` if
+    /// the underlying transport cannot accept the packet immediately.
+    pub(crate) fn try_send_message_via(
+        &self,
+        peer_id: PeerId,
+        route_key: RouteKey,
+        payload: &[u8],
+    ) -> io::Result<()> {
+        let packet = Packet::build(
+            ProtocolType::MessageData,
+            self.peer_id.clone(),
+            peer_id,
+            self.max_ttl,
+            payload,
+        )?;
+        self.transport
+            .try_send_wire_to_route(route_key, packet.as_bytes())
+    }
+
+    /// Receive the next `MessageData` payload delivered by a `send_to_via`
+    /// call from a remote peer.
+    pub(crate) async fn recv_message_payload(&self) -> io::Result<TransportPayload> {
+        self.message_rx
+            .recv_async()
+            .await
+            .map_err(|_| io::Error::new(io::ErrorKind::UnexpectedEof, "protocol closed"))
     }
 
     /// Remove all direct routes for a peer. Called when a QUIC connection drops
@@ -484,14 +532,6 @@ impl ProtocolLayer {
             self.max_ttl,
             payload,
         )?;
-        // If the caller pinned a specific route for this peer, use it directly.
-        // This takes priority over the normal route-table selection and enables
-        // the send_to_via / open_bi_via API.
-        if let Some(route_key) = self.route_pin.get(&peer_id).map(|r| *r) {
-            return self
-                .transport
-                .try_send_wire_to_route(route_key, packet.as_bytes());
-        }
         // Prefer direct routes (metric == 0) for QUIC packets. Relay routes
         // add extra latency that can cause QUIC handshake timeouts, especially
         // during the initial connection setup after hole punching succeeds.
@@ -1013,9 +1053,19 @@ impl ProtocolLayer {
                     }
                 }
             }
-            ProtocolType::MessageData
-            | ProtocolType::RangeBroadcast
-            | ProtocolType::TimestampReply => {}
+            ProtocolType::MessageData => {
+                // MessageData packets carry user payloads sent via send_to_via,
+                // bypassing QUIC. Forward the payload to the message channel so
+                // the QuicEndpoint can deliver it to the user's inbox.
+                let _ = self
+                    .message_tx
+                    .send_async(TransportPayload {
+                        payload: Bytes::copy_from_slice(packet.payload()),
+                        src,
+                    })
+                    .await;
+            }
+            ProtocolType::RangeBroadcast | ProtocolType::TimestampReply => {}
         }
         Ok(())
     }
