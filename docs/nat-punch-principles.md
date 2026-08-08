@@ -1129,6 +1129,85 @@ let direct_route_key = routes
     .map(|r| r.route_key());
 ```
 
+#### Behavior by NAT Type and Route Type
+
+The per-route QUIC APIs (`send_to_via`, `try_send_to_via`, `open_bi_via`) operate
+on any `RouteKey` found in the route table, but their success probability,
+latency, and failure modes differ depending on the **local** and **remote**
+peer's NAT classification. The table and matrix below describe these differences.
+
+##### Public API Reference
+
+| Method | Layer | Signature | Blocking? | Behavior by Route Type |
+|--------|-------|-----------|-----------|----------------------|
+| `send_to_via` | `QuicEndpoint` | `async send_to_via(peer_id, route_key, payload) -> Result<()>` | Yes — awaits connection handshake + datagram send | **Direct route:** QUIC handshake traverses direct path (NAT punch-through). **Relay route:** handshake packets wrapped as QuicRelay packets and forwarded hop-by-hop. Always creates/reuses connection. |
+| `try_send_to_via` | `QuicEndpoint` | `try_send_to_via(peer_id, route_key, payload) -> Result<()>` | No — returns `WouldBlock` if no cached connection | **Both route types:** sends over existing per-route QUIC connection. No handshake; caller must have called `send_to_via` or `open_bi_via` first to establish the connection. |
+| `open_bi_via` | `QuicEndpoint` | `async open_bi_via(peer_id, route_key) -> Result<stream, stream>` | Yes — awaits connection establishment + stream open | **Direct route:** QUIC handshake + stream open over direct path. **Relay route:** handshake + stream data wrapped as QuicRelay and forwarded. Retries once after 50ms on failure (clears stale connection cache). |
+
+##### NAT Type × Route Type Behavior Matrix
+
+| Local NAT →<br>Remote NAT ↓ | **Cone → Cone**<br>(direct route) | **Cone → Symmetric**<br>(direct route) | **Symmetric → Cone**<br>(direct route) | **Symmetric → Symmetric**<br>(likely no direct route) | **Any → Any** (relay route) |
+|---------------------------|:---------------------------------:|:--------------------------------------:|:---------------------------------------:|:-----------------------------------------------------:|:---------------------------:|
+| **Cone NAT** | ✅ Handshake succeeds quickly (1 RTT). Port mapping stable. `try_send_via` cache reliable. | ✅ Handshake succeeds if remote's predicted port hits (Symmetric → Cone is single-direction prediction). Mapping may shift. | ⚠️ Requires bidirectional port prediction. Handshake may fail if local port mapping drifts. `send_to_via` may need multiple attempts. | ❌ Direct route rarely exists. `routes()` returns only relay routes. Must use relay route_key. | ✅ Handshake succeeds (relay provides traversal). RTT = 2 relay hops. `try_send_to_via` cache stable (relay is persistent). |
+| **Symmetric NAT** | ✅ Same as Cone → Cone but local uses assistant sockets for port prediction. Handshake reliable once port is found. | ⚠️ Both sides need port prediction. Handshake success depends on prediction range overlap. `open_bi_via` retry(50ms) helps. | ⚠️ Same as above. Local uses assistant socket pool (`try_send_via_all` over all assistants). Success rate depends on port_range width. | ❌ Direct route almost never established. `routes()` returns only relay. Use relay route_key. | ✅ Same as above. Assistant sockets still used for the relay leg (to the relay node). |
+
+##### Key Observations
+
+1. **Direct routes (metric=0)**: The `route_key` addresses the remote peer's
+   public address directly. NAT behavior depends entirely on whether the
+   NAT mappings on both sides are alive and predictable:
+   - **Cone NAT**: Single port mapping per (src_ip, src_port, dest_ip, dest_port).
+     Once established, the mapping is stable for the lifetime of the outbound
+     packet flow. `try_send_to_via` cache is highly reliable.
+   - **Symmetric NAT**: New port mapping per (src_ip, src_port, dest_ip, dest_port)
+     tuple. The mapping can shift between sends if the NAT assigns a different
+     port. This makes `try_send_to_via` cache less reliable — if the NAT mapping
+     has been reallocated, the cached QUIC connection's path becomes stale and
+     the next `try_send_to_via` returns `ConnectionLost` (not `WouldBlock`).
+     The application must call `send_to_via` to re-establish.
+
+2. **Relay routes (metric>0)**: The `route_key` addresses the next-hop relay
+   node's address. The relay forwards packets to the destination. This path
+   is **NAT-independent** — the relay is a public node that can always receive
+   inbound traffic. `try_send_to_via` cache is stable because the relay leg is
+   persistent. However, RTT is higher (minimum 2 hops) and the relay node must
+   be operational.
+
+3. **`open_bi_via` retry**: The 50ms retry with cache cleanup handles transient
+   failures (e.g., NAT mapping expiry during handshake). This is most relevant
+   for Symmetric NAT scenarios where port mappings can shift mid-handshake.
+
+4. **`try_send_to_via` vs `WouldBlock`**: `WouldBlock` indicates no cached
+   connection exists (connection was never opened). For Symmetric NAT, a cached
+   connection may also fail with `ConnectionLost` if the NAT mapping shifted —
+   the application should catch this error and re-establish via `send_to_via`.
+
+5. **Connection lifecycle by NAT type**: When a per-route QUIC connection drops:
+   - **Cone NAT + direct route**: Re-establishing is fast (1 RTT, mapping stable).
+   - **Symmetric NAT + direct route**: Re-establishing may require
+     re-predicted port mapping; local node may allocate a new assistant socket.
+   - **Relay route (any NAT)**: Re-establishing always succeeds if the relay
+     is alive (NAT-independent path). Route is preserved in the route table.
+
+6. **Selecting RouteKey by NAT type**: Applications should prefer direct routes
+   (`metric == 0`) for lowest latency, but should gracefully fall back to relay
+   routes when:
+   - No direct route exists (common with Symmetric → Symmetric pairs)
+   - The direct route's RTT exceeds a threshold
+   - `try_send_to_via` returns `ConnectionLost` (NAT mapping expired)
+
+```rust
+// Recommended pattern for NAT-aware route selection:
+let routes = endpoint.routes(&peer_id)?;
+let chosen = routes.iter()
+    .filter(|r| r.is_direct())  // prefer direct first
+    .chain(routes.iter().filter(|r| !r.is_direct()))  // fallback to relay
+    .find_map(|r| {
+        // For Symmetric NAT, may want to skip direct if RTT is poor
+        Some(r.route_key())
+    });
+```
+
 ---
 
 ## Appendix: Key Code Location Index
