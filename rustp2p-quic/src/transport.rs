@@ -464,14 +464,6 @@ impl TransportLayer {
         self.state.routes.route_to_id(route_key)
     }
 
-    /// Remove a specific route for a peer.
-    ///
-    /// Called when a QUIC connection drops to clean up the associated direct
-    /// route, allowing the maintenance loop to re-punch and re-establish it.
-    pub(crate) fn remove_route(&self, peer_id: &PeerId, route_key: &RouteKey) {
-        self.state.routes.remove_route(peer_id, route_key);
-    }
-
     /// Update the RTT of a specific route.
     ///
     /// Called after an EchoReply to reflect the latest measured round-trip

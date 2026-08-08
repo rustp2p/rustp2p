@@ -38,9 +38,17 @@ fn symmetric_prediction_candidates(
 
 #[derive(Default, Clone)]
 struct PunchStats {
-    total_count: usize,
     batch_count: usize,
     last_time: u64,
+}
+
+fn should_punch(stats: &PunchStats, current_time: u64) -> bool {
+    if stats.batch_count <= 8 {
+        return true;
+    }
+
+    let min_interval = (stats.batch_count / 8).min(360) as u64;
+    current_time.saturating_sub(stats.last_time) >= min_interval
 }
 
 #[derive(Clone)]
@@ -68,11 +76,7 @@ impl Puncher {
             return false;
         };
         let stats = self.punch_stats.lock().entry(id).or_default().clone();
-        if stats.total_count > 8 {
-            let interval = stats.total_count / 8;
-            return stats.total_count.is_multiple_of(interval.min(360));
-        }
-        true
+        should_punch(&stats, now())
     }
 
     pub async fn punch(&self, buf: &[u8], punch_info: PunchInfo) -> io::Result<()> {
@@ -368,8 +372,42 @@ fn now() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::symmetric_prediction_candidates;
+    use super::{should_punch, symmetric_prediction_candidates, PunchStats};
     use crate::nat::NatInfo;
+
+    #[test]
+    fn punch_backoff_allows_first_nine_executed_batches() {
+        for batch_count in 0..=8 {
+            let stats = PunchStats {
+                batch_count,
+                last_time: 100,
+            };
+            assert!(should_punch(&stats, 100));
+        }
+    }
+
+    #[test]
+    fn punch_backoff_uses_elapsed_time_after_initial_batches() {
+        let stats = PunchStats {
+            batch_count: 16,
+            last_time: 100,
+        };
+
+        assert!(!should_punch(&stats, 101));
+        assert!(should_punch(&stats, 102));
+        assert!(should_punch(&stats, 200));
+    }
+
+    #[test]
+    fn punch_backoff_interval_is_capped() {
+        let stats = PunchStats {
+            batch_count: usize::MAX,
+            last_time: 100,
+        };
+
+        assert!(!should_punch(&stats, 459));
+        assert!(should_punch(&stats, 460));
+    }
 
     #[test]
     fn symmetric_prediction_uses_relay_and_stun_ports_as_local_bases() {

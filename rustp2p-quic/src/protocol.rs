@@ -423,26 +423,6 @@ impl ProtocolLayer {
         self.transport.route_for(peer_id).map(|_| ())
     }
 
-    /// Remove all direct routes for a peer. Called when a QUIC connection drops
-    /// to trigger re-punching via the maintenance loop. Relay routes are kept
-    /// as fallback so communication can continue while re-punching is in progress.
-    pub(crate) fn remove_direct_routes(&self, peer_id: &PeerId) {
-        let routes = self.transport.routes(peer_id.clone());
-        let direct_routes: Vec<_> = routes.into_iter().filter(|r| r.is_direct()).collect();
-        if !direct_routes.is_empty() {
-            log::info!(
-                "QUIC connection to {} dropped — removing {} direct route(s) to trigger re-punch",
-                peer_id,
-                direct_routes.len()
-            );
-            for route in direct_routes {
-                self.transport.remove_route(peer_id, &route.route_key());
-            }
-        }
-        // Also remove stale echo tracking
-        self.pending_echo.remove(peer_id);
-    }
-
     pub(crate) fn route_metric_for(&self, peer_id: &PeerId) -> io::Result<(RouteKey, u8)> {
         // QUIC may need metadata for packets received while the route is still
         // a direct candidate. This does not expose the candidate through

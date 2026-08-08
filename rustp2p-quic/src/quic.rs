@@ -488,8 +488,13 @@ impl QuicEndpoint {
                 Ok(stream) => return Ok(stream),
                 Err(e) => {
                     last_err = Some(e);
-                    self.connections.remove(&peer_id);
-                    self.socket.release_virtual_peer(&peer_id);
+                    if self
+                        .connections
+                        .remove_if(&peer_id, |_, conn| conn.is_closed())
+                        .is_some()
+                    {
+                        self.socket.release_virtual_peer(&peer_id);
+                    }
                     tokio::time::sleep(Duration::from_millis(50)).await;
                 }
             }
@@ -592,7 +597,9 @@ impl QuicEndpoint {
                 Ok(stream) => return Ok(stream),
                 Err(e) => {
                     last_err = Some(e);
-                    self.via_connections.remove(&(peer_id.clone(), route_key));
+                    let key = (peer_id.clone(), route_key);
+                    self.via_connections
+                        .remove_if(&key, |_, conn| conn.is_closed());
                     self.socket.release_virtual_peer_via(&peer_id, &route_key);
                     tokio::time::sleep(Duration::from_millis(50)).await;
                 }
@@ -670,6 +677,9 @@ impl QuicEndpoint {
         let conn = match self.connect_quic_addr(addr).await {
             Ok(conn) => conn,
             Err(e) => {
+                let key = (peer_id.clone(), route_key);
+                self.via_connections
+                    .remove_if(&key, |_, conn| conn.is_closed());
                 self.socket.release_virtual_peer_via(&peer_id, &route_key);
                 return Err(e);
             }
@@ -693,7 +703,16 @@ impl QuicEndpoint {
         let conn = match self.connect_quic_addr(addr).await {
             Ok(conn) => conn,
             Err(e) => {
-                self.socket.release_virtual_peer(&peer_id);
+                // Don't release the virtual peer if a concurrent connection
+                // has already registered a working connection for this peer.
+                let has_active = self
+                    .connections
+                    .get(&peer_id)
+                    .map(|conn| !conn.is_closed())
+                    .unwrap_or(false);
+                if !has_active {
+                    self.socket.release_virtual_peer(&peer_id);
+                }
                 return Err(e);
             }
         };
@@ -840,11 +859,22 @@ impl QuicEndpoint {
     fn cleanup_connection(&self, stable_id: usize, peer_id: Option<PeerId>) {
         self.connection_tasks.remove(&stable_id);
         if let Some(peer_id) = peer_id {
-            self.connections.remove(&peer_id);
-            self.socket.release_virtual_peer(&peer_id);
-            // Remove direct routes so the maintenance loop re-punches.
-            // Relay routes are kept as fallback so communication can continue.
-            self.protocol.remove_direct_routes(&peer_id);
+            // Only remove the cache entry if it still points to *this*
+            // connection. A newer connection may have already replaced it.
+            let removed = self
+                .connections
+                .remove_if(&peer_id, |_, conn| conn.quinn().stable_id() == stable_id);
+            if removed.is_some() {
+                self.socket.release_virtual_peer(&peer_id);
+            }
+            // Intentionally do NOT remove direct routes here.
+            //
+            // QUIC application-layer connection lifecycle is separate from
+            // the underlying UDP/TCP path. The connection dropping (idle
+            // timeout, local close, etc.) does not mean the NAT mapping or
+            // the path itself is dead. The route table has its own read-idle
+            // detection (IdleRouteManager) and heartbeat-driven activity
+            // refresh, which are the correct mechanisms for route lifecycle.
         }
     }
 
@@ -862,8 +892,16 @@ impl QuicEndpoint {
     ) {
         self.connection_tasks.remove(&stable_id);
         if let Some(peer_id) = peer_id {
-            self.via_connections.remove(&(peer_id.clone(), route_key));
-            self.socket.release_virtual_peer_via(&peer_id, &route_key);
+            let key = (peer_id.clone(), route_key);
+            // Only remove if the cached entry is the same connection that
+            // is being cleaned up. A re-established connection may have
+            // already replaced it.
+            let removed = self
+                .via_connections
+                .remove_if(&key, |_, conn| conn.quinn().stable_id() == stable_id);
+            if removed.is_some() {
+                self.socket.release_virtual_peer_via(&peer_id, &route_key);
+            }
         }
     }
 
