@@ -59,6 +59,10 @@ pub struct IncomingBiStream {
 #[derive(Clone, Debug)]
 struct VirtualPeer {
     peer_id: PeerId,
+    /// When set, all QUIC packets for this virtual address are sent through
+    /// the specified route_key instead of via route-table lookup. This enables
+    /// per-route QUIC connections for `send_to_via` / `open_bi_via`.
+    route_key: Option<RouteKey>,
 }
 
 #[derive(Clone, Debug)]
@@ -72,12 +76,22 @@ struct RoutedQuicPacket {
 /// Quinn requires `SocketAddr`s, but the public transport model is `PeerId`.
 /// This adapter owns the synthetic address table and delegates real delivery to
 /// the protocol layer, which wraps QUIC packets and sends them by peer id.
+///
+/// Each virtual address may optionally bind to a specific `RouteKey`. When
+/// bound, all QUIC packets for that address bypass route-table lookup and
+/// go directly through the specified route. This enables per-route QUIC
+/// connections: `send_to_via` / `open_bi_via` create a separate connection
+/// whose virtual address is bound to the caller-specified route_key, so
+/// quinn's internal `try_send` calls use that route for every packet on the
+/// connection — handshakes, datagrams, streams, and ACKs alike.
 pub(crate) struct QuicPeerSocket {
     protocol: Arc<ProtocolLayer>,
     routed_quic_tx: mpsc::UnboundedSender<RoutedQuicPacket>,
     routed_quic_rx: parking_lot::Mutex<mpsc::UnboundedReceiver<RoutedQuicPacket>>,
     virtual_by_addr: DashMap<SocketAddr, VirtualPeer>,
     virtual_by_peer: DashMap<PeerId, SocketAddr>,
+    /// Virtual addresses for per-route connections, keyed by (PeerId, RouteKey).
+    via_virtual_addrs: DashMap<(PeerId, RouteKey), SocketAddr>,
 }
 
 impl QuicPeerSocket {
@@ -89,18 +103,73 @@ impl QuicPeerSocket {
             routed_quic_rx: parking_lot::Mutex::new(routed_quic_rx),
             virtual_by_addr: DashMap::new(),
             virtual_by_peer: DashMap::new(),
+            via_virtual_addrs: DashMap::new(),
         })
     }
 
     pub(crate) fn register_virtual_peer(&self, peer_id: PeerId) -> SocketAddr {
         if let Some(addr) = self.virtual_by_peer.get(&peer_id).map(|entry| *entry) {
-            self.virtual_by_addr.insert(addr, VirtualPeer { peer_id });
+            self.virtual_by_addr.insert(
+                addr,
+                VirtualPeer {
+                    peer_id,
+                    route_key: None,
+                },
+            );
             return addr;
         }
 
         let addr = self.allocate_virtual_addr();
         self.virtual_by_peer.insert(peer_id.clone(), addr);
-        self.virtual_by_addr.insert(addr, VirtualPeer { peer_id });
+        self.virtual_by_addr.insert(
+            addr,
+            VirtualPeer {
+                peer_id,
+                route_key: None,
+            },
+        );
+        addr
+    }
+
+    /// Register a virtual peer bound to a specific route_key.
+    ///
+    /// Each `(PeerId, RouteKey)` pair gets its own virtual address. When quinn
+    /// sends packets to this address, `try_send` uses the bound route_key
+    /// directly instead of consulting the route table. This creates a per-route
+    /// QUIC connection: all packets on the connection (handshake, datagrams,
+    /// streams, ACKs) travel through the specified route.
+    ///
+    /// The caller should cache the returned connection and reuse it for
+    /// subsequent sends via the same route. When the connection is no longer
+    /// needed, call [`release_virtual_peer_via`](Self::release_virtual_peer_via)
+    /// to free the virtual address.
+    pub(crate) fn register_virtual_peer_via(
+        &self,
+        peer_id: PeerId,
+        route_key: RouteKey,
+    ) -> SocketAddr {
+        let key = (peer_id.clone(), route_key);
+        if let Some(addr) = self.via_virtual_addrs.get(&key).map(|entry| *entry) {
+            // Refresh the mapping in case it was removed from virtual_by_addr.
+            self.virtual_by_addr.insert(
+                addr,
+                VirtualPeer {
+                    peer_id,
+                    route_key: Some(route_key),
+                },
+            );
+            return addr;
+        }
+
+        let addr = self.allocate_virtual_addr();
+        self.via_virtual_addrs.insert(key, addr);
+        self.virtual_by_addr.insert(
+            addr,
+            VirtualPeer {
+                peer_id,
+                route_key: Some(route_key),
+            },
+        );
         addr
     }
 
@@ -112,6 +181,17 @@ impl QuicPeerSocket {
 
     pub(crate) fn release_virtual_peer(&self, peer_id: &PeerId) {
         if let Some((_, addr)) = self.virtual_by_peer.remove(peer_id) {
+            self.virtual_by_addr.remove(&addr);
+        }
+    }
+
+    /// Release the virtual address for a per-route connection.
+    ///
+    /// Called when a via connection is cleaned up. Only the virtual address
+    /// is freed — the underlying route is not affected.
+    pub(crate) fn release_virtual_peer_via(&self, peer_id: &PeerId, route_key: &RouteKey) {
+        let key = (peer_id.clone(), *route_key);
+        if let Some((_, addr)) = self.via_virtual_addrs.remove(&key) {
             self.virtual_by_addr.remove(&addr);
         }
     }
@@ -153,9 +233,21 @@ impl AsyncUdpSocket for QuicPeerSocket {
 
     fn try_send(&self, transmit: &Transmit) -> io::Result<()> {
         if let Some(peer) = self.virtual_by_addr.get(&transmit.destination) {
-            return self
-                .protocol
-                .try_send_quic_payload(peer.peer_id.clone(), transmit.contents);
+            // If this virtual address is bound to a specific route_key (per-route
+            // connection), send directly through that route instead of consulting
+            // the route table. This ensures all QUIC packets for a via connection
+            // — handshakes, datagrams, streams, ACKs — travel through the
+            // caller-specified route.
+            return match peer.route_key {
+                Some(route_key) => self.protocol.try_send_quic_payload_via(
+                    peer.peer_id.clone(),
+                    route_key,
+                    transmit.contents,
+                ),
+                None => self
+                    .protocol
+                    .try_send_quic_payload(peer.peer_id.clone(), transmit.contents),
+            };
         }
         // Unknown destinations are internal state errors. Treating the address
         // as a real network address would bypass the PeerId overlay and route
@@ -225,6 +317,12 @@ pub(crate) struct QuicEndpoint {
     socket: Arc<QuicPeerSocket>,
     closed: AtomicBool,
     connections: DashMap<PeerId, Connection>,
+    /// Per-route QUIC connections for `send_to_via` / `open_bi_via`.
+    ///
+    /// Each `(PeerId, RouteKey)` pair gets its own QUIC connection whose
+    /// virtual address is bound to the route_key. This ensures all QUIC
+    /// packets for the connection travel through the specified route.
+    via_connections: DashMap<(PeerId, RouteKey), Connection>,
     connection_tasks: DashMap<usize, ()>,
     seen_datagrams: DashMap<(PeerId, u64), ()>,
     inbox_tx: flume::Sender<ReceivedMessage>,
@@ -309,6 +407,7 @@ impl QuicEndpoint {
             socket,
             closed: AtomicBool::new(false),
             connections: DashMap::new(),
+            via_connections: DashMap::new(),
             connection_tasks: DashMap::new(),
             seen_datagrams: DashMap::new(),
             inbox_tx,
@@ -318,7 +417,6 @@ impl QuicEndpoint {
         });
         quic.start_accept_loop();
         quic.start_transport_loop();
-        quic.start_message_loop();
         Ok(quic)
     }
 
@@ -416,37 +514,109 @@ impl QuicEndpoint {
         Ok((ReliableSendStream::new(send), ReliableRecvStream::new(recv)))
     }
 
-    /// Sends a user payload via a specific route, bypassing QUIC entirely.
+    /// Sends an encrypted QUIC DATAGRAM to a peer via a specific route.
     ///
-    /// The payload is wrapped in a `MessageData` protocol packet and sent
-    /// directly through the specified route_key. This is completely stateless:
-    /// no QUIC connection is used, no shared state is modified, and the method
-    /// is safe to call concurrently from multiple threads.
+    /// This creates (or reuses) a per-route QUIC connection whose virtual
+    /// address is bound to the given `route_key`. All QUIC packets for this
+    /// connection — including the TLS handshake, the datagram itself, and
+    /// QUIC ACKs — travel through the specified route.
     ///
-    /// The trade-off is that the payload is not encrypted by QUIC. For direct
-    /// routes the packet travels directly between peers; for relayed routes
-    /// the relay can observe the payload.
+    /// The payload is encrypted end-to-end by QUIC, identical to [`send_to`].
+    /// The only difference is the path: `send_to` uses route-table lookup,
+    /// while `send_to_via` uses the caller-specified route.
+    ///
+    /// This method is safe to call concurrently from multiple threads. Each
+    /// `(PeerId, RouteKey)` pair gets its own QUIC connection, so different
+    /// routes do not interfere with each other or with the default connection.
     pub(crate) async fn send_to_via(
-        &self,
+        self: &Arc<Self>,
         peer_id: PeerId,
         route_key: RouteKey,
         payload: &[u8],
     ) -> io::Result<()> {
-        self.protocol
-            .send_message_via(peer_id, route_key, payload)
+        let conn = self.connection_to_via(peer_id.clone(), route_key).await?;
+        let frame = DatagramFrame::User {
+            id: rand::random(),
+            src: self.peer_id.clone(),
+            dest: peer_id,
+            payload: payload.to_vec(),
+        };
+        let data = Bytes::from(encode_datagram_frame(&frame));
+        conn.quinn()
+            .send_datagram_wait(data)
             .await
+            .map_err(|e| io::Error::other(format!("send QUIC datagram via route: {e}")))?;
+        Ok(())
     }
 
-    /// Synchronous variant of [`send_to_via`]. Returns `WouldBlock` if the
-    /// underlying transport cannot accept the packet immediately.
+    /// Synchronous variant of [`send_to_via`](Self::send_to_via).
+    ///
+    /// Returns `WouldBlock` if no per-route QUIC connection has been
+    /// established yet. Call `send_to_via` first to create the connection.
     pub(crate) fn try_send_to_via(
         &self,
         peer_id: PeerId,
         route_key: RouteKey,
         payload: &[u8],
     ) -> io::Result<()> {
-        self.protocol
-            .try_send_message_via(peer_id, route_key, payload)
+        let conn = self
+            .via_connections
+            .get(&(peer_id.clone(), route_key))
+            .filter(|conn| !conn.is_closed())
+            .ok_or_else(|| io::Error::from(io::ErrorKind::WouldBlock))?;
+        let frame = DatagramFrame::User {
+            id: rand::random(),
+            src: self.peer_id.clone(),
+            dest: peer_id,
+            payload: payload.to_vec(),
+        };
+        conn.quinn()
+            .send_datagram(Bytes::from(encode_datagram_frame(&frame)))
+            .map_err(|e| io::Error::other(format!("send QUIC datagram via route: {e}")))
+    }
+
+    /// Opens a bidirectional QUIC stream to a peer via a specific route.
+    ///
+    /// Like [`send_to_via`](Self::send_to_via), this uses a per-route QUIC
+    /// connection. The stream is established within that connection, so all
+    /// stream data travels through the specified route with full QUIC
+    /// encryption and reliability.
+    pub(crate) async fn open_bi_via(
+        self: &Arc<Self>,
+        peer_id: PeerId,
+        route_key: RouteKey,
+    ) -> io::Result<(ReliableSendStream, ReliableRecvStream)> {
+        let mut last_err = None;
+        for _ in 0..2 {
+            match self.open_bi_via_once(peer_id.clone(), route_key).await {
+                Ok(stream) => return Ok(stream),
+                Err(e) => {
+                    last_err = Some(e);
+                    self.via_connections.remove(&(peer_id.clone(), route_key));
+                    self.socket.release_virtual_peer_via(&peer_id, &route_key);
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+            }
+        }
+        Err(last_err.unwrap_or_else(|| io::Error::other("open reliable stream via route failed")))
+    }
+
+    async fn open_bi_via_once(
+        self: &Arc<Self>,
+        peer_id: PeerId,
+        route_key: RouteKey,
+    ) -> io::Result<(ReliableSendStream, ReliableRecvStream)> {
+        let conn = self.connection_to_via(peer_id.clone(), route_key).await?;
+        let (mut send, recv) = conn.quinn().open_bi().await?;
+        write_stream_frame(
+            &mut send,
+            &StreamFrame::User(StreamHeader {
+                src: self.peer_id.clone(),
+                dest: peer_id,
+            }),
+        )
+        .await?;
+        Ok((ReliableSendStream::new(send), ReliableRecvStream::new(recv)))
     }
 
     pub(crate) async fn accept_bi(&self) -> io::Result<IncomingBiStream> {
@@ -469,6 +639,47 @@ impl QuicEndpoint {
         self.connection_to_at(peer_id, addr).await
     }
 
+    /// Get or create a per-route QUIC connection.
+    ///
+    /// The connection's virtual address is bound to `route_key`, so all QUIC
+    /// packets for this connection travel through the specified route. The
+    /// connection is cached in `via_connections` for reuse by subsequent
+    /// `send_to_via` / `try_send_to_via` / `open_bi_via` calls with the same
+    /// `(PeerId, RouteKey)` pair.
+    async fn connection_to_via(
+        self: &Arc<Self>,
+        peer_id: PeerId,
+        route_key: RouteKey,
+    ) -> io::Result<Connection> {
+        let key = (peer_id.clone(), route_key);
+
+        // Reuse cached connection if alive.
+        if let Some(conn) = self.via_connections.get(&key) {
+            if !conn.is_closed() {
+                return Ok(conn.clone());
+            }
+        }
+
+        // Register a virtual address bound to this route_key.
+        let addr = self
+            .socket
+            .register_virtual_peer_via(peer_id.clone(), route_key);
+
+        // Connect via quinn to the virtual address. Quinn's try_send will
+        // use the bound route_key for all packets, including the handshake.
+        let conn = match self.connect_quic_addr(addr).await {
+            Ok(conn) => conn,
+            Err(e) => {
+                self.socket.release_virtual_peer_via(&peer_id, &route_key);
+                return Err(e);
+            }
+        };
+
+        self.via_connections.insert(key, conn.clone());
+        self.start_connection_tasks(conn.clone(), Some(route_key));
+        Ok(conn)
+    }
+
     async fn connection_to_at(
         self: &Arc<Self>,
         peer_id: PeerId,
@@ -487,7 +698,7 @@ impl QuicEndpoint {
             }
         };
         self.connections.insert(peer_id, conn.clone());
-        self.start_connection_tasks(conn.clone());
+        self.start_connection_tasks(conn.clone(), None);
         Ok(conn)
     }
 
@@ -547,59 +758,6 @@ impl QuicEndpoint {
         });
     }
 
-    /// Receives `MessageData` packets (from `send_to_via`) and delivers them
-    /// to the user's inbox. These packets bypass QUIC entirely — the payload
-    /// is the raw user data sent through a caller-specified route.
-    fn start_message_loop(self: &Arc<Self>) {
-        let quic = self.clone();
-        tokio::spawn(async move {
-            loop {
-                if quic.closed.load(Ordering::Relaxed) {
-                    break;
-                }
-                let payload = match quic.protocol.recv_message_payload().await {
-                    Ok(payload) => payload,
-                    Err(e) => {
-                        log::debug!("message data loop ended: {e}");
-                        break;
-                    }
-                };
-                // Look up route metadata for the ReceivedMessage fields.
-                // Fall back to defaults if the route is not in the table
-                // (e.g., the packet arrived via a candidate route).
-                let (route, metric) =
-                    quic.protocol
-                        .route_metric_for(&payload.src)
-                        .unwrap_or_else(|_| {
-                            (
-                                rustp2p_core::route_table::RouteKey::new(
-                                    rustp2p_core::route_table::Protocol::UDP,
-                                    std::net::SocketAddr::new(
-                                        std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED),
-                                        0,
-                                    ),
-                                ),
-                                0,
-                            )
-                        });
-                let max_ttl = quic.protocol.max_ttl();
-                let _ = quic
-                    .inbox_tx
-                    .send_async(ReceivedMessage {
-                        payload: payload.payload,
-                        src: payload.src,
-                        dest: quic.peer_id.clone(),
-                        route,
-                        ttl: max_ttl.saturating_sub(metric),
-                        max_ttl,
-                        is_relay: metric > 0,
-                        is_broadcast: false,
-                    })
-                    .await;
-            }
-        });
-    }
-
     fn start_accept_loop(self: &Arc<Self>) {
         let quic = self.clone();
         tokio::spawn(async move {
@@ -607,12 +765,12 @@ impl QuicEndpoint {
                 if quic.closed.load(Ordering::Relaxed) {
                     break;
                 }
-                quic.start_connection_tasks(conn);
+                quic.start_connection_tasks(conn, None);
             }
         });
     }
 
-    fn start_connection_tasks(self: &Arc<Self>, conn: Connection) {
+    fn start_connection_tasks(self: &Arc<Self>, conn: Connection, via_route_key: Option<RouteKey>) {
         let stable_id = conn.quinn().stable_id();
         if self.connection_tasks.insert(stable_id, ()).is_some() {
             return;
@@ -622,6 +780,7 @@ impl QuicEndpoint {
         let stream_endpoint = self.clone();
         let stream_conn = conn.clone();
         let stream_peer = connection_peer.clone();
+        let stream_via = via_route_key;
         tokio::spawn(async move {
             loop {
                 match stream_conn.quinn().accept_bi().await {
@@ -643,11 +802,16 @@ impl QuicEndpoint {
                     }
                 }
             }
-            stream_endpoint.cleanup_connection(stable_id, stream_peer);
+            if let Some(rk) = stream_via {
+                stream_endpoint.cleanup_via_connection(stable_id, stream_peer, rk);
+            } else {
+                stream_endpoint.cleanup_connection(stable_id, stream_peer);
+            }
         });
 
         let datagram_endpoint = self.clone();
         let datagram_peer = connection_peer;
+        let datagram_via = via_route_key;
         tokio::spawn(async move {
             loop {
                 match conn.quinn().read_datagram().await {
@@ -665,7 +829,11 @@ impl QuicEndpoint {
                     }
                 }
             }
-            datagram_endpoint.cleanup_connection(stable_id, datagram_peer);
+            if let Some(rk) = datagram_via {
+                datagram_endpoint.cleanup_via_connection(stable_id, datagram_peer, rk);
+            } else {
+                datagram_endpoint.cleanup_connection(stable_id, datagram_peer);
+            }
         });
     }
 
@@ -677,6 +845,25 @@ impl QuicEndpoint {
             // Remove direct routes so the maintenance loop re-punches.
             // Relay routes are kept as fallback so communication can continue.
             self.protocol.remove_direct_routes(&peer_id);
+        }
+    }
+
+    /// Cleanup for per-route QUIC connections.
+    ///
+    /// Unlike `cleanup_connection`, this does NOT remove routes from the
+    /// route table — the route may still be valid; only the per-route QUIC
+    /// connection dropped (e.g., idle timeout). The user can call
+    /// `send_to_via` again to re-establish the connection.
+    fn cleanup_via_connection(
+        &self,
+        stable_id: usize,
+        peer_id: Option<PeerId>,
+        route_key: RouteKey,
+    ) {
+        self.connection_tasks.remove(&stable_id);
+        if let Some(peer_id) = peer_id {
+            self.via_connections.remove(&(peer_id.clone(), route_key));
+            self.socket.release_virtual_peer_via(&peer_id, &route_key);
         }
     }
 

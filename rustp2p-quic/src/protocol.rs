@@ -366,11 +366,6 @@ pub(crate) struct ProtocolLayer {
     // Pending EchoRequest timestamps for RTT measurement.
     // Keyed by (peer_id, timestamp_millis) so that stale echoes can be discarded.
     pending_echo: DashMap<PeerId, u64>,
-    // Channel for delivering MessageData packets (from send_to_via) to the
-    // QuicEndpoint's inbox. This bypasses QUIC entirely — the payload is sent
-    // as a raw rustp2p protocol packet through the caller-specified route.
-    message_tx: flume::Sender<TransportPayload>,
-    message_rx: flume::Receiver<TransportPayload>,
 }
 
 impl ProtocolLayer {
@@ -384,7 +379,6 @@ impl ProtocolLayer {
     ) -> Arc<Self> {
         let (hello_tx, hello_rx) = flume::bounded(128);
         let (quic_tx, quic_rx) = flume::bounded(512);
-        let (message_tx, message_rx) = flume::bounded(512);
         let layer = Arc::new(Self {
             transport,
             peer_id,
@@ -406,8 +400,6 @@ impl ProtocolLayer {
             route_candidates: DashMap::new(),
             last_punch_time: DashMap::new(),
             pending_echo: DashMap::new(),
-            message_tx,
-            message_rx,
         });
         layer.start_packet_dispatcher();
         layer.start_maintenance_loop();
@@ -429,63 +421,6 @@ impl ProtocolLayer {
 
     pub(crate) fn ensure_peer_reachable(&self, peer_id: &PeerId) -> io::Result<()> {
         self.transport.route_for(peer_id).map(|_| ())
-    }
-
-    /// Send a user payload as a `MessageData` packet through the specified
-    /// route. This bypasses QUIC entirely — the payload is wrapped in a
-    /// rustp2p protocol packet and sent directly through the given route_key.
-    ///
-    /// Unlike QUIC-based `send_to`, this method is completely stateless: it
-    /// does not create or use a QUIC connection, does not modify any shared
-    /// state, and is safe to call concurrently from multiple threads.
-    ///
-    /// The trade-off is that the payload is not encrypted by QUIC. For direct
-    /// routes (metric == 0) the packet travels directly between peers; for
-    /// relayed routes the relay node can observe the payload.
-    pub(crate) async fn send_message_via(
-        &self,
-        peer_id: PeerId,
-        route_key: RouteKey,
-        payload: &[u8],
-    ) -> io::Result<()> {
-        let packet = Packet::build(
-            ProtocolType::MessageData,
-            self.peer_id.clone(),
-            peer_id,
-            self.max_ttl,
-            payload,
-        )?;
-        self.transport
-            .send_wire_to_route(route_key, packet.as_bytes())
-            .await
-    }
-
-    /// Synchronous variant of [`send_message_via`]. Returns `WouldBlock` if
-    /// the underlying transport cannot accept the packet immediately.
-    pub(crate) fn try_send_message_via(
-        &self,
-        peer_id: PeerId,
-        route_key: RouteKey,
-        payload: &[u8],
-    ) -> io::Result<()> {
-        let packet = Packet::build(
-            ProtocolType::MessageData,
-            self.peer_id.clone(),
-            peer_id,
-            self.max_ttl,
-            payload,
-        )?;
-        self.transport
-            .try_send_wire_to_route(route_key, packet.as_bytes())
-    }
-
-    /// Receive the next `MessageData` payload delivered by a `send_to_via`
-    /// call from a remote peer.
-    pub(crate) async fn recv_message_payload(&self) -> io::Result<TransportPayload> {
-        self.message_rx
-            .recv_async()
-            .await
-            .map_err(|_| io::Error::new(io::ErrorKind::UnexpectedEof, "protocol closed"))
     }
 
     /// Remove all direct routes for a peer. Called when a QUIC connection drops
@@ -556,6 +491,30 @@ impl ProtocolLayer {
                 }
             }
         }
+    }
+
+    /// Send QUIC ciphertext through a specific route_key, bypassing the
+    /// route table. Used by per-route QUIC connections (send_to_via,
+    /// open_bi_via) where the caller has already chosen the route.
+    ///
+    /// The payload is still wrapped as a `QuicRelay` rustp2p packet and
+    /// benefits from QUIC end-to-end encryption — only the path selection
+    /// is overridden.
+    pub(crate) fn try_send_quic_payload_via(
+        &self,
+        peer_id: PeerId,
+        route_key: RouteKey,
+        payload: &[u8],
+    ) -> io::Result<()> {
+        let packet = Packet::build(
+            ProtocolType::QuicRelay,
+            self.peer_id.clone(),
+            peer_id,
+            self.max_ttl,
+            payload,
+        )?;
+        self.transport
+            .try_send_wire_to_route(route_key, packet.as_bytes())
     }
 
     pub(crate) async fn recv_quic_payload(&self) -> io::Result<TransportPayload> {
@@ -1054,16 +1013,13 @@ impl ProtocolLayer {
                 }
             }
             ProtocolType::MessageData => {
-                // MessageData packets carry user payloads sent via send_to_via,
-                // bypassing QUIC. Forward the payload to the message channel so
-                // the QuicEndpoint can deliver it to the user's inbox.
-                let _ = self
-                    .message_tx
-                    .send_async(TransportPayload {
-                        payload: Bytes::copy_from_slice(packet.payload()),
-                        src,
-                    })
-                    .await;
+                // MessageData was a legacy protocol type used by an earlier
+                // version of send_to_via that bypassed QUIC. The current
+                // implementation sends QUIC application datagrams through
+                // per-route QUIC connections instead. This handler is kept
+                // as a no-op for protocol-version compatibility: packets
+                // from older peers are silently ignored.
+                log::debug!("ignoring legacy MessageData packet from {src}");
             }
             ProtocolType::RangeBroadcast | ProtocolType::TimestampReply => {}
         }

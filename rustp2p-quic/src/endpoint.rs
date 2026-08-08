@@ -249,9 +249,12 @@ impl Endpoint {
 
     /// Returns confirmed routes for a peer.
     ///
-    /// Routes can be used with [`send_to_via`](Self::send_to_via) and
-    /// [`try_send_to_via`](Self::try_send_to_via) to send data through a
-    /// specific path instead of the automatically selected one.
+    /// Routes can be used with [`send_to_via`](Self::send_to_via),
+    /// [`try_send_to_via`](Self::try_send_to_via), and
+    /// [`open_bi_via`](Self::open_bi_via) to send data through a specific
+    /// path instead of the automatically selected one. All three methods
+    /// send encrypted QUIC application data through a per-route QUIC
+    /// connection bound to the specified route_key.
     ///
     /// Candidate routes are intentionally hidden until protocol control traffic
     /// confirms reachability.
@@ -331,20 +334,19 @@ impl Endpoint {
         self.quic.open_bi(peer_id).await
     }
 
-    /// Sends a user payload via a specific route, bypassing QUIC.
+    /// Sends an encrypted QUIC DATAGRAM to a peer via a specific route.
     ///
-    /// The payload is wrapped in a `MessageData` protocol packet and sent
-    /// directly through the specified `route_key`. This method is completely
-    /// stateless: it does not use a QUIC connection, does not modify any
-    /// shared state, and is safe to call concurrently from multiple threads.
+    /// The payload is encrypted end-to-end by QUIC, identical to
+    /// [`send_to`](Self::send_to). The difference is that `send_to_via`
+    /// creates (or reuses) a per-route QUIC connection whose packets all
+    /// travel through the specified `route_key`.
+    ///
+    /// This method is safe to call concurrently from multiple threads. Each
+    /// `(PeerId, RouteKey)` pair gets its own QUIC connection, so different
+    /// routes do not interfere with each other or with the default
+    /// connection used by `send_to`.
     ///
     /// Use [`routes`](Self::routes) to obtain available `RouteKey`s for a peer.
-    ///
-    /// **Trade-off**: Because QUIC is bypassed, the payload is not
-    /// QUIC-encrypted. For direct routes (metric == 0) the packet travels
-    /// directly between peers. For relayed routes, intermediate relay nodes
-    /// can observe the payload. Use [`send_to`](Self::send_to) when you need
-    /// end-to-end encryption and don't need to control the route.
     ///
     /// # Example
     /// ```no_run
@@ -365,11 +367,12 @@ impl Endpoint {
         self.quic.send_to_via(peer_id, route_key, payload).await
     }
 
-    /// Attempts to send a user payload via a specific route without waiting.
+    /// Attempts to send an encrypted QUIC DATAGRAM via a specific route
+    /// without waiting.
     ///
-    /// Stateless synchronous variant of [`send_to_via`](Self::send_to_via).
-    /// Returns `WouldBlock` if the underlying transport cannot accept the
-    /// packet immediately.
+    /// Returns `WouldBlock` if no per-route QUIC connection has been
+    /// established yet. Call [`send_to_via`](Self::send_to_via) first to
+    /// create the connection.
     pub fn try_send_to_via(
         &self,
         peer_id: PeerId,
@@ -377,6 +380,20 @@ impl Endpoint {
         payload: &[u8],
     ) -> crate::Result<()> {
         self.quic.try_send_to_via(peer_id, route_key, payload)
+    }
+
+    /// Opens a bidirectional QUIC stream to a peer via a specific route.
+    ///
+    /// Like [`send_to_via`](Self::send_to_via), this uses a per-route QUIC
+    /// connection. The stream is established within that connection, so all
+    /// stream data travels through the specified route with full QUIC
+    /// encryption and reliability.
+    pub async fn open_bi_via(
+        &self,
+        peer_id: PeerId,
+        route_key: RouteKey,
+    ) -> crate::Result<(crate::ReliableSendStream, crate::ReliableRecvStream)> {
+        self.quic.open_bi_via(peer_id, route_key).await
     }
 
     /// Accepts the next inbound end-to-end bidirectional QUIC stream.
