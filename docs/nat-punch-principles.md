@@ -725,7 +725,7 @@ flowchart TD
     HB["Heartbeat loop (start_heartbeat_loop, every 15s)<br/>Finds all peers with direct routes -> sends EchoRequest (8-byte timestamp)<br/>via direct route_key. Packets traverse UDP socket -> refreshes NAT mapping"]
     HB -->|EchoRequest via direct route_key| PEER
     PEER["Peer receives EchoRequest -> sends EchoReply (echoes back original timestamp)<br/>Also calls confirm_tcp_route() to ensure direct route is registered"]
-    PEER -->|EchoReply (metric=0)| RTT
+    PEER -->|EchoReply, metric=0| RTT
     RTT["EchoReply handler: RTT calculation<br/>rtt = now_millis() - sent_timestamp (discards replies older than 60s)<br/>-> transport.update_route_rtt(peer, route_key, rtt)"]
     RTT -->|updates route| TBL
     TBL["RouteTable::update_rtt()<br/>Updates Route.rtt for the specific route_key<br/>If LoadBalance::LowestLatency -> re-sorts routes by RTT"]
@@ -872,11 +872,11 @@ The heartbeat loop (Section 7.2) serves a dual role here: every `EchoRequest` /
 
 ```mermaid
 flowchart TB
-    REG[<b>VirtualPeer registration</b><br/>register_virtual_peer_via(peer, route_key)<br/>→ allocates synthetic address 127.0.0.1:9999<br/>→ VirtualPeer { peer_id, route_key: Some(rk) }<br/>→ via_virtual_addrs[(peer, rk)] = addr]
-    QUI[<b>Quinn endpoint binds to synthetic addr</b><br/>Quinn thinks it sends to 127.0.0.1:9999<br/>QuicPeerSocket::try_send intercepts:<br/>→ finds VirtualPeer by destination addr<br/>→ route_key=Some → try_send_quic_payload_via]
-    BYP[<b>try_send_quic_payload_via bypasses the route table</b><br/>Wraps payload as QuicRelay packet → try_send_wire_to_route(route_key) → direct UDP send on that path]
-    DEF[<b>Default connection (route_key=None)</b><br/>Uses route table default (lowest metric)<br/>try_send_quic_payload → route table lookup]
-    VIA[<b>Via connection (route_key=Some)</b><br/>Bypasses route table entirely<br/>try_send_quic_payload_via → direct wire send]
+    REG["VirtualPeer registration<br/>register_virtual_peer_via(peer, route_key)<br/>-> allocates synthetic address 127.0.0.1:9999<br/>-> VirtualPeer: peer_id, route_key Some(rk)<br/>-> via_virtual_addrs[(peer, rk)] = addr"]
+    QUI["Quinn endpoint binds to synthetic addr<br/>Quinn thinks it sends to 127.0.0.1:9999<br/>QuicPeerSocket::try_send intercepts:<br/>-> finds VirtualPeer by destination addr<br/>-> route_key=Some -> try_send_quic_payload_via"]
+    BYP["try_send_quic_payload_via bypasses the route table<br/>Wraps payload as QuicRelay packet<br/>-> try_send_wire_to_route(route_key) -> direct UDP send"]
+    DEF["Default connection, route_key=None<br/>Uses route table default (lowest metric)<br/>try_send_quic_payload -> route table lookup"]
+    VIA["Via connection, route_key=Some<br/>Bypasses route table entirely<br/>try_send_quic_payload_via -> direct wire send"]
 
     REG -->|binds| QUI
     QUI --> BYP
