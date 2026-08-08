@@ -25,6 +25,7 @@ message NatInfo {
   repeated uint32 local_udp_ports = 10;
   uint32 local_tcp_port = 11;
   uint32 public_tcp_port = 12;
+  repeated uint32 stun_mapped_ports = 13;
 }
 
 message PeerInfo {

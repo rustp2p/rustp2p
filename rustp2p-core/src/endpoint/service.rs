@@ -230,6 +230,7 @@ impl EndPoint {
             local_udp_ports,
             local_tcp_port,
             public_tcp_port: 0,
+            stun_mapped_ports: Vec::new(),
         })
     }
 

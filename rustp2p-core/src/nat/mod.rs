@@ -23,6 +23,7 @@
 //! #   local_udp_ports: vec![],
 //! #   local_tcp_port: 0,
 //! #   public_tcp_port: 0,
+//! #   stun_mapped_ports: vec![],
 //! };
 //!
 //! if nat_info.nat_type.is_cone() {
@@ -109,6 +110,17 @@ pub struct NatInfo {
     pub local_tcp_port: u16,
     /// The public port of `TCP` service, which works when there is either `nat1` or no `nat` exists
     pub public_tcp_port: u16,
+    /// Public UDP ports discovered by STUN testing.
+    ///
+    /// These ports are discovered using a *temporary* UDP socket (bound to
+    /// 0.0.0.0:0), so they do NOT correspond to the main QUIC socket.
+    /// However, for Symmetric NAT, they reveal the NAT's port allocation
+    /// pattern and range.  When shared with peers via PunchRequest, the peer
+    /// can use these ports as additional prediction bases for Phase-1 port
+    /// prediction, significantly improving the chance of hitting the correct
+    /// port when the relay-observed port is in a completely different range.
+    #[serde(default)]
+    pub stun_mapped_ports: Vec<u16>,
 }
 
 impl Default for NatInfo {
@@ -126,6 +138,7 @@ impl Default for NatInfo {
             local_udp_ports: Vec::new(),
             local_tcp_port: 0,
             public_tcp_port: 0,
+            stun_mapped_ports: Vec::new(),
         }
     }
 }

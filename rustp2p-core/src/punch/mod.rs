@@ -14,6 +14,28 @@ use crate::nat::{NatInfo, NatType};
 pub use config::*;
 pub mod config;
 
+fn symmetric_prediction_candidates(
+    peer_nat_info: &NatInfo,
+    predict_range: u16,
+) -> (Vec<u16>, Vec<u16>) {
+    let mut known_ports = peer_nat_info.public_udp_ports.clone();
+    known_ports.extend(peer_nat_info.stun_mapped_ports.iter().copied());
+    known_ports.retain(|port| *port != 0);
+    known_ports.sort_unstable();
+    known_ports.dedup();
+
+    let mut predicted_ports = Vec::new();
+    for &base_port in &known_ports {
+        let min_port = base_port.saturating_sub(predict_range).max(1);
+        let max_port = base_port.saturating_add(predict_range);
+        predicted_ports.extend(min_port..=max_port);
+    }
+    predicted_ports.sort_unstable();
+    predicted_ports.dedup();
+
+    (known_ports, predicted_ports)
+}
+
 #[derive(Default, Clone)]
 struct PunchStats {
     total_count: usize,
@@ -180,11 +202,12 @@ impl Puncher {
         _punch_model: &PunchModel,
     ) {
         log::debug!(
-            "punch_udp count={} nat={:?} public_ips={:?} public_ports={:?} port_range={}",
+            "punch_udp count={} nat={:?} public_ips={:?} public_ports={:?} stun_ports={:?} port_range={}",
             count,
             peer_nat_info.nat_type,
             peer_nat_info.public_ips,
             peer_nat_info.public_udp_ports,
+            peer_nat_info.stun_mapped_ports,
             peer_nat_info.public_port_range
         );
         // Send to manually configured mapping addresses
@@ -227,49 +250,44 @@ impl Puncher {
 
                 // Phase 1: Predicted range punching.
                 //
-                // For each known port (from NatObserve), generate a prediction
-                // window and send to random ports within that window.
+                // For each known port, generate a prediction window and send to
+                // random ports within that window.
+                //
+                // We combine two sources of known ports:
+                //   - `public_udp_ports`: observed by the relay (NatObserve).
+                //     This is the port the peer's main socket uses to talk to
+                //     the relay.
+                //   - `stun_mapped_ports`: discovered by STUN testing.  These
+                //     belong to a temp socket but reveal the NAT's port
+                //     allocation range.  For Symmetric NAT, the actual port
+                //     assigned for communication with us could be near either
+                //     set of ports.
                 //
                 // The port_range from STUN estimates how much the NAT varies
-                // port allocation between destinations *for the same socket*.
-                // However, when the peer has multiple sockets (main + assistant),
-                // each socket gets an independent port allocation that can differ
-                // by tens or hundreds of ports.  To account for this, we expand
-                // the prediction range well beyond port_range.
-                let port_range = peer_nat_info.public_port_range;
-                let predict_range = (port_range as usize * 10).max(100) as u16;
-                if !peer_nat_info.public_udp_ports.is_empty()
-                    && (predict_range as usize) < max_k1 * 3
-                {
-                    let mut predicted_ports: Vec<u16> = Vec::new();
-                    for &base_port in &peer_nat_info.public_udp_ports {
-                        let min_port = if base_port > predict_range {
-                            base_port - predict_range
-                        } else {
-                            1
-                        };
-                        let (max_port, overflow) = base_port.overflowing_add(predict_range);
-                        let max_port = if overflow { 65535 } else { max_port };
-                        predicted_ports.extend(min_port..=max_port);
-                    }
-                    // Deduplicate and shuffle for randomized sending order
-                    predicted_ports.sort_unstable();
-                    predicted_ports.dedup();
-                    predicted_ports.shuffle(&mut rand::rng());
+                // port allocation between destinations. Keep one local window
+                // around every known port; the distance between unrelated
+                // relay and STUN mappings must not widen either window.
+                let predict_range = (peer_nat_info.public_port_range as usize * 10)
+                    .max(100)
+                    .min(max_k1 * 3 - 1) as u16;
+                let (all_known_ports, mut predicted_ports) =
+                    symmetric_prediction_candidates(peer_nat_info, predict_range);
+                predicted_ports.shuffle(&mut rand::rng());
 
-                    let k = max_k1.min(predicted_ports.len());
-                    if k > 0 {
-                        log::debug!(
-                            "punch_symmetric phase 1: sending to {} predicted ports \
-                             (base_ports={:?}, range=±{}, ips={:?})",
-                            k,
-                            peer_nat_info.public_udp_ports,
-                            predict_range,
-                            pub_ips
-                        );
-                        self.punch_symmetric(&predicted_ports[..k], buf, &pub_ips, k)
-                            .await;
-                    }
+                let k = max_k1.min(predicted_ports.len());
+                if k > 0 {
+                    log::debug!(
+                        "punch_symmetric phase 1: sending to {} predicted ports \
+                         (known_ports={:?}, relay_ports={:?}, stun_ports={:?}, range=±{}, ips={:?})",
+                        k,
+                        all_known_ports,
+                        peer_nat_info.public_udp_ports,
+                        peer_nat_info.stun_mapped_ports,
+                        predict_range,
+                        pub_ips
+                    );
+                    self.punch_symmetric(&predicted_ports[..k], buf, &pub_ips, k)
+                        .await;
                 }
 
                 // Phase 2: Global random scan — send to random ports across
@@ -346,4 +364,44 @@ fn now() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::symmetric_prediction_candidates;
+    use crate::nat::NatInfo;
+
+    #[test]
+    fn symmetric_prediction_uses_relay_and_stun_ports_as_local_bases() {
+        let info = NatInfo {
+            public_udp_ports: vec![12_065],
+            stun_mapped_ports: vec![22_000, 22_010],
+            ..Default::default()
+        };
+
+        let (known_ports, candidates) = symmetric_prediction_candidates(&info, 100);
+
+        assert_eq!(known_ports, vec![12_065, 22_000, 22_010]);
+        assert!(candidates.contains(&11_965));
+        assert!(candidates.contains(&12_165));
+        assert!(candidates.contains(&21_900));
+        assert!(candidates.contains(&22_110));
+        assert!(!candidates.contains(&17_000));
+    }
+
+    #[test]
+    fn symmetric_prediction_filters_zero_and_clamps_port_bounds() {
+        let info = NatInfo {
+            public_udp_ports: vec![0, 20],
+            stun_mapped_ports: vec![65_530],
+            ..Default::default()
+        };
+
+        let (known_ports, candidates) = symmetric_prediction_candidates(&info, 100);
+
+        assert_eq!(known_ports, vec![20, 65_530]);
+        assert_eq!(candidates.first(), Some(&1));
+        assert_eq!(candidates.last(), Some(&65_535));
+        assert!(!candidates.contains(&0));
+    }
 }

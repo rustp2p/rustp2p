@@ -1583,16 +1583,22 @@ impl ProtocolLayer {
 fn apply_stun_result_to_nat_info(info: &mut NatInfo, result: &rustp2p_core::stun::StunResult) {
     // STUN detection uses a *temporary* UDP socket (bound to 0.0.0.0:0), so
     // the mapped port it discovers belongs to that temp socket — NOT the main
-    // QUIC socket.  Using those ports as punch targets would be wrong.
+    // QUIC socket.  Using those ports as direct punch targets would be wrong.
     //
-    // STUN is only reliable for:
+    // STUN is reliable for:
     //   - NAT type classification (Cone vs Symmetric)
     //   - port_range estimation (for Symmetric port prediction)
     //
-    // Actual public IP / port come from NatObserve, which observes the real
-    // QUIC connection's source address.
+    // For Symmetric NAT, the STUN-mapped ports also reveal the NAT's port
+    // allocation range.  Even though they belong to the temp socket, they
+    // tell us which port range the NAT uses for new allocations.  We store
+    // them in `stun_mapped_ports` so that when this NatInfo is shared with
+    // peers (via PunchRequest), the peer can use these ports as additional
+    // prediction bases — improving the chance of hitting the correct port
+    // when the relay-observed port is in a completely different range.
     info.nat_type = result.nat_type;
     info.public_port_range = result.port_range;
+    info.stun_mapped_ports = result.public_udp_ports.clone();
 }
 
 fn apply_observation_to_nat_info(info: &mut NatInfo, observation: &NatObservation) {
@@ -1884,6 +1890,11 @@ fn nat_info_to_pb(info: &NatInfo) -> pb::NatInfo {
             .collect(),
         local_tcp_port: u32::from(info.local_tcp_port),
         public_tcp_port: u32::from(info.public_tcp_port),
+        stun_mapped_ports: info
+            .stun_mapped_ports
+            .iter()
+            .map(|port| u32::from(*port))
+            .collect(),
     }
 }
 
@@ -1930,6 +1941,7 @@ fn nat_info_from_pb(info: pb::NatInfo) -> io::Result<NatInfo> {
         local_udp_ports: checked_u16_vec("nat.local_udp_ports", &info.local_udp_ports)?,
         local_tcp_port: checked_u16("nat.local_tcp_port", info.local_tcp_port)?,
         public_tcp_port: checked_u16("nat.public_tcp_port", info.public_tcp_port)?,
+        stun_mapped_ports: checked_u16_vec("nat.stun_mapped_ports", &info.stun_mapped_ports)?,
     })
 }
 
@@ -2209,10 +2221,12 @@ mod tests {
     }
 
     #[test]
-    fn stun_only_updates_nat_type_and_port_range() {
+    fn stun_updates_nat_type_port_range_and_stun_ports() {
         // STUN uses a temporary socket, so it must NOT populate public IPs /
-        // ports — those come from NatObserve which observes the real QUIC
-        // connection's source address.
+        // public_udp_ports — those come from NatObserve which observes the
+        // real QUIC connection's source address.
+        // However, stun_mapped_ports IS populated to reveal the NAT's port
+        // allocation range for Symmetric NAT prediction.
         let mut info = NatInfo::default();
         let result = StunResult {
             nat_type: NatType::Symmetric,
@@ -2226,7 +2240,9 @@ mod tests {
 
         assert_eq!(info.nat_type, NatType::Symmetric);
         assert_eq!(info.public_port_range, 42);
-        // Public IPs and ports must remain empty — they come from NatObserve
+        // stun_mapped_ports should be populated from STUN result
+        assert_eq!(info.stun_mapped_ports, vec![34567]);
+        // Public IPs and public_udp_ports must remain empty — they come from NatObserve
         assert!(info.public_ips.is_empty());
         assert!(info.public_udp_ports.is_empty());
         assert!(info.ipv6.is_none());
@@ -2307,6 +2323,7 @@ mod tests {
             local_udp_ports: vec![7001, 7002],
             local_tcp_port: 7003,
             public_tcp_port: 9443,
+            stun_mapped_ports: vec![22000, 22100],
         }
     }
 
@@ -2323,5 +2340,6 @@ mod tests {
         assert_eq!(left.local_udp_ports, right.local_udp_ports);
         assert_eq!(left.local_tcp_port, right.local_tcp_port);
         assert_eq!(left.public_tcp_port, right.public_tcp_port);
+        assert_eq!(left.stun_mapped_ports, right.stun_mapped_ports);
     }
 }
