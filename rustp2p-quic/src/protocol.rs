@@ -363,6 +363,13 @@ pub(crate) struct ProtocolLayer {
     route_candidates: DashMap<PeerId, RouteKey>,
     // Per-peer last punch timestamp (unix seconds) for rate-limiting auto-punch.
     last_punch_time: DashMap<PeerId, u64>,
+    // Pinned route per peer. When set, all QUIC packets for that peer are sent
+    // through this route_key, overriding the normal route-table selection.
+    // This enables send_to_via / open_bi_via and user-controlled route selection.
+    route_pin: DashMap<PeerId, RouteKey>,
+    // Pending EchoRequest timestamps for RTT measurement.
+    // Keyed by (peer_id, timestamp_millis) so that stale echoes can be discarded.
+    pending_echo: DashMap<PeerId, u64>,
 }
 
 impl ProtocolLayer {
@@ -396,9 +403,12 @@ impl ProtocolLayer {
             pending_punch: DashMap::new(),
             route_candidates: DashMap::new(),
             last_punch_time: DashMap::new(),
+            route_pin: DashMap::new(),
+            pending_echo: DashMap::new(),
         });
         layer.start_packet_dispatcher();
         layer.start_maintenance_loop();
+        layer.start_heartbeat_loop();
         layer
     }
 
@@ -416,6 +426,38 @@ impl ProtocolLayer {
 
     pub(crate) fn ensure_peer_reachable(&self, peer_id: &PeerId) -> io::Result<()> {
         self.transport.route_for(peer_id).map(|_| ())
+    }
+
+    /// Pin a specific route for a peer. All subsequent QUIC packets sent to
+    /// this peer will go through the specified route_key, overriding normal
+    /// route-table selection.
+    pub(crate) fn pin_route(&self, peer_id: PeerId, route_key: RouteKey) {
+        self.route_pin.insert(peer_id, route_key);
+    }
+
+    /// Remove a previously pinned route, reverting to automatic route selection.
+    pub(crate) fn unpin_route(&self, peer_id: &PeerId) {
+        self.route_pin.remove(peer_id);
+    }
+
+    /// Remove all direct routes for a peer. Called when a QUIC connection drops
+    /// to trigger re-punching via the maintenance loop. Relay routes are kept
+    /// as fallback so communication can continue while re-punching is in progress.
+    pub(crate) fn remove_direct_routes(&self, peer_id: &PeerId) {
+        let routes = self.transport.routes(peer_id.clone());
+        let direct_routes: Vec<_> = routes.into_iter().filter(|r| r.is_direct()).collect();
+        if !direct_routes.is_empty() {
+            log::info!(
+                "QUIC connection to {} dropped — removing {} direct route(s) to trigger re-punch",
+                peer_id,
+                direct_routes.len()
+            );
+            for route in direct_routes {
+                self.transport.remove_route(peer_id, &route.route_key());
+            }
+        }
+        // Also remove stale echo tracking
+        self.pending_echo.remove(peer_id);
     }
 
     pub(crate) fn route_metric_for(&self, peer_id: &PeerId) -> io::Result<(RouteKey, u8)> {
@@ -442,6 +484,14 @@ impl ProtocolLayer {
             self.max_ttl,
             payload,
         )?;
+        // If the caller pinned a specific route for this peer, use it directly.
+        // This takes priority over the normal route-table selection and enables
+        // the send_to_via / open_bi_via API.
+        if let Some(route_key) = self.route_pin.get(&peer_id).map(|r| *r) {
+            return self
+                .transport
+                .try_send_wire_to_route(route_key, packet.as_bytes());
+        }
         // Prefer direct routes (metric == 0) for QUIC packets. Relay routes
         // add extra latency that can cause QUIC handshake timeouts, especially
         // during the initial connection setup after hole punching succeeds.
@@ -882,6 +932,40 @@ impl ProtocolLayer {
                 )
                 .await?;
             }
+            ProtocolType::EchoReply => {
+                // EchoReply carries back the original EchoRequest payload,
+                // which is an 8-byte big-endian millisecond timestamp. Use it
+                // to calculate RTT and update the route table. This also
+                // serves as a NAT keepalive — receiving it proves the direct
+                // mapping is still alive.
+                if metric == 0 && packet.payload().len() >= 8 {
+                    let sent_ts =
+                        u64::from_be_bytes(packet.payload()[..8].try_into().unwrap_or([0u8; 8]));
+                    let now = now_millis();
+                    // Discard stale echoes (> 60s old) to avoid bogus RTT.
+                    if now > sent_ts && now - sent_ts < 60_000 {
+                        let rtt = (now - sent_ts) as u32;
+                        let old_rtt = self
+                            .transport
+                            .routes(src.clone())
+                            .into_iter()
+                            .find(|r| r.route_key() == route_key)
+                            .map(|r| r.rtt())
+                            .unwrap_or(9999);
+                        // Only log if RTT changed significantly (> 10ms delta)
+                        if (rtt as i64 - old_rtt as i64).abs() > 10 {
+                            log::debug!(
+                                "EchoReply from {} — RTT updated: {}ms (was {}ms) via {:?}",
+                                src,
+                                rtt,
+                                old_rtt,
+                                route_key
+                            );
+                        }
+                        self.transport.update_route_rtt(&src, &route_key, rtt);
+                    }
+                }
+            }
             ProtocolType::TimestampRequest => {
                 self.confirm_tcp_route(&peer, route_key, metric);
                 self.send_protocol_to_route(
@@ -931,7 +1015,6 @@ impl ProtocolLayer {
             }
             ProtocolType::MessageData
             | ProtocolType::RangeBroadcast
-            | ProtocolType::EchoReply
             | ProtocolType::TimestampReply => {}
         }
         Ok(())
@@ -1438,6 +1521,53 @@ impl ProtocolLayer {
                             let _ = protocol.execute_punch(peer_id.clone(), nat_info).await;
                         }
                     }
+                }
+            }
+        });
+    }
+
+    /// Heartbeat loop: sends EchoRequest to every peer with a direct route
+    /// every 15 seconds. The EchoReply handler calculates RTT and updates
+    /// the route table. These packets also serve as NAT keepalive, preventing
+    /// NAT mappings from aging out during idle periods.
+    fn start_heartbeat_loop(self: &Arc<Self>) {
+        let protocol = self.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(15));
+            interval.tick().await; // skip immediate first tick
+            loop {
+                interval.tick().await;
+                if protocol.closed.load(Ordering::Relaxed) {
+                    break;
+                }
+                // Collect all peers that have at least one direct route.
+                let direct_peers: Vec<(PeerId, RouteKey)> = protocol
+                    .transport
+                    .known_peers()
+                    .into_iter()
+                    .filter(|p| p.peer_id != protocol.peer_id)
+                    .filter_map(|p| {
+                        protocol
+                            .transport
+                            .routes(p.peer_id.clone())
+                            .into_iter()
+                            .find(|r| r.is_direct())
+                            .map(|r| (p.peer_id, r.route_key()))
+                    })
+                    .collect();
+
+                for (peer_id, route_key) in direct_peers {
+                    let ts = now_millis();
+                    protocol.pending_echo.insert(peer_id.clone(), ts);
+                    let payload = ts.to_be_bytes();
+                    let _ = protocol
+                        .send_protocol_to_route(
+                            peer_id,
+                            route_key,
+                            ProtocolType::EchoRequest,
+                            &payload,
+                        )
+                        .await;
                 }
             }
         });

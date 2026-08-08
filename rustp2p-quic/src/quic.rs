@@ -415,6 +415,62 @@ impl QuicEndpoint {
         Ok((ReliableSendStream::new(send), ReliableRecvStream::new(recv)))
     }
 
+    /// Sends a QUIC DATAGRAM via a specific route.
+    ///
+    /// Temporarily pins the route, sends the datagram, then unpins to revert
+    /// to automatic route selection. If the QUIC connection was already
+    /// established through a different route, the datagram will still go
+    /// through the pinned route (QUIC supports packet-level path switching
+    /// via connection IDs).
+    pub(crate) async fn send_to_via(
+        self: &Arc<Self>,
+        peer_id: PeerId,
+        route_key: RouteKey,
+        payload: &[u8],
+    ) -> io::Result<()> {
+        self.protocol.pin_route(peer_id.clone(), route_key);
+        let result = self.send_to(peer_id.clone(), payload).await;
+        self.protocol.unpin_route(&peer_id);
+        result
+    }
+
+    /// Tries to send a QUIC DATAGRAM via a specific route without waiting.
+    ///
+    /// Pins the route, attempts the send, then unpins.
+    pub(crate) fn try_send_to_via(
+        &self,
+        peer_id: PeerId,
+        route_key: RouteKey,
+        payload: &[u8],
+    ) -> io::Result<()> {
+        self.protocol.pin_route(peer_id.clone(), route_key);
+        let result = self.try_send_to(peer_id.clone(), payload);
+        self.protocol.unpin_route(&peer_id);
+        result
+    }
+
+    /// Opens a bidirectional QUIC stream via a specific route.
+    ///
+    /// Pins the route for the peer. The pin stays active after this call so
+    /// that all stream data flows through the specified route. Call
+    /// `unpin_route` to revert to automatic route selection.
+    pub(crate) async fn open_bi_via(
+        self: &Arc<Self>,
+        peer_id: PeerId,
+        route_key: RouteKey,
+    ) -> io::Result<(ReliableSendStream, ReliableRecvStream)> {
+        self.protocol.pin_route(peer_id.clone(), route_key);
+        self.open_bi(peer_id).await
+    }
+
+    pub(crate) fn unpin_route(&self, peer_id: &PeerId) {
+        self.protocol.unpin_route(peer_id);
+    }
+
+    pub(crate) fn pin_route(&self, peer_id: PeerId, route_key: RouteKey) {
+        self.protocol.pin_route(peer_id, route_key);
+    }
+
     pub(crate) async fn accept_bi(&self) -> io::Result<IncomingBiStream> {
         self.stream_rx
             .recv_async()
@@ -587,6 +643,9 @@ impl QuicEndpoint {
         if let Some(peer_id) = peer_id {
             self.connections.remove(&peer_id);
             self.socket.release_virtual_peer(&peer_id);
+            // Remove direct routes so the maintenance loop re-punches.
+            // Relay routes are kept as fallback so communication can continue.
+            self.protocol.remove_direct_routes(&peer_id);
         }
     }
 

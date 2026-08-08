@@ -154,6 +154,27 @@ impl<PeerID: Hash + Eq + Clone> RouteTable<PeerID> {
         }
         false
     }
+    /// Update the RTT of a specific route and re-sort if needed.
+    ///
+    /// Called after an EchoReply arrives so that the route table reflects
+    /// the latest measured round-trip time. When the load-balance strategy
+    /// is `LowestLatency`, routes are re-sorted by RTT.
+    pub fn update_rtt(&self, id: &PeerID, route_key: &RouteKey, rtt: u32) {
+        if let Some(mut entry) = self.route_table.get_mut(id) {
+            let (_, routes) = entry.value_mut();
+            let mut changed = false;
+            for (route, _) in routes.iter_mut() {
+                if &route.route_key() == route_key {
+                    route.rtt = rtt;
+                    changed = true;
+                    break;
+                }
+            }
+            if changed && self.load_balance == LoadBalance::LowestLatency {
+                routes.sort_by_key(|(k, _)| k.rtt);
+            }
+        }
+    }
     /// Remove specified route
     pub fn remove_route(&self, id: &PeerID, route_key: &RouteKey) {
         self.route_table.remove_if_mut(id, |_, (_, routes)| {
