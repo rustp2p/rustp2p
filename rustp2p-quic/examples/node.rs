@@ -170,16 +170,13 @@ async fn main() -> rustp2p_quic::Result<()> {
 /// peer id from the payload.
 fn split_peer_and_payload(rest: &str) -> rustp2p_quic::Result<(&str, &str)> {
     let rest = rest.trim_start();
-    let split_at = rest.find(char::is_whitespace);
-    match split_at {
-        Some(i) if i > 0 => {
-            let (peer, tail) = rest.split_at(i);
-            let payload = tail.trim_start();
+    match rest.split_once(' ') {
+        Some((peer, tail)) if !peer.is_empty() => {
+            let payload = tail.trim_start_matches(' ');
             if payload.is_empty() {
-                Err(invalid("usage: <peer_id> <message>"))
-            } else {
-                Ok((peer, payload))
+                return Err(invalid("usage: <peer_id> <message>"));
             }
+            Ok((peer, payload))
         }
         _ => Err(invalid("usage: <peer_id> <message>")),
     }
