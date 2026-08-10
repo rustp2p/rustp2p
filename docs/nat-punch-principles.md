@@ -520,65 +520,94 @@ node-b sends PunchRequest -> node-c
 
 ### 5.1 Assistant Socket
 
-```mermaid
-flowchart LR
-    subgraph A["node-a (public relay)"]
-        RA["203.0.113.1\n(no NAT)"]
-    end
+```
+Assistant sockets — bidirectional simultaneous punching
+(node-b: Symmetric NAT  |  node-c: Cone NAT)
 
-    subgraph B["node-b (Symmetric NAT)"]
-        direction TB
-        S0["Socket 0 (main)\n10.0.0.5:51820"]
-        S1["Socket 1 (asst)\n10.0.0.5:41322"]
-        S2["Socket 2 (asst)\n10.0.0.5:51901"]
-        NATB["NAT-B (Symmetric)\n198.51.100.20\nnode-a route: :39999\nnode-c route: :40012 / :40045 / :40078"]
-        S0 --> NATB
-        S1 --> NATB
-        S2 --> NATB
-    end
+Both sides exchange NatInfo via relay PunchRequest, then punch simultaneously.
 
-    NATB -->|"NatObserveRequest\n(node-b -> node-a direct route)"| RA
-    RA -->|"NatObserveReply:\n'Your addr is 198.51.100.20:39999'"| NATB
+  node-b side (peer is Cone → try_send_via_all to known address)
+  ──────────────────────────────────────────────────────────────
+  Socket 0 (10.0.0.5:51820) ─┐
+  Socket 1 (10.0.0.5:41322) ─┤──► NAT-B (Symmetric, 198.51.100.20)
+  Socket 2 (10.0.0.5:51901) ─┘       │
+                                       │  per-destination new mappings
+                                       │  Socket 0 → :40012 ──────────────────────────────┐
+                                       │  Socket 1 → :40045 ─────────────────────────── NAT-C (Cone)
+                                       │  Socket 2 → :40078 ──────────────────────────────┘
+                                       │                         ↑ admits packet only if node-c
+                                       │                           has already sent to that port
 
-    NATB -->|"hole-punch packets\n(new per-destination mappings)"| C["node-c (Cone NAT)\n203.0.113.10:40000\nObserves source ports:\n40012, 40045, 40078"]
-    C --> R["node-c uses observed ports as prediction centers:\nPhase 1 covers [40012±100, 40045±100, 40078±100]\n~3x hit probability\nOnly enabled under Symmetric NAT"]
+  node-c side (peer is Symmetric → punch_symmetric, many predicted ports)
+  ───────────────────────────────────────────────────────────────────────
+  Socket 0 (10.0.0.6:51820) ──► NAT-C (Cone, 203.0.113.10:40000)
+                                       │
+                Phase 1: sends to 198.51.100.20:{39899..40099}  (range ±100 around NatObserve port)
+                Phase 2: sends to 198.51.100.20:{random 1..65535}
+                                       │
+                Each outbound packet opens NAT-C to admit return traffic from that address.
+
+  Punch SUCCESS condition (both events must coincide):
+  ────────────────────────────────────────────────────
+  node-b sends via Socket N  →  NAT-B assigns :PORT_X for node-c destination
+  node-c has already sent to 198.51.100.20:PORT_X  →  NAT-C entry exists for PORT_X
+                                                    →  packet from 198.51.100.20:PORT_X is admitted
+                                                    →  node-c receives node-b's packet  ✓
+
+  Why 3 assistant sockets increase hit probability:
+  ─────────────────────────────────────────────────
+  Without assistants: 1 NAT-B mapping per round (PORT_X)  → must guess exactly PORT_X
+  With 3 sockets:     3 NAT-B mappings per round           → node-c needs to have sent to
+                      (:40012, :40045, :40078)               any one of the 3 to succeed
+                                                           → ~3x chance per punch round
 ```
 
 ```
-+------------------------------------------------------------------+
-|                  Purpose of Assistant Sockets                    |
-|                                                                  |
-|  Only enabled under Symmetric NAT.                               |
-|                                                                  |
-|  Scenario: node-b (Symmetric) punching to node-c (Cone)         |
-|                                                                  |
-|  Step 1 — NatObserve with public relay node-a:                   |
-|    node-b's Socket 0 -> node-a (203.0.113.1)                     |
-|      NAT-B assigns mapping: 198.51.100.20:39999  (node-a route)  |
-|    node-a replies: "I see you as 198.51.100.20:39999"            |
-|    -> public_udp_ports = [39999]  (for the node-a direction)     |
-|                                                                  |
-|  Step 2 — Hole-punch to node-c (different destination):          |
-|    Under Symmetric NAT, each new destination gets new mappings.  |
-|    node-b has 3 sockets; try_send_via_all sends to node-c:       |
-|      Socket 0 -> NAT-B creates new mapping :40012 -> node-c      |
-|      Socket 1 -> NAT-B creates new mapping :40045 -> node-c      |
-|      Socket 2 -> NAT-B creates new mapping :40078 -> node-c      |
-|                                                                  |
-|    (40012 / 40045 / 40078 are new mappings for the node-c        |
-|     destination, different from the NatObserve port 39999)       |
-|                                                                  |
-|  Step 3 — node-c observes 3 source ports from node-b:            |
-|    40012, 40045, 40078                                           |
-|                                                                  |
-|  Step 4 — node-c reverse-punches to node-b:                      |
-|    Phase 1 prediction covers: [40012±100, 40045±100, 40078±100]  |
-|    -> Hit probability ~3x higher than with a single port         |
-|                                                                  |
-|  Also, all 3 of node-b's sockets are listening:                  |
-|    If node-c's prediction hits a socket's mapped port,           |
-|    that socket receives it -> can establish direct connection     |
-+------------------------------------------------------------------+
++---------------------------------------------------------------------+
+|                   Purpose of Assistant Sockets                      |
+|                                                                      |
+|  Only enabled under Symmetric NAT (node-b's side).                  |
+|                                                                      |
+|  Scenario: node-b (Symmetric) <---> node-c (Cone)                   |
+|                                                                      |
+|  Precondition — NatInfo exchange via relay (PunchRequest/Reply):     |
+|    node-b's NatInfo sent to node-c:                                  |
+|      nat_type = Symmetric                                            |
+|      public_ips = [198.51.100.20]                                    |
+|      public_udp_ports = [39999]  (NatObserve port, node-a route)    |
+|      public_port_range = 4  (from STUN)                             |
+|    node-c's NatInfo sent to node-b:                                  |
+|      nat_type = Cone                                                 |
+|      public_udp_ports = [40000]                                      |
+|                                                                      |
+|  Both sides punch simultaneously (no prior direct contact):          |
+|                                                                      |
+|  node-b (peer=Cone → Cone branch: try_send_via_all):                 |
+|    All 3 sockets send to node-c's known addr 203.0.113.10:40000     |
+|    NAT-B (Symmetric) creates 3 new per-destination mappings:         |
+|      Socket 0 → 198.51.100.20:40012  (for node-c destination)       |
+|      Socket 1 → 198.51.100.20:40045                                  |
+|      Socket 2 → 198.51.100.20:40078                                  |
+|    Packets reach NAT-C, but NAT-C is Port-Restricted Cone:           |
+|      Only admitted if node-c already sent to 198.51.100.20:PORT_X   |
+|                                                                      |
+|  node-c (peer=Symmetric → Symmetric branch: punch_symmetric):        |
+|    Phase 1 (predicted range, ≤60 ports):                             |
+|      predict_range = max(port_range×10, 100) = 100                  |
+|      sends to 198.51.100.20:{39999-100 .. 39999+100} (shuffled)     |
+|    Phase 2 (global random, 1200-1500 ports):                         |
+|      sends to 198.51.100.20:{random ports from 1..65535}            |
+|    Each send via try_send_via_all (node-c's main socket, Cone)       |
+|    Each outbound packet opens NAT-C to admit return from that addr   |
+|                                                                      |
+|  Punch succeeds when:                                                |
+|    node-b's NAT-B mapping port (40012, 40045, or 40078) happens to  |
+|    be one that node-c already sent to → NAT-C entry exists →         |
+|    node-c receives node-b's packet → direct route confirmed          |
+|                                                                      |
+|  3 sockets → 3 NAT-B mappings per round → ~3x hit probability       |
+|  compared to a single socket that produces only 1 mapping per round  |
++---------------------------------------------------------------------+
 ```
 
 ### 5.2 Direct Address Injection
