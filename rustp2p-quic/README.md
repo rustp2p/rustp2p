@@ -3,8 +3,9 @@
 `rustp2p-quic` is the PeerId-based QUIC layer for this workspace. It builds on
 `rustp2p-core` as the underlying transport.
 
-The high-level API uses `PeerId` for all application traffic. Socket addresses are only used to
-bootstrap connectivity to a reachable node.
+High-level application traffic targets `PeerId`. Socket addresses are only used to bootstrap
+connectivity to a reachable node. Advanced route-pinning APIs additionally take a `RouteKey`
+selected from `Endpoint::routes(...)`.
 
 ## Design
 
@@ -13,7 +14,7 @@ Every node is equal. There is no fixed server/client role at the high-level P2P 
 If `A <-> B <-> C` are reachable but `A` and `C` cannot connect directly, `B` can forward traffic
 between `A` and `C`. Reliable traffic is still end-to-end QUIC:
 
-- `A` and `C` establish one QUIC connection.
+- `A` and `C` establish end-to-end QUIC connectivity (default path or route-pinned path).
 - `B` forwards QUIC UDP datagrams inside rustp2p overlay relay packets.
 - `B` does not terminate QUIC streams.
 - `B` cannot read reliable stream payloads.
@@ -151,6 +152,30 @@ if let Some(n) = stream.recv.read(&mut request).await? {
 For request/response protocols, prefer explicit framing such as a length-prefixed message. The
 `node` example uses length-prefixed frames for this reason.
 
+### Route-pinned QUIC (advanced)
+
+When multiple confirmed routes exist to the same peer, route-pinned APIs let you force QUIC traffic
+onto a specific `RouteKey`:
+
+```rust
+let routes = endpoint.routes(peer_id.clone());
+if let Some(route) = routes.first() {
+    endpoint
+        .send_to_via(peer_id.clone(), route.route_key(), b"hello via route")
+        .await?;
+
+    let (mut send, mut recv) = endpoint
+        .open_bi_via(peer_id.clone(), route.route_key())
+        .await?;
+}
+```
+
+- `send_to_via(peer_id, route_key, payload)` creates/reuses a per-route QUIC connection and sends
+  one QUIC DATAGRAM.
+- `open_bi_via(peer_id, route_key)` opens a reliable QUIC stream on that per-route connection.
+- `try_send_to_via(...)` is non-blocking and returns `WouldBlock` until the per-route connection has
+  been created (for example by a prior `send_to_via`/`open_bi_via`).
+
 ### Discovery
 
 Nodes exchange known peers through transport control packets (`Hello`, `RouteQuery`, and
@@ -173,7 +198,8 @@ endpoint.send_to("node-d".into(), b"hello d").await?;
 
 Real socket addresses are only transport/bootstrap concerns. `Endpoint::transport()` is a low-level
 escape hatch for already encoded protocol wire bytes; it does not encrypt user payloads by itself.
-Application data should use `send_to` or `open_bi`.
+Application data should use `send_to` / `open_bi` (or route-pinned `send_to_via` /
+`open_bi_via`).
 
 `TransportHandle::send_to_peer` is intended for protocol/control diagnostics and internal tooling.
 It should not be used as an application datagram API because it bypasses the QUIC/TLS user-data
