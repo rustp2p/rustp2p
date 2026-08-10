@@ -1059,7 +1059,7 @@ mod tests {
     use quinn::udp::RecvMeta;
     use rustp2p_core::route_table::{Protocol, RouteKey};
     use std::io::{self, IoSliceMut};
-    use std::task::{Context, Poll};
+    use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 
     #[tokio::test]
     async fn unknown_quic_destination_is_not_sent_as_raw_addr() {
@@ -1099,13 +1099,24 @@ mod tests {
         let socket = quic_peer_socket().await;
         let mut bufs: [IoSliceMut<'_>; 0] = [];
         let mut meta: [RecvMeta; 0] = [];
-        let waker = std::task::Waker::noop();
-        let mut cx = Context::from_waker(waker);
+        let waker = noop_waker();
+        let mut cx = Context::from_waker(&waker);
 
         match socket.poll_recv(&mut cx, &mut bufs, &mut meta) {
             Poll::Ready(Err(err)) => assert_eq!(err.kind(), io::ErrorKind::InvalidInput),
             other => panic!("expected InvalidInput error, got {other:?}"),
         }
+    }
+
+    fn noop_waker() -> Waker {
+        unsafe fn clone(_: *const ()) -> RawWaker {
+            RawWaker::new(std::ptr::null(), &VTABLE)
+        }
+        unsafe fn wake(_: *const ()) {}
+        unsafe fn wake_by_ref(_: *const ()) {}
+        unsafe fn drop(_: *const ()) {}
+        static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, wake, wake_by_ref, drop);
+        unsafe { Waker::from_raw(RawWaker::new(std::ptr::null(), &VTABLE)) }
     }
 
     async fn quic_peer_socket() -> Arc<QuicPeerSocket> {
