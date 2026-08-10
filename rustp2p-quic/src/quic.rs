@@ -114,7 +114,7 @@ impl QuicPeerSocket {
             route_key: None,
         };
         if let Some(addr) = self.virtual_by_peer.get(&peer_id).map(|entry| *entry) {
-            self.virtual_by_addr.insert(addr, virtual_peer);
+            self.ensure_virtual_mapping(addr, virtual_peer);
             return addr;
         }
 
@@ -128,7 +128,7 @@ impl QuicPeerSocket {
         };
 
         self.release_reserved_virtual_addr(addr, &virtual_peer);
-        self.virtual_by_addr.insert(existing_addr, virtual_peer);
+        self.ensure_virtual_mapping(existing_addr, virtual_peer);
         existing_addr
     }
 
@@ -156,7 +156,7 @@ impl QuicPeerSocket {
         };
         if let Some(addr) = self.via_virtual_addrs.get(&key).map(|entry| *entry) {
             // Refresh the mapping in case it was removed from virtual_by_addr.
-            self.virtual_by_addr.insert(addr, virtual_peer);
+            self.ensure_virtual_mapping(addr, virtual_peer);
             return addr;
         }
 
@@ -170,7 +170,7 @@ impl QuicPeerSocket {
         };
 
         self.release_reserved_virtual_addr(addr, &virtual_peer);
-        self.virtual_by_addr.insert(existing_addr, virtual_peer);
+        self.ensure_virtual_mapping(existing_addr, virtual_peer);
         existing_addr
     }
 
@@ -232,6 +232,19 @@ impl QuicPeerSocket {
         if let DashEntry::Occupied(entry) = self.virtual_by_addr.entry(addr) {
             if entry.get() == expected {
                 entry.remove();
+            }
+        }
+    }
+
+    fn ensure_virtual_mapping(&self, addr: SocketAddr, expected: VirtualPeer) {
+        match self.virtual_by_addr.entry(addr) {
+            DashEntry::Vacant(entry) => {
+                entry.insert(expected);
+            }
+            DashEntry::Occupied(entry) => {
+                if entry.get() != &expected {
+                    log::warn!("virtual mapping conflict at {addr}, keeping existing entry");
+                }
             }
         }
     }
@@ -1114,8 +1127,9 @@ mod tests {
         }
         unsafe fn wake(_: *const ()) {}
         unsafe fn wake_by_ref(_: *const ()) {}
-        unsafe fn drop(_: *const ()) {}
-        static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, wake, wake_by_ref, drop);
+        unsafe fn noop_drop(_: *const ()) {}
+        static VTABLE: RawWakerVTable =
+            RawWakerVTable::new(clone, wake, wake_by_ref, noop_drop);
         unsafe { Waker::from_raw(RawWaker::new(std::ptr::null(), &VTABLE)) }
     }
 
