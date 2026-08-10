@@ -270,8 +270,11 @@ connect <addr>
 send <peer_id> <message>
 stream <peer_id> <message>
 broadcast <message>
+punch <peer_id>
 peers
+routes
 quit
+exit
 ```
 
 Send an unreliable message:
