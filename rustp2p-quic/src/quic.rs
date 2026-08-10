@@ -241,9 +241,9 @@ impl QuicPeerSocket {
             DashEntry::Vacant(entry) => {
                 entry.insert(expected);
             }
-            DashEntry::Occupied(entry) => {
+            DashEntry::Occupied(mut entry) => {
                 if entry.get() != &expected {
-                    log::warn!("virtual mapping conflict at {addr}, keeping existing entry");
+                    entry.insert(expected);
                 }
             }
         }
