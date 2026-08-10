@@ -8,6 +8,7 @@ use crate::protocol::{
 use crate::reliable::{ReliableRecvStream, ReliableSendStream};
 use crate::{Identity, PeerId};
 use bytes::Bytes;
+use dashmap::mapref::entry::Entry as DashEntry;
 use dashmap::DashMap;
 use quinn::udp::{RecvMeta, Transmit};
 use quinn::AsyncUdpSocket;
@@ -108,27 +109,27 @@ impl QuicPeerSocket {
     }
 
     pub(crate) fn register_virtual_peer(&self, peer_id: PeerId) -> SocketAddr {
-        if let Some(addr) = self.virtual_by_peer.get(&peer_id).map(|entry| *entry) {
-            self.virtual_by_addr.insert(
-                addr,
-                VirtualPeer {
-                    peer_id,
+        match self.virtual_by_peer.entry(peer_id.clone()) {
+            DashEntry::Occupied(entry) => {
+                let addr = *entry.get();
+                self.virtual_by_addr.insert(
+                    addr,
+                    VirtualPeer {
+                        peer_id,
+                        route_key: None,
+                    },
+                );
+                addr
+            }
+            DashEntry::Vacant(entry) => {
+                let addr = self.allocate_virtual_addr(VirtualPeer {
+                    peer_id: peer_id.clone(),
                     route_key: None,
-                },
-            );
-            return addr;
+                });
+                entry.insert(addr);
+                addr
+            }
         }
-
-        let addr = self.allocate_virtual_addr();
-        self.virtual_by_peer.insert(peer_id.clone(), addr);
-        self.virtual_by_addr.insert(
-            addr,
-            VirtualPeer {
-                peer_id,
-                route_key: None,
-            },
-        );
-        addr
     }
 
     /// Register a virtual peer bound to a specific route_key.
@@ -149,28 +150,28 @@ impl QuicPeerSocket {
         route_key: RouteKey,
     ) -> SocketAddr {
         let key = (peer_id.clone(), route_key);
-        if let Some(addr) = self.via_virtual_addrs.get(&key).map(|entry| *entry) {
-            // Refresh the mapping in case it was removed from virtual_by_addr.
-            self.virtual_by_addr.insert(
-                addr,
-                VirtualPeer {
+        match self.via_virtual_addrs.entry(key) {
+            DashEntry::Occupied(entry) => {
+                let addr = *entry.get();
+                // Refresh the mapping in case it was removed from virtual_by_addr.
+                self.virtual_by_addr.insert(
+                    addr,
+                    VirtualPeer {
+                        peer_id,
+                        route_key: Some(route_key),
+                    },
+                );
+                addr
+            }
+            DashEntry::Vacant(entry) => {
+                let addr = self.allocate_virtual_addr(VirtualPeer {
                     peer_id,
                     route_key: Some(route_key),
-                },
-            );
-            return addr;
+                });
+                entry.insert(addr);
+                addr
+            }
         }
-
-        let addr = self.allocate_virtual_addr();
-        self.via_virtual_addrs.insert(key, addr);
-        self.virtual_by_addr.insert(
-            addr,
-            VirtualPeer {
-                peer_id,
-                route_key: Some(route_key),
-            },
-        );
-        addr
     }
 
     pub(crate) fn peer_for_virtual_addr(&self, addr: SocketAddr) -> Option<PeerId> {
@@ -206,12 +207,13 @@ impl QuicPeerSocket {
         }
     }
 
-    fn allocate_virtual_addr(&self) -> SocketAddr {
+    fn allocate_virtual_addr(&self, virtual_peer: VirtualPeer) -> SocketAddr {
         for _ in 0..128 {
             let suffix = rand::random::<u16>();
             let port = 1024 + (rand::random::<u16>() % (u16::MAX - 1024));
             let addr = SocketAddr::from(([127, 255, (suffix >> 8) as u8, suffix as u8], port));
-            if !self.virtual_by_addr.contains_key(&addr) {
+            if let DashEntry::Vacant(entry) = self.virtual_by_addr.entry(addr) {
+                entry.insert(virtual_peer.clone());
                 return addr;
             }
         }
@@ -219,7 +221,8 @@ impl QuicPeerSocket {
         loop {
             let suffix = rand::random::<u16>();
             let addr = SocketAddr::from(([127, 255, (suffix >> 8) as u8, suffix as u8], 4433));
-            if !self.virtual_by_addr.contains_key(&addr) {
+            if let DashEntry::Vacant(entry) = self.virtual_by_addr.entry(addr) {
+                entry.insert(virtual_peer.clone());
                 return addr;
             }
         }
@@ -267,6 +270,12 @@ impl AsyncUdpSocket for QuicPeerSocket {
         bufs: &mut [IoSliceMut<'_>],
         meta: &mut [RecvMeta],
     ) -> Poll<io::Result<usize>> {
+        if bufs.is_empty() || meta.is_empty() {
+            return Poll::Ready(Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "poll_recv requires non-empty bufs and meta",
+            )));
+        }
         if let Poll::Ready(Some(packet)) = Pin::new(&mut *self.routed_quic_rx.lock()).poll_recv(cx)
         {
             let copy_len = packet.data.len().min(bufs[0].len());
@@ -1039,8 +1048,10 @@ mod tests {
     use crate::protocol::ProtocolLayer;
     use crate::{Config, Identity, PeerId};
     use quinn::AsyncUdpSocket;
+    use quinn::udp::RecvMeta;
     use rustp2p_core::route_table::{Protocol, RouteKey};
-    use std::io;
+    use std::io::{self, IoSliceMut};
+    use std::task::{Context, Poll};
 
     #[tokio::test]
     async fn unknown_quic_destination_is_not_sent_as_raw_addr() {
@@ -1073,6 +1084,20 @@ mod tests {
         };
 
         socket.try_send(&transmit).unwrap();
+    }
+
+    #[tokio::test]
+    async fn poll_recv_rejects_empty_inputs() {
+        let socket = quic_peer_socket().await;
+        let mut bufs: [IoSliceMut<'_>; 0] = [];
+        let mut meta: [RecvMeta; 0] = [];
+        let waker = std::task::Waker::noop();
+        let mut cx = Context::from_waker(waker);
+
+        match socket.poll_recv(&mut cx, &mut bufs, &mut meta) {
+            Poll::Ready(Err(err)) => assert_eq!(err.kind(), io::ErrorKind::InvalidInput),
+            other => panic!("expected InvalidInput error, got {other:?}"),
+        }
     }
 
     async fn quic_peer_socket() -> Arc<QuicPeerSocket> {
