@@ -146,6 +146,7 @@ route semantics, and NAT traversal boundaries.
 ## Validation
 
 ```bash
+cargo check -p rustp2p-core
 cargo test -p rustp2p-core
 cargo test -p rustp2p-core --doc
 cargo clippy --workspace --all-targets -- -D warnings

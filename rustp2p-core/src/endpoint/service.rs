@@ -172,7 +172,7 @@ impl EndPoint {
             .udp_sockets()
             .await
             .iter()
-            .map(|s| s.local_addr().unwrap().port())
+            .filter_map(|s| s.local_addr().ok().map(|addr| addr.port()))
             .collect()
     }
 
