@@ -331,6 +331,13 @@ mod tests {
     use super::split_peer_and_payload;
 
     #[test]
+    fn split_peer_and_payload_accepts_normal_spacing() {
+        let (peer, payload) = split_peer_and_payload("node-b hello").unwrap();
+        assert_eq!(peer, "node-b");
+        assert_eq!(payload, "hello");
+    }
+
+    #[test]
     fn split_peer_and_payload_accepts_extra_spaces_after_command() {
         let (peer, payload) = split_peer_and_payload("   node-b    hello world").unwrap();
         assert_eq!(peer, "node-b");
