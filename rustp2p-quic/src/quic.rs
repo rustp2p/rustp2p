@@ -118,6 +118,9 @@ impl QuicPeerSocket {
             return addr;
         }
 
+        // Reserve an internal synthetic address first, then publish peer->addr.
+        // The temporary reservation is not externally discoverable unless this
+        // call eventually wins the peer-level registration race.
         let addr = self.allocate_virtual_addr(virtual_peer.clone());
         let existing_addr = match self.virtual_by_peer.entry(peer_id) {
             DashEntry::Vacant(entry) => {
@@ -160,6 +163,9 @@ impl QuicPeerSocket {
             return addr;
         }
 
+        // Reserve an internal synthetic address first, then publish key->addr.
+        // The temporary reservation is not externally discoverable unless this
+        // call eventually wins the via-key registration race.
         let addr = self.allocate_virtual_addr(virtual_peer.clone());
         let existing_addr = match self.via_virtual_addrs.entry(key) {
             DashEntry::Vacant(entry) => {
@@ -1122,14 +1128,14 @@ mod tests {
     }
 
     fn noop_waker() -> Waker {
-        unsafe fn clone(_: *const ()) -> RawWaker {
+        unsafe fn noop_clone(_: *const ()) -> RawWaker {
             RawWaker::new(std::ptr::null(), &VTABLE)
         }
-        unsafe fn wake(_: *const ()) {}
-        unsafe fn wake_by_ref(_: *const ()) {}
+        unsafe fn noop_wake(_: *const ()) {}
+        unsafe fn noop_wake_by_ref(_: *const ()) {}
         unsafe fn noop_drop(_: *const ()) {}
         static VTABLE: RawWakerVTable =
-            RawWakerVTable::new(clone, wake, wake_by_ref, noop_drop);
+            RawWakerVTable::new(noop_clone, noop_wake, noop_wake_by_ref, noop_drop);
         unsafe { Waker::from_raw(RawWaker::new(std::ptr::null(), &VTABLE)) }
     }
 
