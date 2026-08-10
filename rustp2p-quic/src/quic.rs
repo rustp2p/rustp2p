@@ -57,7 +57,7 @@ pub struct IncomingBiStream {
     pub recv: ReliableRecvStream,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct VirtualPeer {
     peer_id: PeerId,
     /// When set, all QUIC packets for this virtual address are sent through
@@ -127,7 +127,7 @@ impl QuicPeerSocket {
             DashEntry::Occupied(entry) => *entry.get(),
         };
 
-        self.virtual_by_addr.remove(&addr);
+        self.release_reserved_virtual_addr(addr, &virtual_peer);
         self.virtual_by_addr.insert(existing_addr, virtual_peer);
         existing_addr
     }
@@ -169,7 +169,7 @@ impl QuicPeerSocket {
             DashEntry::Occupied(entry) => *entry.get(),
         };
 
-        self.virtual_by_addr.remove(&addr);
+        self.release_reserved_virtual_addr(addr, &virtual_peer);
         self.virtual_by_addr.insert(existing_addr, virtual_peer);
         existing_addr
     }
@@ -224,6 +224,14 @@ impl QuicPeerSocket {
             if let DashEntry::Vacant(entry) = self.virtual_by_addr.entry(addr) {
                 entry.insert(virtual_peer.clone());
                 return addr;
+            }
+        }
+    }
+
+    fn release_reserved_virtual_addr(&self, addr: SocketAddr, expected: &VirtualPeer) {
+        if let DashEntry::Occupied(entry) = self.virtual_by_addr.entry(addr) {
+            if entry.get() == expected {
+                entry.remove();
             }
         }
     }
