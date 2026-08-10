@@ -1065,8 +1065,8 @@ mod tests {
     use super::{QuicPeerSocket, Transmit};
     use crate::protocol::ProtocolLayer;
     use crate::{Config, Identity, PeerId};
-    use quinn::AsyncUdpSocket;
     use quinn::udp::RecvMeta;
+    use quinn::AsyncUdpSocket;
     use rustp2p_core::route_table::{Protocol, RouteKey};
     use std::io::{self, IoSliceMut};
     use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
