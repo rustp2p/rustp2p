@@ -248,9 +248,7 @@ impl QuicPeerSocket {
                 entry.insert(expected);
             }
             DashEntry::Occupied(mut entry) => {
-                if entry.get() != &expected {
-                    entry.insert(expected);
-                }
+                entry.insert(expected);
             }
         }
     }
