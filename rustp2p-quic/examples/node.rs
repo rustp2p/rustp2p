@@ -172,7 +172,7 @@ fn split_peer_and_payload(rest: &str) -> rustp2p_quic::Result<(&str, &str)> {
     let rest = rest.trim_start();
     match rest.split_once(' ') {
         Some((peer, tail)) if !peer.is_empty() => {
-            let payload = tail.trim_start_matches(' ');
+            let payload = tail.trim_start();
             if payload.is_empty() {
                 return Err(invalid("usage: <peer_id> <message>"));
             }
