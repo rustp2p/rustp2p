@@ -109,27 +109,27 @@ impl QuicPeerSocket {
     }
 
     pub(crate) fn register_virtual_peer(&self, peer_id: PeerId) -> SocketAddr {
-        match self.virtual_by_peer.entry(peer_id.clone()) {
-            DashEntry::Occupied(entry) => {
-                let addr = *entry.get();
-                self.virtual_by_addr.insert(
-                    addr,
-                    VirtualPeer {
-                        peer_id,
-                        route_key: None,
-                    },
-                );
-                addr
-            }
-            DashEntry::Vacant(entry) => {
-                let addr = self.allocate_virtual_addr(VirtualPeer {
-                    peer_id: peer_id.clone(),
-                    route_key: None,
-                });
-                entry.insert(addr);
-                addr
-            }
+        let virtual_peer = VirtualPeer {
+            peer_id: peer_id.clone(),
+            route_key: None,
+        };
+        if let Some(addr) = self.virtual_by_peer.get(&peer_id).map(|entry| *entry) {
+            self.virtual_by_addr.insert(addr, virtual_peer);
+            return addr;
         }
+
+        let addr = self.allocate_virtual_addr(virtual_peer.clone());
+        let existing_addr = match self.virtual_by_peer.entry(peer_id) {
+            DashEntry::Vacant(entry) => {
+                entry.insert(addr);
+                return addr;
+            }
+            DashEntry::Occupied(entry) => *entry.get(),
+        };
+
+        self.virtual_by_addr.remove(&addr);
+        self.virtual_by_addr.insert(existing_addr, virtual_peer);
+        existing_addr
     }
 
     /// Register a virtual peer bound to a specific route_key.
@@ -150,28 +150,28 @@ impl QuicPeerSocket {
         route_key: RouteKey,
     ) -> SocketAddr {
         let key = (peer_id.clone(), route_key);
-        match self.via_virtual_addrs.entry(key) {
-            DashEntry::Occupied(entry) => {
-                let addr = *entry.get();
-                // Refresh the mapping in case it was removed from virtual_by_addr.
-                self.virtual_by_addr.insert(
-                    addr,
-                    VirtualPeer {
-                        peer_id,
-                        route_key: Some(route_key),
-                    },
-                );
-                addr
-            }
-            DashEntry::Vacant(entry) => {
-                let addr = self.allocate_virtual_addr(VirtualPeer {
-                    peer_id,
-                    route_key: Some(route_key),
-                });
-                entry.insert(addr);
-                addr
-            }
+        let virtual_peer = VirtualPeer {
+            peer_id,
+            route_key: Some(route_key),
+        };
+        if let Some(addr) = self.via_virtual_addrs.get(&key).map(|entry| *entry) {
+            // Refresh the mapping in case it was removed from virtual_by_addr.
+            self.virtual_by_addr.insert(addr, virtual_peer);
+            return addr;
         }
+
+        let addr = self.allocate_virtual_addr(virtual_peer.clone());
+        let existing_addr = match self.via_virtual_addrs.entry(key) {
+            DashEntry::Vacant(entry) => {
+                entry.insert(addr);
+                return addr;
+            }
+            DashEntry::Occupied(entry) => *entry.get(),
+        };
+
+        self.virtual_by_addr.remove(&addr);
+        self.virtual_by_addr.insert(existing_addr, virtual_peer);
+        existing_addr
     }
 
     pub(crate) fn peer_for_virtual_addr(&self, addr: SocketAddr) -> Option<PeerId> {
