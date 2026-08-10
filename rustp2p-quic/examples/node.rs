@@ -339,6 +339,10 @@ mod tests {
         let (peer, payload) = split_peer_and_payload("   node-b    hello world").unwrap();
         assert_eq!(peer, "node-b");
         assert_eq!(payload, "hello world");
+
+        let (peer, payload) = split_peer_and_payload("node-b    hello").unwrap();
+        assert_eq!(peer, "node-b");
+        assert_eq!(payload, "hello");
     }
 
     #[test]
