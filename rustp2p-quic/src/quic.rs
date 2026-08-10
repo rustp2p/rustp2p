@@ -234,23 +234,16 @@ impl QuicPeerSocket {
         }
     }
 
-    fn release_reserved_virtual_addr(&self, addr: SocketAddr, expected: &VirtualPeer) {
+    fn release_reserved_virtual_addr(&self, addr: SocketAddr, reserved: &VirtualPeer) {
         if let DashEntry::Occupied(entry) = self.virtual_by_addr.entry(addr) {
-            if entry.get() == expected {
+            if entry.get() == reserved {
                 entry.remove();
             }
         }
     }
 
-    fn ensure_virtual_mapping(&self, addr: SocketAddr, expected: VirtualPeer) {
-        match self.virtual_by_addr.entry(addr) {
-            DashEntry::Vacant(entry) => {
-                entry.insert(expected);
-            }
-            DashEntry::Occupied(mut entry) => {
-                entry.insert(expected);
-            }
-        }
+    fn ensure_virtual_mapping(&self, addr: SocketAddr, desired: VirtualPeer) {
+        self.virtual_by_addr.insert(addr, desired);
     }
 }
 
