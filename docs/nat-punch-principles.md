@@ -497,10 +497,6 @@ Problem scenario:
 
 ```mermaid
 flowchart TD
-    EXEC["Puncher.punch_now<br/>(Phase 1 range prediction + Phase 2 global scan)"]
-    NOP["Skip - wait for next cycle"]
-    DONE["Punch packets sent (or throttled)"]
-
     subgraph PL["ProtocolLayer Rate Limiting (protocol.rs)"]
         direction TB
         DIRECT["try_execute_punch: already has direct route<br/>(has_direct_route) - skip"]
@@ -512,17 +508,17 @@ flowchart TD
         RELAY --> AUTO
     end
 
-    subgraph PU["Puncher Backoff (punch mod.rs: should_punch)"]
+    subgraph PU["Puncher Backoff (punch/mod.rs: should_punch)"]
         direction TB
         FIRST["batch_count at most 8<br/>Punch every time (no backoff)"]
-        BACK["batch_count above 8<br/>Linear backoff:<br/>interval = (batch_count div 8).min(360)<br/>Punch only when batch_count modulo interval equals zero"]
+        BACK["batch_count above 8<br/>Linear backoff:<br/>interval = min(batch_count / 8, 360)<br/>Punch only when batch_count modulo interval equals zero"]
         FIRST --> BACK
     end
 
     PL -->|"punch decision"| PU
-    PU -->|"should_punch = true"| EXEC
-    PU -->|"should_punch = false"| NOP
-    EXEC --> DONE
+    PU -->|"should_punch = true"| EXEC["Puncher.punch_now<br/>(Phase 1 range prediction + Phase 2 global scan)"]
+    PU -->|"should_punch = false"| NOP["Skip - wait for next cycle"]
+    EXEC --> DONE["Punch packets sent (or throttled)"]
 ```
 
 > **Note on backoff type**: The backoff is **linear**, not exponential. The formula is
@@ -586,7 +582,7 @@ flowchart LR
 ```mermaid
 flowchart TD
     ML["node-c maintenance_loop (every 10s/peer)<br/>Detects: peer node-b has no direct route<br/>has_direct_route = false"]
-    NAT["node-c has node-b's NatInfo:<br/>ips: (198.51.100.20)<br/>ports: (40012)<br/>type: Symmetric<br/>port_range: 4"]
+    NAT["node-c has node-b's NatInfo:<br/>ips: &#91;198.51.100.20&#93;<br/>ports: &#91;40012&#93;<br/>type: Symmetric<br/>port_range: 4"]
     ML --> NAT
     NAT --> EXEC["Trigger execute_punch(node-b, nat_info)<br/>Build PunchRequest, call Puncher.punch_now"]
 ```
@@ -598,7 +594,7 @@ flowchart TD
     START["node-c Puncher: punch_udp<br/>Peer is Symmetric NAT, use two-phase strategy"]
 
     subgraph P1["Phase 1: Range Prediction (max 60 ports)"]
-        P1A["predict_range = max(4 * 10, 100) = 100<br/>Candidate range: (39912, 40112)"]
+        P1A["predict_range = max(port_range * 10, 100)<br/>here port_range = 4, so max(40, 100) = 100<br/>Candidate range: &#91;39912, 40112&#93;"]
         P1B["201 candidates, then deduplicate + shuffle<br/>Take first 60"]
         P1C["Send via main socket to 198.51.100.20:candidate_port<br/>Each packet through Cone NAT creates an inbound rule<br/>allowing packets from 198.51.100.20"]
         P1A --> P1B
@@ -1058,7 +1054,7 @@ flowchart TD
         S2A["node-b sends NatObserveRequest to node-a"]
         S2B["node-c sends NatObserveRequest to node-a"]
         S2C["node-a observes source addresses:<br/>node-b to 198.51.100.20:40012<br/>node-c to 203.0.113.10:40000"]
-        S2D["node-a replies NatObserveReply:<br/>node-b learns public_ips=(198.51.100.20), ports=(40012)<br/>node-c learns public_ips=(203.0.113.10), ports=(40000)"]
+        S2D["node-a replies NatObserveReply:<br/>node-b learns public_ips=&#91;198.51.100.20&#93;, ports=&#91;40012&#93;<br/>node-c learns public_ips=&#91;203.0.113.10&#93;, ports=&#91;40000&#93;"]
         S2A --> S2C
         S2B --> S2C
         S2C --> S2D
@@ -1162,7 +1158,7 @@ flowchart TD
         direction TB
         L3A{"batch_count at most 8?"}
         L3B["Punch immediately (no backoff)"]
-        L3C{"interval = (batch_count div 8).min(360)<br/>elapsed is at least interval?"}
+        L3C{"interval = min(batch_count / 8, 360)<br/>elapsed is at least interval?"}
         L3D["Punch now<br/>batch_count incremented by 1"]
         L3E["Skip this round"]
         L3A -->|"Yes"| L3B
