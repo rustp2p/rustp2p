@@ -615,7 +615,7 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    RECV["node-b receives node-c's PunchRequest via relay<br/>(metric > 0)"]
+    RECV["node-b receives node-c's PunchRequest via relay<br/>(metric &gt; 0)"]
     RATE["try_execute_punch triggers reverse punch<br/>Rate limit check: not punched in last 5s → allowed"]
     CONE["Peer is Cone NAT → Direct send strategy"]
     SEND1["Main socket: 198.51.100.20:40035 → 203.0.113.10:40000"]
@@ -1024,8 +1024,8 @@ flowchart LR
         NCI --> NCNAT
     end
 
-    NBNAT -->|"bootstrap (--relay node-a)<br/>relay route, metric > 0"| NA
-    NCNAT -->|"bootstrap (--relay node-a)<br/>relay route, metric > 0"| NA
+    NBNAT -->|"bootstrap (--relay node-a)<br/>relay route, metric &gt; 0"| NA
+    NCNAT -->|"bootstrap (--relay node-a)<br/>relay route, metric &gt; 0"| NA
 
     NBNAT -.->|"target: direct route metric = 0"| NCNAT
 ```
@@ -1044,7 +1044,7 @@ flowchart TD
         direction TB
         S1A["node-b starts with --relay node-a<br/>establishes QUIC connection to node-a"]
         S1B["node-c starts with --relay node-a<br/>establishes QUIC connection to node-a"]
-        S1C["Result: both have relay routes to each other<br/>via node-a (metric > 0)"]
+        S1C["Result: both have relay routes to each other<br/>via node-a (metric &gt; 0)"]
         S1A --> S1C
         S1B --> S1C
     end
@@ -1063,7 +1063,7 @@ flowchart TD
     subgraph S3["Stage 3: Peer discovery + PunchRequest exchange"]
         direction TB
         S3A["Maintenance loop (1s tick) + QueryRoutes<br/>both learn the other peer exists"]
-        S3B{"has_direct_route?<br/>peer has only metric > 0 relay route"}
+        S3B{"has_direct_route?<br/>peer has only metric &gt; 0 relay route"}
         S3C["Auto-punch trigger (every 10s/peer):<br/>send PunchRequest via relay<br/>carrying own NatInfo"]
         S3D["Receive peer's PunchRequest<br/>-> store in peer_nat<br/>-> try_execute_punch (reverse punch)"]
         S3A --> S3B
@@ -1128,7 +1128,7 @@ flowchart TD
     subgraph L1["Layer 1: Maintenance loop (protocol.rs:1478)"]
         direction TB
         L1A["1s interval tick"]
-        L1B{"now - last_punch_time < 10s?"}
+        L1B{"now - last_punch_time &lt; 10s?"}
         L1C["Skip"]
         L1D["Send PunchRequest + execute_punch"]
         L1A --> L1B
@@ -1138,7 +1138,7 @@ flowchart TD
 
     subgraph L2["Layer 2: PunchRequest handler (protocol.rs:1095)"]
         direction TB
-        L2A{"metric > 0? (relay arrival)"}
+        L2A{"metric &gt; 0? (relay arrival)"}
         L2B{"now - last &lt; 5s?"}
         L2C["Skip execute_punch (relay rate limited)"]
         L2D["No limit (direct arrival)<br/>best-hit opportunity"]
@@ -1156,9 +1156,9 @@ flowchart TD
 
     subgraph L3["Layer 3: Puncher backoff (punch/mod.rs:45 should_punch)"]
         direction TB
-        L3A{"batch_count <= 8?"}
+        L3A{"batch_count &lt;= 8?"}
         L3B["Punch immediately (no backoff)"]
-        L3C{"interval = (batch_count / 8).min(360)<br/>elapsed >= interval?"}
+        L3C{"interval = (batch_count / 8).min(360)<br/>elapsed &gt;= interval?"}
         L3D["Punch now<br/>batch_count += 1"]
         L3E["Skip this round"]
         L3A -->|"Yes"| L3B
