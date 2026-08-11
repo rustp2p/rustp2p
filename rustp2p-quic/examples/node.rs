@@ -169,8 +169,15 @@ async fn main() -> rustp2p_quic::Result<()> {
 /// The message preserves all spaces — only the first space separates the
 /// peer id from the payload.
 fn split_peer_and_payload(rest: &str) -> rustp2p_quic::Result<(&str, &str)> {
+    let rest = rest.trim_start();
     match rest.split_once(' ') {
-        Some((peer, payload)) if !peer.is_empty() && !payload.is_empty() => Ok((peer, payload)),
+        Some((peer, tail)) if !peer.is_empty() => {
+            let payload = tail.trim_start();
+            if payload.is_empty() {
+                return Err(invalid("usage: <peer_id> <message>"));
+            }
+            Ok((peer, payload))
+        }
         _ => Err(invalid("usage: <peer_id> <message>")),
     }
 }
@@ -306,6 +313,7 @@ async fn read_exact(recv: &mut ReliableRecvStream, mut out: &mut [u8]) -> io::Re
                     "stream closed",
                 ))
             }
+
             Some(n) => {
                 let tmp = out;
                 out = &mut tmp[n..];
@@ -313,4 +321,33 @@ async fn read_exact(recv: &mut ReliableRecvStream, mut out: &mut [u8]) -> io::Re
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::split_peer_and_payload;
+
+    #[test]
+    fn split_peer_and_payload_accepts_normal_spacing() {
+        let (peer, payload) = split_peer_and_payload("node-b hello").unwrap();
+        assert_eq!(peer, "node-b");
+        assert_eq!(payload, "hello");
+    }
+
+    #[test]
+    fn split_peer_and_payload_accepts_extra_spaces_after_command() {
+        let (peer, payload) = split_peer_and_payload("   node-b    hello world").unwrap();
+        assert_eq!(peer, "node-b");
+        assert_eq!(payload, "hello world");
+
+        let (peer, payload) = split_peer_and_payload("node-b    hello").unwrap();
+        assert_eq!(peer, "node-b");
+        assert_eq!(payload, "hello");
+    }
+
+    #[test]
+    fn split_peer_and_payload_rejects_missing_payload() {
+        assert!(split_peer_and_payload("node-b").is_err());
+        assert!(split_peer_and_payload("node-b   ").is_err());
+    }
 }

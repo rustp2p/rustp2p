@@ -27,7 +27,8 @@ flowchart TD
 
 The public API is based on `PeerId`. Real `SocketAddr` values are used only for
 binding, bootstrap entry points, and internal transport routes. Once a peer is
-discovered, user communication targets only the peer id.
+discovered, user communication targets the peer id; advanced route-pinned APIs
+also take a caller-selected `RouteKey`.
 
 ## Layers
 
@@ -61,7 +62,7 @@ The protocol layer keeps candidate state separately from confirmed routes:
 ### QUIC
 
 The QUIC layer owns quinn, TLS configuration, application datagrams, reliable
-streams, connection cache, and the synthetic address table. Quinn requires
+streams, connection caches, and the synthetic address table. Quinn requires
 `SocketAddr`, so `rustp2p-quic` assigns internal `127.255/16` synthetic
 addresses as local handles for remote `PeerId`s.
 
@@ -69,6 +70,11 @@ Synthetic addresses are never public routing addresses. When quinn sends a QUIC
 packet to a synthetic address, the adapter maps it back to `PeerId` and asks the
 protocol layer to wrap it as `QuicRelay`. The protocol and transport layers then
 choose the current confirmed route.
+
+By default, `send_to` / `open_bi` use one reusable connection per remote peer.
+`send_to_via` / `open_bi_via` create separate per-route connections keyed by
+`(PeerId, RouteKey)`, so all packets on that connection (handshake, datagram,
+stream, ACK) stay on the specified route.
 
 ## Data Flow
 
@@ -85,6 +91,16 @@ wrapped as `QuicRelay` overlay packets and sent through transport routes.
 header identifies source and destination peer ids, then user bytes flow directly
 on the QUIC stream. Relays forward encrypted QUIC packets only; they do not
 trigger `accept_bi`.
+
+### `send_to_via(peer_id, route_key, payload)` / `open_bi_via(peer_id, route_key)`
+
+These route-pinned APIs still use end-to-end QUIC encryption, but they skip
+route-table selection for each packet by binding the QUIC connection to a
+specific confirmed `RouteKey`. This allows callers to steer traffic over a
+chosen route when multiple routes exist.
+
+`try_send_to_via` is the non-blocking variant; it succeeds only after a matching
+per-route connection has been established.
 
 ### Bootstrap Discovery
 
@@ -174,9 +190,12 @@ their trust model.
 
 ## Public API Defaults
 
-- User communication APIs take `PeerId`, not `SocketAddr`.
+- User communication APIs use `PeerId`; route-pinned variants also require a
+  confirmed `RouteKey`.
 - `SocketAddr` is used for bind and bootstrap only.
 - `send_to` is unreliable but encrypted through QUIC DATAGRAM.
-- `open_bi` / `accept_bi` expose reliable end-to-end QUIC streams.
+- `send_to_via` / `open_bi_via` pin encrypted QUIC traffic to a selected route.
+- `open_bi` / `open_bi_via` plus `accept_bi` expose reliable end-to-end QUIC
+  streams.
 - `link_mode` and `link_info` report confirmed route snapshots; they may change
   as the route table changes.
