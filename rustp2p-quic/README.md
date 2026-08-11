@@ -1,5 +1,8 @@
 # rustp2p-quic
 
+[![Crates.io](https://img.shields.io/crates/v/rustp2p-quic.svg)](https://crates.io/crates/rustp2p-quic)
+[![Docs.rs](https://docs.rs/rustp2p-quic/badge.svg)](https://docs.rs/rustp2p-quic)
+
 `rustp2p-quic` is the PeerId-based QUIC layer for this workspace. It builds on
 `rustp2p-core` as the underlying transport.
 

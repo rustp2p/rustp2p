@@ -1,5 +1,8 @@
 # rustp2p-core
 
+[![Crates.io](https://img.shields.io/crates/v/rustp2p-core.svg)](https://crates.io/crates/rustp2p-core)
+[![Docs.rs](https://docs.rs/rustp2p-core/badge.svg)](https://docs.rs/rustp2p-core)
+
 `rustp2p-core` is the low-level transport crate in the `rustp2p` workspace. It
 provides UDP/TCP endpoint primitives, route table utilities, STUN helpers, NAT
 information types, and hole-punching primitives.
