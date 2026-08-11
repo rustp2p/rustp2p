@@ -15,6 +15,7 @@
 5. [Key Mechanisms in Detail](#5-key-mechanisms-in-detail)
 6. [Complete Example Scenario](#6-complete-example-scenario)
 7. [Direct Connection Health Check](#7-direct-connection-health-check)
+8. [Bootstrap Relay Punching Scenario and Backoff Analysis](#8-bootstrap-relay-punching-scenario-and-backoff-analysis)
 
 ---
 
@@ -45,18 +46,16 @@ flowchart TD
 
 **Characteristic**: The same internal socket (IP:Port) uses the **same mapped port** for **all external destinations**.
 
-```
-+----------------------------------------------+
-|              Cone NAT Mapping Table           |
-|                                              |
-|  Internal 10.0.0.5:51820 -> Public 203.0.113.10:40000
-|                                              |
-|  To STUN Server A  -> source port 40000      |
-|  To STUN Server B  -> source port 40000      |
-|  To Peer X         -> source port 40000      |
-|  To Peer Y         -> source port 40000      |
-|  (All destinations share the same mapped port)|
-+----------------------------------------------+
+```mermaid
+flowchart LR
+    subgraph INT["Internal"]
+        IS["10.0.0.5:51820"]
+    end
+    IS -->|"All destinations share<br/>the same mapped port"| NAT["NAT (Cone)<br/>203.0.113.10:40000"]
+    NAT -->|"source port 40000"| SA["STUN Server A"]
+    NAT -->|"source port 40000"| SB["STUN Server B"]
+    NAT -->|"source port 40000"| PX["Peer X"]
+    NAT -->|"source port 40000"| PY["Peer Y"]
 ```
 
 **Traversal advantage**: The mapped port is fixed and predictable. The peer only needs to know one public address to connect directly.
@@ -73,18 +72,16 @@ Cone NAT can be further classified into three subtypes (rustp2p does not differe
 
 **Characteristic**: The same internal socket assigns **different mapped ports** for **different external destinations**.
 
-```
-+--------------------------------------------------+
-|             Symmetric NAT Mapping Table           |
-|                                                  |
-|  Internal 10.0.0.5:51820                         |
-|    +-- To STUN Server A  -> source port 40001    |
-|    +-- To STUN Server B  -> source port 40005    |
-|    +-- To Peer X         -> source port 40012    |
-|    +-- To Peer Y         -> source port 40018    |
-|    (Each destination gets a different port,      |
-|     ports follow a sequential increment pattern)  |
-+--------------------------------------------------+
+```mermaid
+flowchart LR
+    subgraph INT["Internal"]
+        IS["10.0.0.5:51820"]
+    end
+    IS -->|"Each destination gets<br/>a different port (sequential)"| NAT["NAT (Symmetric)"]
+    NAT -->|"source port 40001"| SA["STUN Server A"]
+    NAT -->|"source port 40005"| SB["STUN Server B"]
+    NAT -->|"source port 40012"| PX["Peer X"]
+    NAT -->|"source port 40018"| PY["Peer Y"]
 ```
 
 **Traversal challenge**: The peer cannot predict which port the Symmetric NAT will assign for its connection. Port prediction ("guessing") is required.
@@ -118,29 +115,12 @@ flowchart TD
     C2 -->|Step 3: Direct connection!<br/>Both NAT mappings active| B2
 ```
 
-```
-              Public Internet
-    +----------------------------------+
-    |                                  |
-    |   NAT-C          NAT-B           |
-    |  (Cone)        (Symmetric)       |
-    |  203.0.113.10  198.51.100.20     |
-    +-----+--------------+-------------+
-          |              |
-     +----+----+   +----+----+
-     | node-c  |   | node-b  |
-     | 10.0.0.5|   | 10.1.0.5|
-     +---------+   +---------+
+As shown in the Mermaid diagram above, the simultaneous bidirectional flow works as follows:
 
-Step 1: node-c sends packets to node-b's public IP (port prediction)
-  -> node-c's NAT creates mapping: allow inbound from 198.51.100.20
-
-Step 2: node-b sends packets to node-c's public address (Cone port is fixed)
-  -> node-b's NAT assigns a new port for this destination
-  -> Packet arrives at node-c's NAT, source IP matches -> admitted!
-
-Step 3: Direct connection established between both peers
-```
+1. **Step 1**: node-c sends packets to node-b's public IP (port prediction) — node-c's NAT creates a mapping allowing inbound from 198.51.100.20
+2. **Step 2**: node-b sends packets to node-c's public address (Cone port is fixed) — node-b's Symmetric NAT assigns a new port for this destination
+3. **Step 3**: Packet arrives at node-c's NAT, source IP matches the existing mapping → admitted!
+4. **Result**: Direct connection established between both peers
 
 ### 2.2 Why Simultaneous Bidirectional Punching Is Required
 
@@ -179,41 +159,15 @@ flowchart TD
 
 ### 3.1 Cone <-> Cone (Easiest)
 
-```
-node-c (Cone, 203.0.113.10:40000)
-node-b (Cone, 198.51.100.20:50000)
-
-Both peers have fixed ports, just send directly to each other:
-  node-c -> 198.51.100.20:50000  (direct send)
-  node-b -> 203.0.113.10:40000   (direct send)
-
-Success rate: ~100%
-```
-
-### 3.2 Cone <-> Symmetric (Common Scenario)
-
-```
-node-c (Cone, 203.0.113.10:40000)        <- port is fixed
-node-b (Symmetric, 198.51.100.20:???)    <- port is NOT fixed
-
-Strategy:
-  node-c -> node-b: Port prediction (Phase 1 range prediction + Phase 2 global scan)
-  node-b -> node-c: Direct send to 203.0.113.10:40000 (Cone port is fixed)
-
-Success rate: Depends on port prediction hit rate, typically 60-90%
-```
-
-### 3.3 Symmetric <-> Symmetric (Hardest)
-
-```
-node-c (Symmetric, 203.0.113.10:???)
-node-b (Symmetric, 198.51.100.20:???)
-
-Both peers have non-fixed ports, mutual port prediction:
-  node-c -> node-b: Predict ports (based on known port range)
-  node-b -> node-c: Predict ports (based on known port range)
-
-Success rate: Lower, requires extensive port prediction and assistant sockets
+```mermaid
+flowchart LR
+    NC["node-c (Cone)<br/>203.0.113.10:40000"]
+    NB["node-b (Cone)<br/>198.51.100.20:50000"]
+    NC -->|"direct send<br/>(fixed port)"| NB
+    NB -->|"direct send<br/>(fixed port)"| NC
+    NC ~~~ NB
+    RATE1["Success rate: ~100%<br/>Both peers have fixed ports"]
+    NC --> RATE1
 ```
 
 ---
@@ -222,57 +176,60 @@ Success rate: Lower, requires extensive port prediction and assistant sockets
 
 ### 4.1 Overall Architecture
 
-```
-+-------------------------------------------------------------+
-|                     rustp2p Architecture                     |
-|                                                             |
-|  +-----------------------------------------------------+   |
-|  |              rustp2p-quic (Protocol Layer)           |   |
-|  |                                                     |   |
-|  |  ProtocolLayer                                      |   |
-|  |  +- PunchRequest/PunchReply handling                |   |
-|  |  +- NatObserve address discovery                    |   |
-|  |  +- Route confirmation (confirm_direct_and_promote) |   |
-|  |  +- Rate limiting (try_execute_punch)               |   |
-|  |  +- Maintenance loop (start_maintenance_loop)       |   |
-|  |  +- Heartbeat loop (start_heartbeat_loop)           |   |
-|  +---------------------------+-------------------------+   |
-|                              |                             |
-|  +---------------------------+-------------------------+   |
-|  |              rustp2p-core (Transport Layer)          |   |
-|  |                                                     |   |
-|  |  +----------+  +----------+  +------------------+  |   |
-|  |  |  STUN    |  | Puncher  |  |  Endpoint        |  |   |
-|  |  | NAT detect| | Punching |  |  SocketPool      |  |   |
-|  |  |          |  | executor |  |  (main+assistant) |  |   |
-|  |  +----------+  +----------+  +------------------+  |   |
-|  +-----------------------------------------------------+   |
-+-------------------------------------------------------------+
+```mermaid
+flowchart TD
+    subgraph QUIC["rustp2p-quic (Protocol Layer)"]
+        direction TB
+        PL["ProtocolLayer"]
+        PR["PunchRequest/PunchReply handling"]
+        NO["NatObserve address discovery"]
+        RC["Route confirmation<br/>(confirm_direct_and_promote)"]
+        RL["Rate limiting<br/>(try_execute_punch)"]
+        ML["Maintenance loop<br/>(start_maintenance_loop)"]
+        HB["Heartbeat loop<br/>(start_heartbeat_loop)"]
+        PL --> PR
+        PL --> NO
+        PL --> RC
+        PL --> RL
+        PL --> ML
+        PL --> HB
+    end
+
+    subgraph CORE["rustp2p-core (Transport Layer)"]
+        direction TB
+        STUN["STUN<br/>NAT detect"]
+        PCH["Puncher<br/>Punching executor"]
+        EP["Endpoint<br/>SocketPool<br/>(main + assistant)"]
+        STUN --> PCH --> EP
+    end
+
+    QUIC -->|"punch / NatObserve / route<br/>confirmation requests"| CORE
+    CORE -->|"NAT type + port_range"<br/>"NatInfo updates"| QUIC
 ```
 
 ### 4.2 Phase 1: NAT Type Detection
 
-```
-+---------------------------------------------------------+
-|                   STUN NAT Detection Flow                |
-|                                                         |
-|  stun_test_nat()                                        |
-|  +- Create temporary UDP socket (0.0.0.0:0)             |
-|  +- Send BindingRequest to STUN Server A                |
-|  |   -> Get mapped address 203.0.113.10:40001           |
-|  +- Send BindingRequest to STUN Server B                |
-|  |   -> Get mapped address 203.0.113.10:40005           |
-|  |                                                      |
-|  +- Decision:                                           |
-|  |   Same mapped address -> Cone NAT                    |
-|  |   Different mapped addresses -> Symmetric NAT        |
-|  |                                                      |
-|  +- port_range calculation: max_port - min_port = 4    |
-|  |                                                      |
-|  +- apply_stun_result_to_nat_info:                      |
-|      Only save nat_type and port_range                  |
-|      (temp socket port != main socket port, unusable)   |
-+---------------------------------------------------------+
+```mermaid
+flowchart TD
+    START["stun_test_nat()"]
+    SOCK["Create temporary UDP socket (0.0.0.0:0)"]
+    A["Send BindingRequest to STUN Server A<br/>-> Get mapped: 203.0.113.10:40001"]
+    B["Send BindingRequest to STUN Server B<br/>-> Get mapped: 203.0.113.10:40005"]
+    DEC{"Same mapped address?"}
+    CONE["Cone NAT"]
+    SYM["Symmetric NAT"]
+    PR["port_range = max_port - min_port = 4"]
+    SAVE["apply_stun_result_to_nat_info()<br/>Save nat_type + port_range only<br/>(temp socket port != main socket port, unusable)"]
+
+    START --> SOCK
+    SOCK --> A
+    A --> B
+    B --> DEC
+    DEC -->|"Yes"| CONE
+    DEC -->|"No"| SYM
+    CONE --> PR
+    SYM --> PR
+    PR --> SAVE
 ```
 
 > **Key Design**: STUN detection uses a temporary socket (`0.0.0.0:0`), whose mapped port
@@ -286,64 +243,61 @@ to let that node observe and report your actual source address as seen from the 
 Both node-b and node-c must each contact a public node independently — they cannot observe each other
 because no hole has been punched between them yet.
 
-```
-                          +-------------+
-                          |   node-a    |
-                          | (public,    |
-                          |  no NAT)    |
-                          +------+------+
-                                 |
-         +-----------------------+-----------------------+
-         |                                               |
-+--------+--------+  -- NatObserveRequest -->  (direct QUIC to node-a)
-|   node-b        |
-| (Symmetric NAT) |  <-- NatObserveReply ----  "Your public address is 198.51.100.20:40012"
-| 10.0.0.5:51820  |
-+-----------------+  apply_observation_to_nat_info:
-                       public_ips       = [198.51.100.20]
-                       public_udp_ports = [40012]    <- port observed for node-b -> node-a route
+```mermaid
+flowchart LR
+    subgraph A["node-a (Public relay)"]
+        A1["node-a<br/>203.0.113.1<br/>(no NAT)"]
+    end
 
-+--------+--------+  -- NatObserveRequest -->  (direct QUIC to node-a)
-|   node-c        |
-|  (Cone NAT)     |  <-- NatObserveReply ----  "Your public address is 203.0.113.10:40000"
-| 10.0.0.6:51820  |
-+-----------------+  apply_observation_to_nat_info:
-                       public_ips       = [203.0.113.10]
-                       public_udp_ports = [40000]
+    subgraph B["node-b (Symmetric NAT)"]
+        B1["node-b<br/>10.0.0.5:51820"]
+        B2["NAT-B (Symmetric)<br/>198.51.100.20"]
+        B1 --> B2
+    end
 
-Note: node-b's port 40012 is the mapping for the node-b -> node-a direction.
-      Under Symmetric NAT, sending to a different destination (node-c) will
-      produce a different mapped port — this is what Phase 1 range-prediction
-      is designed to compensate for.
+    subgraph C["node-c (Cone NAT)"]
+        C1["node-c<br/>10.0.0.6:51820"]
+        C2["NAT-C (Cone)<br/>203.0.113.10"]
+        C1 --> C2
+    end
+
+    B2 -->|"NatObserveRequest (direct QUIC)"| A1
+    A1 -.->|"NatObserveReply: 198.51.100.20:40012"| B2
+    C2 -->|"NatObserveRequest (direct QUIC)"| A1
+    A1 -.->|"NatObserveReply: 203.0.113.10:40000"| C2
+
+    A1 -.->|"public_udp_ports = [40012]"| B2
+    A1 -.->|"public_udp_ports = [40000]"| C2
 ```
+
+> **Note**: node-b's port 40012 is the mapping for the node-b → node-a direction.
+> Under Symmetric NAT, sending to a different destination (node-c) will produce a different
+> mapped port — this is what Phase 1 range-prediction is designed to compensate for.
 
 ### 4.4 Phase 3: Endpoint Configuration (Assistant Sockets)
 
 Dynamically adjust the socket pool based on NAT type:
 
-```
-apply_nat_model(NatType::Symmetric):
-  +--------------------------------------------+
-  |  Symmetric NAT -> Create Assistant Sockets |
-  |                                            |
-  |  Main Socket:     10.0.0.5:51820           |
-  |  Assistant Socket 1: 10.0.0.5:41322       |
-  |  Assistant Socket 2: 10.0.0.5:51901       |
-  |  ...                                       |
-  |                                            |
-  |  Each socket has a different mapped port   |
-  |  under Symmetric NAT, increasing the       |
-  |  probability of hitting the peer's NAT     |
-  +--------------------------------------------+
+```mermaid
+flowchart TD
+    DETECT{"NAT type detected"}
+    DETECT -->|"Symmetric"| SYM["apply_nat_model(Symmetric)<br/>Create Assistant Sockets"]
+    DETECT -->|"Cone"| CONE["apply_nat_model(Cone)<br/>Remove Assistant Sockets"]
 
-apply_nat_model(NatType::Cone):
-  +--------------------------------------------+
-  |  Cone NAT -> Remove Assistant Sockets      |
-  |                                            |
-  |  Keep only Main Socket: 10.0.0.5:51820     |
-  |  (Cone NAT port is fixed, no need for      |
-  |   multiple source ports)                   |
-  +--------------------------------------------+
+    subgraph SYM_POOL["Symmetric — Socket Pool"]
+        M0["Main Socket<br/>10.0.0.5:51820"]
+        A1["Assistant Socket 1<br/>10.0.0.5:41322"]
+        A2["Assistant Socket 2<br/>10.0.0.5:51901"]
+        M0 --> A1 --> A2
+    end
+    SYM --> SYM_POOL
+    SYM_POOL --> SYM_R["Each socket gets a different mapped port<br/>under Symmetric NAT → higher hit probability"]
+
+    subgraph CONE_POOL["Cone — Socket Pool"]
+        M1["Main Socket only<br/>10.0.0.5:51820"]
+    end
+    CONE --> CONE_POOL
+    CONE_POOL --> CONE_R["Cone NAT port is fixed<br/>no need for multiple source ports"]
 ```
 
 ### 4.5 Phase 4: Hole Punching Execution
@@ -391,40 +345,38 @@ flowchart TD
     R["Both phases use try_send_via_all (main + assistant sockets)"]
 ```
 
-```
-punch_udp() selects strategy based on peer's NAT type:
+```mermaid
+flowchart TD
+    ENTRY["punch_udp()<br/>Selects strategy based on peer's NAT type"]
 
-+-------------------------------------------------------------+
-|                    Common Pre-steps                          |
-|  1. Send to mapping_udp_addr (manual port mapping)          |
-|  2. Send to local_ipv4_addrs (same LAN)                     |
-+---------------------------+----------------------------------+
-                            |
-              +-------------+-------------+
-              v                           v
-+---------------------+   +---------------------------------+
-|   Peer is Cone NAT  |   |    Peer is Symmetric NAT         |
-|                     |   |                                 |
-|  Strategy: Direct   |   |  Phase 1: Range Prediction      |
-|  Send               |   |  (max 60 ports)                 |
-|                     |   |  +- predict_range =              |
-|  for addr in        |   |  |   max(port_range x 10, 100)  |
-|    public_addrs:    |   |  +- Generate [base +/- range]   |
-|    try_send_via_all |   |  |   candidates                  |
-|      (buf, addr)    |   |  +- Deduplicate + shuffle        |
-|                     |   |  +- Send first 60                |
-|  (Cone port fixed,  |   |                                 |
-|   just send direct) |   |  Phase 2: Global Random Scan     |
-|                     |   |  (1200-1500 ports/round)        |
-|                     |   |  +- Use pre-generated            |
-|                     |   |  |   shuffled_ports (1-65535)   |
-|                     |   |  +- port_cursor persistent       |
-|                     |   |  |   cursor, no repeat           |
-|                     |   |  +- 2ms interval per packet      |
-|                     |   |                                 |
-|                     |   |  Send method: try_send_via_all   |
-|                     |   |  (main + assistant sockets)      |
-+---------------------+   +---------------------------------+
+    subgraph COMMON["Common Pre-steps (always executed)"]
+        direction TB
+        CM1["1. Send to mapping_udp_addr<br/>(manual port mapping)"]
+        CM2["2. Send to local_ipv4_addrs<br/>(same LAN discovery)"]
+        CM1 --> CM2
+    end
+
+    DEC{"peer's NAT type?"}
+
+    subgraph CONE_B["Cone NAT branch — Strategy: Direct Send"]
+        direction TB
+        CB1["for addr in public_addrs:<br/>  try_send_via_all(buf, addr)"]
+        CB2["Cone port is fixed<br/>send directly to known public addr"]
+        CB1 --> CB2
+    end
+
+    subgraph SYM_B["Symmetric NAT branch — Two-phase Port Prediction"]
+        direction TB
+        SB1["Phase 1: Range Prediction<br/>max 60 ports/round<br/>predict_range = max(port_range x 10, 100)"]
+        SB2["Phase 2: Global Random Scan<br/>1200-1500 ports/round<br/>port_cursor persistent, no repeat<br/>2ms interval per packet"]
+        SB3["Send method: try_send_via_all<br/>(main + assistant sockets)"]
+        SB1 --> SB2 --> SB3
+    end
+
+    ENTRY --> COMMON
+    COMMON --> DEC
+    DEC -->|"Cone"| CONE_B
+    DEC -->|"Symmetric"| SYM_B
 ```
 
 #### 4.5.3 Symmetric NAT Port Prediction in Detail
@@ -464,36 +416,6 @@ flowchart TD
     CD["confirm_direct_and_promote()<br/>transport.confirm_peer_route(peer, route_key, metric=0)<br/>route_candidates.remove(peer_id)<br/>QUIC packets now prefer metric=0 direct route"]
     CD --> OK["Received metric=0 = direct connection OK<br/>No need to wait for Reply confirmation"]
 ```
-```
-+-------------------------------------------------------------+
-|                    Route Confirmation Flow                   |
-|                                                             |
-|  PunchRequest arrives (metric=0):                           |
-|  +-----------------------------------------------------+   |
-|  |  metric=0 means the packet arrived directly          |   |
-|  |  (not relayed)                                       |   |
-|  |  -> Received = bidirectional reachable = direct OK!  |   |
-|  |  -> Immediately confirm_direct_and_promote           |   |
-|  |     (no need to wait for Reply)                      |   |
-|  |  -> Store in route_candidates                        |   |
-|  |  -> try_execute_punch (reverse punch, help peer)     |   |
-|  |  -> Send PunchReply                                  |   |
-|  +-----------------------------------------------------+   |
-|                                                             |
-|  PunchReply arrives (metric=0, request_id matches):        |
-|  +-----------------------------------------------------+   |
-|  |  Remove request_id from pending_punch                |   |
-|  |  -> First time: confirm_direct_and_promote + log     |   |
-|  |  -> Already confirmed: debug log only (dedup)        |   |
-|  |  -> try_execute_punch (reverse punch)                |   |
-|  +-----------------------------------------------------+   |
-|                                                             |
-|  confirm_direct_and_promote:                                |
-|  -> transport.confirm_peer_route(peer, route_key, metric=0)|
-|  -> route_candidates.remove(peer_id)                        |
-|  -> Subsequent QUIC handshake packets prefer metric=0 route |
-+-------------------------------------------------------------+
-```
 
 #### Why Can PunchRequest (metric=0) Directly Confirm Direct Connection?
 
@@ -520,94 +442,34 @@ node-b sends PunchRequest -> node-c
 
 ### 5.1 Assistant Socket
 
-```
-Assistant sockets — bidirectional simultaneous punching
-(node-b: Symmetric NAT  |  node-c: Cone NAT)
+#### Assistant Socket — Bidirectional Simultaneous Punching
 
-Both sides exchange NatInfo via relay PunchRequest, then punch simultaneously.
+```mermaid
+flowchart LR
+    subgraph B["node-b (Symmetric NAT)"]
+        direction TB
+        BS0["Socket 0<br/>10.0.0.5:51820"]
+        BS1["Socket 1<br/>10.0.0.5:41322"]
+        BS2["Socket 2<br/>10.0.0.5:51901"]
+        BS0 --> NATB
+        BS1 --> NATB
+        BS2 --> NATB
+        NATB["NAT-B (Symmetric)<br/>198.51.100.20"]
+        NATB -->|"Socket 0 → :40012"| NA["NAT-A (Cone<br/>203.0.113.10:40000)"]
+        NATB -->|"Socket 1 → :40045"| NA
+        NATB -->|"Socket 2 → :40078"| NA
+    end
 
-  node-b side (peer is Cone → try_send_via_all to known address)
-  ──────────────────────────────────────────────────────────────
-  Socket 0 (10.0.0.5:51820) ─┐
-  Socket 1 (10.0.0.5:41322) ─┤──► NAT-B (Symmetric, 198.51.100.20)
-  Socket 2 (10.0.0.5:51901) ─┘       │
-                                       │  per-destination new mappings
-                                       │  Socket 0 → :40012 ──────────────────────────────┐
-                                       │  Socket 1 → :40045 ─────────────────────────── NAT-C (Cone)
-                                       │  Socket 2 → :40078 ──────────────────────────────┘
-                                       │                         ↑ admits packet only if node-c
-                                       │                           has already sent to that port
+    subgraph C["node-c (Cone NAT)"]
+        direction TB
+        CS0["Socket 0<br/>10.0.0.6:51820"]
+        CS0 --> NATC
+        NATC["NAT-C (Cone)<br/>203.0.113.10:40000"]
+        NATC -->|"Phase 1: ±100 around :40012<br/>(201 candidates, 60 sent)"| NATB
+        NATC -->|"Phase 2: 1200-1500 random"| NATB
+    end
 
-  node-c side (peer is Symmetric → punch_symmetric, many predicted ports)
-  ───────────────────────────────────────────────────────────────────────
-  Socket 0 (10.0.0.6:51820) ──► NAT-C (Cone, 203.0.113.10:40000)
-                                       │
-                Phase 1: sends to 198.51.100.20:{39899..40099}  (range ±100 around NatObserve port)
-                Phase 2: sends to 198.51.100.20:{random 1..65535}
-                                       │
-                Each outbound packet opens NAT-C to admit return traffic from that address.
-
-  Punch SUCCESS condition (both events must coincide):
-  ────────────────────────────────────────────────────
-  node-b sends via Socket N  →  NAT-B assigns :PORT_X for node-c destination
-  node-c has already sent to 198.51.100.20:PORT_X  →  NAT-C entry exists for PORT_X
-                                                    →  packet from 198.51.100.20:PORT_X is admitted
-                                                    →  node-c receives node-b's packet  ✓
-
-  Why 3 assistant sockets increase hit probability:
-  ─────────────────────────────────────────────────
-  Without assistants: 1 NAT-B mapping per round (PORT_X)  → must guess exactly PORT_X
-  With 3 sockets:     3 NAT-B mappings per round           → node-c needs to have sent to
-                      (:40012, :40045, :40078)               any one of the 3 to succeed
-                                                           → ~3x chance per punch round
-```
-
-```
-+---------------------------------------------------------------------+
-|                   Purpose of Assistant Sockets                      |
-|                                                                      |
-|  Only enabled under Symmetric NAT (node-b's side).                  |
-|                                                                      |
-|  Scenario: node-b (Symmetric) <---> node-c (Cone)                   |
-|                                                                      |
-|  Precondition — NatInfo exchange via relay (PunchRequest/Reply):     |
-|    node-b's NatInfo sent to node-c:                                  |
-|      nat_type = Symmetric                                            |
-|      public_ips = [198.51.100.20]                                    |
-|      public_udp_ports = [39999]  (NatObserve port, node-a route)    |
-|      public_port_range = 4  (from STUN)                             |
-|    node-c's NatInfo sent to node-b:                                  |
-|      nat_type = Cone                                                 |
-|      public_udp_ports = [40000]                                      |
-|                                                                      |
-|  Both sides punch simultaneously (no prior direct contact):          |
-|                                                                      |
-|  node-b (peer=Cone → Cone branch: try_send_via_all):                 |
-|    All 3 sockets send to node-c's known addr 203.0.113.10:40000     |
-|    NAT-B (Symmetric) creates 3 new per-destination mappings:         |
-|      Socket 0 → 198.51.100.20:40012  (for node-c destination)       |
-|      Socket 1 → 198.51.100.20:40045                                  |
-|      Socket 2 → 198.51.100.20:40078                                  |
-|    Packets reach NAT-C, but NAT-C is Port-Restricted Cone:           |
-|      Only admitted if node-c already sent to 198.51.100.20:PORT_X   |
-|                                                                      |
-|  node-c (peer=Symmetric → Symmetric branch: punch_symmetric):        |
-|    Phase 1 (predicted range, ≤60 ports):                             |
-|      predict_range = max(port_range×10, 100) = 100                  |
-|      sends to 198.51.100.20:{39999-100 .. 39999+100} (shuffled)     |
-|    Phase 2 (global random, 1200-1500 ports):                         |
-|      sends to 198.51.100.20:{random ports from 1..65535}            |
-|    Each send via try_send_via_all (node-c's main socket, Cone)       |
-|    Each outbound packet opens NAT-C to admit return from that addr   |
-|                                                                      |
-|  Punch succeeds when:                                                |
-|    node-b's NAT-B mapping port (40012, 40045, or 40078) happens to  |
-|    be one that node-c already sent to → NAT-C entry exists →         |
-|    node-c receives node-b's packet → direct route confirmed          |
-|                                                                      |
-|  3 sockets → 3 NAT-B mappings per round → ~3x hit probability       |
-|  compared to a single socket that produces only 1 mapping per round  |
-+---------------------------------------------------------------------+
+    NA -.->|"Punch succeeds when:<br/>node-b's:PORT_X matches<br/>node-c's target"| NATB
 ```
 
 ### 5.2 Direct Address Injection
@@ -633,38 +495,39 @@ Problem scenario:
 
 ### 5.3 Rate Limiting and Backoff
 
+```mermaid
+flowchart TD
+    subgraph PL["ProtocolLayer Rate Limiting (protocol.rs)"]
+        direction TB
+        DIRECT["try_execute_punch: already has direct route<br/>(has_direct_route) — Skip"]
+        RELAY["try_execute_punch: metric &gt; 0 (relay arrival) — 5 second limit"]
+        DIRECT_PUNCH["try_execute_punch: metric = 0 (direct arrival) — No limit<br/>(direct arrival is best hit opportunity)"]
+        AUTO["Auto-punch loop (start_maintenance_loop)<br/>— Max once per 10s per peer"]
+        DIRECT --> RELAY
+        DIRECT --> DIRECT_PUNCH
+        RELAY --> AUTO
+    end
+
+    subgraph PU["Puncher Backoff (punch/mod.rs: should_punch)"]
+        direction TB
+        FIRST["batch_count &lt;= 8<br/>Punch every time (no backoff)"]
+        BACK["batch_count &gt; 8<br/>Linear backoff:<br/>interval = (batch_count / 8).min(360)<br/>Punch only when batch_count % interval == 0"]
+        FIRST --> BACK
+    end
+
+    PL -->|"punch decision"| PU
+    PU -->|"should_punch = true"| EXEC["Puncher::punch_now<br/>(Phase 1 range prediction + Phase 2 global scan)"]
+    PU -->|"should_punch = false"| NOP["Skip — wait for next cycle"]
+    EXEC --> DONE["Punch packets sent (or throttled)"]
 ```
-Multi-layer rate limiting:
 
-ProtocolLayer:
-  +----------------------------------------------+
-  | try_execute_punch rate limit:                |
-  | +- Already has direct route -> skip          |
-  | |   (has_direct_route)                       |
-  | +- metric > 0 (relay arrival) -> 5s limit    |
-  | +- metric = 0 (direct arrival) -> no limit   |
-  |   (direct arrival is the best hit            |
-  |    opportunity, should not be limited)       |
-  +----------------------------------------------+
-
-  +----------------------------------------------+
-  | auto-punch loop rate limit:                  |
-  | +- Max once per 10s per peer                 |
-  +----------------------------------------------+
-
-Puncher:
-  +----------------------------------------------+
-  | need_punch backoff:                          |
-  | +- First 8 times: punch every time          |
-  | +- After 8 times: exponential backoff       |
-  |    interval = total_count / 8 (cap 360)     |
-  |    Only punch when total_count % interval == 0|
-  +----------------------------------------------+
-```
+> **Note on backoff type**: The backoff is **linear**, not exponential. The formula is
+> `interval = (batch_count / 8).min(360)`, capped at 360 seconds (6 minutes). The first 8
+> punches fire every cycle; thereafter the interval grows linearly with the punch count.
 
 ### 5.4 NatObserve Address vs Actual Punching Address
 
-```
+```text
 Address observed by node-b via node-a (relay):
   198.51.100.20:40012  (this is the mapped port for node-b -> node-a direction)
 
@@ -694,80 +557,98 @@ Network topology:
 
 #### Step 1: Initial Connection (via relay)
 
-```
-node-b ---- connect ----> node-a (relay) <---- connect ---- node-c
-         (QUIC via relay)                    (QUIC via relay)
+```mermaid
+flowchart LR
+    subgraph B["node-b (Symmetric NAT)"]
+        B1["node-b<br/>10.0.0.5:51820<br/>198.51.100.20"]
+    end
+    subgraph A["node-a (Public relay)"]
+        A1["node-a<br/>203.0.113.1<br/>(no NAT, relay)"]
+    end
+    subgraph C["node-c (Cone NAT)"]
+        C1["node-c<br/>10.0.0.6:51820<br/>203.0.113.10"]
+    end
 
-node-c observes node-b's source address via NatObserve: 198.51.100.20:40012
-node-b observes node-c's source address via NatObserve: 203.0.113.10:40000
+    B1 -->|"connect (QUIC via relay)"| A1
+    C1 -->|"connect (QUIC via relay)"| A1
+    A1 -.->|"NatObserve: 198.51.100.20:40012"| C1
+    A1 -.->|"NatObserve: 203.0.113.10:40000"| B1
 ```
+
+> **NatObserve exchange**: node-c observes node-b's source as `198.51.100.20:40012`; node-b observes node-c's source as `203.0.113.10:40000`. These are direction-specific mappings through the relay.
 
 #### Step 2: Auto-Punch Trigger
 
-```
-node-c's maintenance_loop detects:
-  - peer node-b has no direct route (has_direct_route = false)
-  - Has node-b's NatInfo: { ips: [198.51.100.20], ports: [40012], type: Symmetric, port_range: 4 }
-
--> Trigger execute_punch(node-b, nat_info)
--> Build PunchRequest, call Puncher::punch_now
+```mermaid
+flowchart TD
+    ML["node-c maintenance_loop (every 10s/peer)<br/>Detects: peer node-b has no direct route<br/>has_direct_route = false"]
+    NAT["node-c has node-b's NatInfo:<br/>ips: [198.51.100.20]<br/>ports: [40012]<br/>type: Symmetric<br/>port_range: 4"]
+    ML --> NAT
+    NAT --> EXEC["Trigger execute_punch(node-b, nat_info)<br/>Build PunchRequest, call Puncher::punch_now"]
 ```
 
 #### Step 3: node-c Executes Punching (sends to node-b)
 
-```
-node-c's Puncher executes punch_udp:
+```mermaid
+flowchart TD
+    START["node-c Puncher: punch_udp<br/>Peer is Symmetric NAT → Two-phase strategy"]
 
-  Peer is Symmetric NAT -> Two-phase strategy
+    subgraph P1["Phase 1: Range Prediction (max 60 ports)"]
+        P1A["predict_range = max(4 × 10, 100) = 100<br/>Candidate range: [39912, 40112]"]
+        P1B["201 candidates → deduplicate + shuffle<br/>Take first 60"]
+        P1C["Send via main socket to 198.51.100.20:candidate_port<br/>Each packet through Cone NAT creates:<br/>'Allow inbound from 198.51.100.20'"]
+        P1A --> P1B
+        P1B --> P1C
+    end
 
-  Phase 1 (Range Prediction, max 60 ports):
-    predict_range = max(4 x 10, 100) = 100
-    Candidate range: [40012-100, 40012+100] = [39912, 40112]
-    -> 201 candidates, deduplicate + shuffle, take first 60
-    -> Send via main socket to 198.51.100.20:candidate_port
+    subgraph P2["Phase 2: Global Random Scan (1200-1500 ports)"]
+        P2A["Take ~1350 random ports from shuffled_ports cursor"]
+        P2B["Send via main socket to 198.51.100.20:random_port"]
+        P2A --> P2B
+    end
 
-    * Each outbound packet passes through node-c's Cone NAT
-    * Cone NAT records: "Allow inbound traffic from 198.51.100.20"
-
-  Phase 2 (Global Random Scan, 1200-1500 ports):
-    Take 1350 random ports from shuffled_ports cursor position
-    -> Send via main socket to 198.51.100.20:random_port
+    START --> P1
+    P1 --> P2
 ```
 
 #### Step 4: node-b Executes Punching (sends to node-c)
 
-```
-node-b receives node-c's PunchRequest via relay (metric > 0)
--> try_execute_punch triggers reverse punch
--> Rate limit check: not punched in last 5s -> allowed
+```mermaid
+flowchart TD
+    RECV["node-b receives node-c's PunchRequest via relay<br/>(metric > 0)"]
+    RATE["try_execute_punch triggers reverse punch<br/>Rate limit check: not punched in last 5s → allowed"]
+    CONE["Peer is Cone NAT → Direct send strategy"]
+    SEND1["Main socket: 198.51.100.20:40035 → 203.0.113.10:40000"]
+    SEND2["Assistant socket 1: 198.51.100.20:40058 → 203.0.113.10:40000"]
+    SEND3["Assistant socket 2: 198.51.100.20:40081 → 203.0.113.10:40000"]
 
-  Peer is Cone NAT -> Direct send strategy
-
-  for addr in node-c's public addresses:
-    try_send_via_all(PunchRequest, 203.0.113.10:40000)
-    -> Main socket send:     198.51.100.20:40035 -> 203.0.113.10:40000
-    -> Assistant socket 1:   198.51.100.20:40058 -> 203.0.113.10:40000
-    -> Assistant socket 2:   198.51.100.20:40081 -> 203.0.113.10:40000
+    RECV --> RATE
+    RATE --> CONE
+    CONE --> SEND1
+    CONE --> SEND2
+    CONE --> SEND3
 ```
 
 #### Step 5: Direct Connection Success
 
-```
-Case A: node-b's packet arrives at node-c first (Cone NAT admits it)
-  -> node-c receives PunchRequest, metric=0
-  -> Confirm direct! confirm_direct_and_promote
-  -> Send PunchReply (via direct route)
+```mermaid
+flowchart TD
+    subgraph CA["Case A: node-b's packet arrives at node-c first"]
+        CA1["node-c receives PunchRequest (metric=0)<br/>Cone NAT admits it"]
+        CA2["Confirm direct! confirm_direct_and_promote<br/>Send PunchReply (via direct route)"]
+        CA1 --> CA2
+    end
 
-Case B: node-c's prediction packet hits one of node-b's sockets first
-  -> node-b receives PunchRequest, metric=0
-  -> Confirm direct! confirm_direct_and_promote
-  -> Send PunchReply (via direct route)
+    subgraph CB["Case B: node-c's prediction packet hits node-b's socket first"]
+        CB1["node-b receives PunchRequest (metric=0)"]
+        CB2["Confirm direct! confirm_direct_and_promote<br/>Send PunchReply (via direct route)"]
+        CB1 --> CB2
+    end
 
-Both cases result in:
-  node-c route table: node-b -> direct (metric=0, via 198.51.100.20:40035)
-  node-b route table: node-c -> direct (metric=0, via 203.0.113.10:40000)
-  -> QUIC handshake packets prefer direct route
-  -> Direct QUIC connection established!
+    RESULT["Both cases result in:<br/>node-c route table: node-b → direct (metric=0, via 198.51.100.20:40035)<br/>node-b route table: node-c → direct (metric=0, via 203.0.113.10:40000)<br/>QUIC handshake packets prefer direct route<br/>Direct QUIC connection established!"]
+
+    CA2 --> RESULT
+    CB2 --> RESULT
 ```
 
 ---
@@ -875,33 +756,32 @@ What `cleanup_connection` actually does:
 Route eviction is handled by `IdleRouteManager` in `rustp2p-core`, which monitors read-idle
 timeouts independently of QUIC connection state:
 
-```
-IdleRouteManager
-  +- read_idle: Duration               (configured idle threshold)
-  +- route_table: RouteTable<PeerID>   (shared with TransportLayer)
+```mermaid
+flowchart TD
+    subgraph IRM["IdleRouteManager (rustp2p-core/src/idle.rs)"]
+        direction TB
+        RI["read_idle: Duration<br/>(configured idle threshold)"]
+        RT["route_table: RouteTable&lt;PeerID&gt;<br/>(shared with TransportLayer)"]
+        NI["next_idle() —&gt; (PeerID, Route, Instant)<br/>Returns the next route whose last-read time exceeds read_idle<br/>Called by the maintenance loop to detect stale routes"]
+        DL["delay(peer_id, route_key) —&gt; bool<br/>Pushes the route's read deadline forward (resets idle timer)<br/>Called when any traffic arrives on this route"]
+        RM["remove_route(peer_id, route_key)<br/>Evicts a single stale route from the route table<br/>This is what triggers re-punching"]
+        RI --> NI
+        RI --> DL
+        RI --> RM
+    end
 
-  next_idle() -> (PeerID, Route, Instant)
-    +- Returns the next route whose last-read time exceeds read_idle
-    +- Called by the maintenance loop to detect stale routes
+    IDLE["IdleRouteManager detects route with no read activity<br/>for &gt; read_idle (via next_idle)"]
+    IDLE --> RM
 
-  delay(peer_id, route_key) -> bool
-    +- Pushes the route's read deadline forward (resets idle timer)
-    +- Called when any traffic arrives on this route
-
-  remove_route(peer_id, route_key)
-    +- Evicts a single stale route from the route table
-    +- This is what triggers re-punching
-```
-
-The flow from idle detection to re-punching:
-
-```
-1. IdleRouteManager detects route with no read activity for > read_idle
-2. -> remove_route(peer_id, route_key) evicts the stale route
-3. -> If it was the last direct route: has_direct_route(peer_id) = false
-4. -> Maintenance loop detects the gap on next cycle (every 10s)
-5. -> Auto-punch triggered (subject to rate limiting)
-6. -> Relay routes preserved as fallback throughout
+    CHECK{"Was it the last direct route?"}
+    RM --> CHECK
+    CHECK -->|"Yes"| GD["has_direct_route(peer_id) = false"]
+    CHECK -->|"No"| PRES["Relay/other routes preserved as fallback"]
+    GD --> MAINT["Maintenance loop detects gap (next 10s cycle)"]
+    MAINT --> RATE{"Rate limit check<br/>(should_punch / try_execute_punch)"}
+    RATE -->|"Allowed"| PUNCH["Auto-punch triggered<br/>(execute_punch → Puncher::punch_now)"]
+    RATE -->|"Limited"| SKIP["Skipped — waiting for next cycle"]
+    PRES --> MAINT
 ```
 
 #### 7.4.3 Heartbeat Keeps Active Routes Alive
@@ -950,21 +830,24 @@ default selection.
 
 The mechanism is built on **synthetic address binding**:
 
-```
-1. Application calls endpoint.open_bi_via(peer_id, route_key)
-2. -> QuicEndpoint::connection_to_via(peer_id, route_key)
-3. -> register_virtual_peer_via(peer_id, route_key)
-     Allocates a synthetic SocketAddr (e.g. 127.0.0.1:XXXX)
-     Creates VirtualPeer { peer_id, route_key: Some(route_key) }
-     Stores in via_virtual_addrs[(peer_id, route_key)]
-4. -> Quinn Endpoint connects to the synthetic address
-5. -> All QUIC packets (handshake, stream data, datagrams, ACKs)
-     go through QuicPeerSocket::try_send
-6. -> try_send looks up VirtualPeer by destination address
-7. -> If route_key is Some -> try_send_quic_payload_via()
-     Wraps payload as QuicRelay Packet
-     Calls transport.try_send_wire_to_route(route_key)
-     -> Sends directly on the specified UDP/TCP path
+```mermaid
+flowchart TD
+    APP["Application calls<br/>endpoint.open_bi_via(peer_id, route_key)"]
+    CONN["QuicEndpoint::connection_to_via(peer_id, route_key)"]
+    REG["register_virtual_peer_via(peer_id, route_key)<br/>— Allocates synthetic SocketAddr (e.g. 127.0.0.1:XXXX)<br/>— Creates VirtualPeer { peer_id, route_key: Some(route_key) }<br/>— Stores in via_virtual_addrs[(peer_id, route_key)]"]
+    QUINN["Quinn Endpoint connects to the synthetic address<br/>All QUIC packets (handshake, stream data, datagrams, ACKs)<br/>go through QuicPeerSocket::try_send"]
+    LOOKUP["try_send looks up VirtualPeer by destination address"]
+    CHECK{"route_key is Some?"}
+    VIA2["try_send_quic_payload_via()<br/>Wraps payload as QuicRelay Packet<br/>Calls transport.try_send_wire_to_route(route_key)<br/>Sends directly on the specified UDP/TCP path"]
+    DEFAULT2["try_send_quic_payload()<br/>Route table lookup (default path)"]
+
+    APP --> CONN
+    CONN --> REG
+    REG --> QUINN
+    QUINN --> LOOKUP
+    LOOKUP --> CHECK
+    CHECK -->|"Yes — via connection"| VIA2
+    CHECK -->|"No — default connection"| DEFAULT2
 ```
 
 #### Key Data Structures
@@ -1107,6 +990,241 @@ let chosen = routes.iter()
         Some(r.route_key())
     });
 ```
+
+## 8. Bootstrap Relay Punching Scenario and Backoff Analysis
+
+> This section answers: **when both node-b and node-c are bootstrapped via the
+> public relay node-a, how does the punching flow proceed, and does the system
+> apply exponential backoff on repeated failure?**
+
+### 8.1 Scenario Topology
+
+Both node-b (Symmetric NAT) and node-c (Cone NAT) join the network by
+bootstrapping through node-a (public server, no NAT). At startup they only have
+a **relay route** (metric > 0) to each other through node-a — there is no direct
+route yet. The goal is to create a direct (metric = 0) route via hole punching.
+
+```mermaid
+flowchart LR
+    subgraph PUB["Public Internet"]
+        NA["node-a (Public relay / bootstrap)<br/>203.0.113.1<br/>no NAT — directly reachable"]
+    end
+
+    subgraph NBN["node-b network (Symmetric NAT)"]
+        direction TB
+        NBI["node-b<br/>10.0.0.5:51820"]
+        NBNAT["NAT-B (Symmetric)<br/>198.51.100.20<br/>port varies by destination"]
+        NBI --> NBNAT
+    end
+
+    subgraph NCN["node-c network (Cone NAT)"]
+        direction TB
+        NCI["node-c<br/>10.0.0.6:51820"]
+        NCNAT["NAT-C (Cone)<br/>203.0.113.10:40000<br/>port fixed for all destinations"]
+        NCI --> NCNAT
+    end
+
+    NBNAT -- "bootstrap (--relay node-a)<br/>relay route, metric > 0" --> NA
+    NCNAT -- "bootstrap (--relay node-a)<br/>relay route, metric > 0" --> NA
+
+    NBNAT -.->|"target: direct route metric = 0"| NCNAT
+```
+
+Key points:
+- node-a relays QUIC packets between node-b and node-c, but relayed delivery
+  costs bandwidth and latency. Both peers aim to upgrade to a direct route.
+- Bootstrap gives each peer the other's `PeerInfo`, but the **direct** path is not
+  yet validated.
+
+### 8.2 Five-Stage Punching Flow
+
+```mermaid
+flowchart TD
+    subgraph S1["Stage 1: Bootstrap relay connection"]
+        direction TB
+        S1A["node-b starts with --relay node-a<br/>establishes QUIC connection to node-a"]
+        S1B["node-c starts with --relay node-a<br/>establishes QUIC connection to node-a"]
+        S1C["Result: both have relay routes to each other<br/>via node-a (metric > 0)"]
+        S1A --> S1C
+        S1B --> S1C
+    end
+
+    subgraph S2["Stage 2: Public address discovery (NatObserve)"]
+        direction TB
+        S2A["node-b sends NatObserveRequest to node-a"]
+        S2B["node-c sends NatObserveRequest to node-a"]
+        S2C["node-a observes source addresses:<br/>node-b -> 198.51.100.20:40012<br/>node-c -> 203.0.113.10:40000"]
+        S2D["node-a replies NatObserveReply:<br/>node-b learns public_ips=[198.51.100.20], ports=[40012]<br/>node-c learns public_ips=[203.0.113.10], ports=[40000]"]
+        S2A --> S2C
+        S2B --> S2C
+        S2C --> S2D
+    end
+
+    subgraph S3["Stage 3: Peer discovery + PunchRequest exchange"]
+        direction TB
+        S3A["Maintenance loop (1s tick) + QueryRoutes<br/>both learn the other peer exists"]
+        S3B{"has_direct_route?<br/>peer has only metric > 0 relay route"}
+        S3C["Auto-punch trigger (every 10s/peer):<br/>send PunchRequest via relay<br/>carrying own NatInfo"]
+        S3D["Receive peer's PunchRequest<br/>-> store in peer_nat<br/>-> try_execute_punch (reverse punch)"]
+        S3A --> S3B
+        S3B -->|"No"| S3C
+        S3C --> S3D
+    end
+
+    subgraph S4["Stage 4: Bidirectional hole punching"]
+        direction TB
+        S4A["node-b (Symmetric) punches node-c:<br/>Phase 1 range prediction<br/>+ Phase 2 global random scan"]
+        S4B["node-c (Cone) punches node-b:<br/>direct send to 198.51.100.20:40012"]
+        S4C["Both send simultaneously via<br/>try_send_via_all (main + assistant sockets)"]
+        S4A --> S4C
+        S4B --> S4C
+    end
+
+    subgraph S5["Stage 5: Hit -> confirm -> promote"]
+        direction TB
+        S5A["A punch reaches peer's open mapping<br/>PunchRequest/PunchReply arrives metric = 0"]
+        S5B["confirm_direct_and_promote()<br/>confirm_peer_route(peer, route_key, metric=0)"]
+        S5C["Route table updated:<br/>both directions direct (metric = 0)"]
+        S5D["QUIC handshake prefers direct route<br/>direct P2P connection established"]
+        S5A --> S5B --> S5C --> S5D
+    end
+
+    S1 --> S2 --> S3 --> S4 --> S5
+```
+
+Narrative:
+- **Stage 1**: Both nodes create a relay QUIC path through node-a. The path is
+  usable but requires node-a to forward every packet.
+- **Stage 2**: Each node independently asks node-a to observe its own public
+  address. Note the port learned (`40012`) is the mapping for the
+  *node-b -> node-a* direction; punching node-c will use a different port
+  (Symmetric NAT assigns different ports per destination).
+- **Stage 3**: The 1s maintenance loop (plus `QueryRoutes`) lets both peers learn
+  of each other. Even without NatInfo yet, a PunchRequest is sent via relay
+  carrying the sender's own NatInfo — breaking the chicken-and-egg problem by
+  giving the peer its observations anyway.
+- **Stage 4**: On receiving the peer's PunchRequest, `try_execute_punch` triggers
+  the reverse punch. node-b uses the Symmetric two-phase strategy, node-c uses
+  the Cone direct-send strategy. Both fire simultaneously.
+- **Stage 5**: Whichever packet hits first arrives with `metric == 0`, triggering
+  `confirm_direct_and_promote`. Routes are upgraded to direct and QUIC traffic
+  now prefers the direct path.
+
+### 8.3 Backoff and Rate Limiting
+
+**Direct answer to the user's question: punching uses a LINEAR backoff, not an
+exponential backoff.**
+
+Backoff is implemented in the `Puncher` layer via `should_punch()`
+(`rustp2p-core/src/punch/mod.rs`). The interval is
+`(batch_count / 8).min(360)` seconds — it grows one second every 8 executed
+punches, capped at 360 s (6 min). The first 8 punches are executed every time
+with no delay.
+
+Two additional rate limits sit above it in the protocol layer.
+
+```mermaid
+flowchart TD
+    subgraph L1["Layer 1: Maintenance loop (protocol.rs:1478)"]
+        direction TB
+        L1A["1s interval tick"]
+        L1B{"now - last_punch_time < 10s?"}
+        L1C["Skip"]
+        L1D["Send PunchRequest + execute_punch"]
+        L1A --> L1B
+        L1B -->|"Yes"| L1C
+        L1B -->|"No"| L1D
+    end
+
+    subgraph L2["Layer 2: PunchRequest handler (protocol.rs:1095)"]
+        direction TB
+        L2A{"metric > 0? (relay arrival)"}
+        L2B{"now - last &lt; 5s?"}
+        L2C["Skip execute_punch (relay rate limited)"]
+        L2D["No limit (direct arrival)<br/>best-hit opportunity"]
+        L2E{"has_direct_route?"}
+        L2F["Skip entirely"]
+        L2G["Proceed to Puncher::punch_now"]
+        L2A -->|"Yes"| L2B
+        L2B -->|"Yes"| L2C
+        L2B -->|"No"| L2E
+        L2A -->|"No (metric=0)"| L2D
+        L2D --> L2E
+        L2E -->|"Yes"| L2F
+        L2E -->|"No"| L2G
+    end
+
+    subgraph L3["Layer 3: Puncher backoff (punch/mod.rs:45 should_punch)"]
+        direction TB
+        L3A{"batch_count <= 8?"}
+        L3B["Punch immediately (no backoff)"]
+        L3C{"interval = (batch_count / 8).min(360)<br/>elapsed >= interval?"}
+        L3D["Punch now<br/>batch_count += 1"]
+        L3E["Skip this round"]
+        L3A -->|"Yes"| L3B
+        L3A -->|"No"| L3C
+        L3B --> L3D
+        L3C -->|"Yes"| L3D
+        L3C -->|"No"| L3E
+    end
+
+    L1D --> L2A
+    L2G --> L3A
+```
+
+**Backoff value table** (from `should_punch()`):
+
+| batch_count | interval (s) | meaning |
+|-------------|--------------|---------|
+| 1-8 | 0 (every time) | no backoff yet |
+| 9-16 | 1 | punch about once/second |
+| 17-24 | 2 | - |
+| 32 | 4 | - |
+| 64 | 8 | - |
+| 128 | 16 | - |
+| 256 | 32 | - |
+| 512 | 64 | - |
+| 1024 | 128 | - |
+| 2048 | 256 | - |
+| 2880+ | 360 (cap) | punch about once per 6 minutes |
+
+Notes:
+- `batch_count` increments inside `punch_now()` after each executed batch.
+- The growth is **linear** (`batch_count / 8`), not exponential (`2^n`).
+- The 360 s cap means even after prolonged failure the system still retries
+  roughly every 6 minutes — it never fully gives up.
+- Relay-arrived PunchRequests carry an extra 5 s limit (Layer 2); direct arrivals
+  (`metric == 0`) bypass it because they are the best-hit opportunity.
+
+### 8.4 Combined Effect of the Three Layers
+
+| scenario | Layer 1 (loop) | Layer 2 (relay limit) | Layer 3 (backoff) | net effect |
+|----------|---------------|----------------------|-------------------|-----------|
+| first punches (batch<=8) | every 10s | 5s (no effect) | no delay | ~every 10s |
+| mid-phase (batch=32) | every 10s | 5s | 4s (satisfied) | ~every 10s (Layer 1 is bottleneck) |
+| late (batch=256) | every 10s | 5s | 32s | effectively ~every 32s (Layer 3 dominates) |
+| direct arrival (metric=0) | - | unlimited | still subject to Layer 3 | best-hit path, skips Layer 2 |
+| already connected | skip (metric=0) | has_direct_route skip | - | punching stops entirely |
+
+Summary: Layers 1 and 2 throttle *trigger frequency*; Layer 3 throttles
+*execution frequency*. For the first 8 punches the 10 s loop interval is the
+bottleneck; later, the growing L3 interval dominates. The layering prevents
+punching storms while never fully abandoning the attempt.
+
+### 8.5 Behavior on Repeated Failure
+
+1. **Flow**: bootstrap via node-a -> NatObserve public addresses -> maintenance
+   loop discovers the peer and exchanges NatInfo -> simultaneous bidirectional
+   punching (node-b Symmetric two-phase; node-c Cone direct) -> on hit the route
+   is upgraded to metric = 0 direct.
+2. **Backoff**: **not exponential**, but **linear**. The first 8 punches happen
+   every ~10 s (driven by the maintenance loop); afterwards `should_punch()`
+   grows the interval by `batch_count / 8`, capped at 360 s. Even after lengthy
+   failure the system keeps retrying every 6 minutes instead of stopping.
+3. **Recovery**: if the direct route is later evicted by `IdleRouteManager` (its
+   mapping expires), the next 10 s maintenance cycle re-detects
+   `has_direct_route == false` and automatically re-triggers the punching flow;
+   `batch_count` keeps accumulating across cycles.
 
 ---
 
