@@ -204,7 +204,7 @@ flowchart TD
     end
 
     QUIC -->|"punch / NatObserve / route<br/>confirmation requests"| CORE
-    CORE -->|"NAT type + port_range"<br/>"NatInfo updates"| QUIC
+    CORE -->|"NAT type + port_range<br/>NatInfo updates"| QUIC
 ```
 
 ### 4.2 Phase 1: NAT Type Detection
@@ -1024,8 +1024,8 @@ flowchart LR
         NCI --> NCNAT
     end
 
-    NBNAT -- "bootstrap (--relay node-a)<br/>relay route, metric > 0" --> NA
-    NCNAT -- "bootstrap (--relay node-a)<br/>relay route, metric > 0" --> NA
+    NBNAT -->|"bootstrap (--relay node-a)<br/>relay route, metric > 0"| NA
+    NCNAT -->|"bootstrap (--relay node-a)<br/>relay route, metric > 0"| NA
 
     NBNAT -.->|"target: direct route metric = 0"| NCNAT
 ```
