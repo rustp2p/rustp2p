@@ -1,5 +1,8 @@
 # rustp2p
 
+[![Crates.io: rustp2p-quic](https://img.shields.io/crates/v/rustp2p-quic.svg)](https://crates.io/crates/rustp2p-quic)
+[![Crates.io: rustp2p-core](https://img.shields.io/crates/v/rustp2p-core.svg)](https://crates.io/crates/rustp2p-core)
+
 `rustp2p` is a Rust workspace for peer-to-peer networking. It currently contains
 two crates:
 
