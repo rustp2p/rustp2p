@@ -204,7 +204,7 @@ flowchart TD
     end
 
     QUIC -->|"punch / NatObserve / route<br/>confirmation requests"| CORE
-    CORE -->|"NAT type + port_range"<br/>"NatInfo updates"| QUIC
+    CORE -->|"NAT type + port_range<br/>NatInfo updates"| QUIC
 ```
 
 ### 4.2 Phase 1: NAT Type Detection
@@ -499,10 +499,10 @@ Problem scenario:
 flowchart TD
     subgraph PL["ProtocolLayer Rate Limiting (protocol.rs)"]
         direction TB
-        DIRECT["try_execute_punch: already has direct route<br/>(has_direct_route) — Skip"]
-        RELAY["try_execute_punch: metric &gt; 0 (relay arrival) — 5 second limit"]
-        DIRECT_PUNCH["try_execute_punch: metric = 0 (direct arrival) — No limit<br/>(direct arrival is best hit opportunity)"]
-        AUTO["Auto-punch loop (start_maintenance_loop)<br/>— Max once per 10s per peer"]
+        DIRECT["try_execute_punch: already has direct route<br/>(has_direct_route) - skip"]
+        RELAY["try_execute_punch: relay arrival (metric above 0) - 5 second limit"]
+        DIRECT_PUNCH["try_execute_punch: direct arrival (metric 0) - no limit<br/>(direct arrival is best hit opportunity)"]
+        AUTO["Auto-punch loop (start_maintenance_loop)<br/>- max once per 10s per peer"]
         DIRECT --> RELAY
         DIRECT --> DIRECT_PUNCH
         RELAY --> AUTO
@@ -510,14 +510,14 @@ flowchart TD
 
     subgraph PU["Puncher Backoff (punch/mod.rs: should_punch)"]
         direction TB
-        FIRST["batch_count &lt;= 8<br/>Punch every time (no backoff)"]
-        BACK["batch_count &gt; 8<br/>Linear backoff:<br/>interval = (batch_count / 8).min(360)<br/>Punch only when batch_count % interval == 0"]
+        FIRST["batch_count at most 8<br/>Punch every time (no backoff)"]
+        BACK["batch_count above 8<br/>Linear backoff:<br/>interval = min(batch_count / 8, 360)<br/>Punch only when batch_count modulo interval equals zero"]
         FIRST --> BACK
     end
 
     PL -->|"punch decision"| PU
-    PU -->|"should_punch = true"| EXEC["Puncher::punch_now<br/>(Phase 1 range prediction + Phase 2 global scan)"]
-    PU -->|"should_punch = false"| NOP["Skip — wait for next cycle"]
+    PU -->|"should_punch = true"| EXEC["Puncher.punch_now<br/>(Phase 1 range prediction + Phase 2 global scan)"]
+    PU -->|"should_punch = false"| NOP["Skip - wait for next cycle"]
     EXEC --> DONE["Punch packets sent (or throttled)"]
 ```
 
@@ -582,21 +582,21 @@ flowchart LR
 ```mermaid
 flowchart TD
     ML["node-c maintenance_loop (every 10s/peer)<br/>Detects: peer node-b has no direct route<br/>has_direct_route = false"]
-    NAT["node-c has node-b's NatInfo:<br/>ips: [198.51.100.20]<br/>ports: [40012]<br/>type: Symmetric<br/>port_range: 4"]
+    NAT["node-c has node-b's NatInfo:<br/>ips: &#91;198.51.100.20&#93;<br/>ports: &#91;40012&#93;<br/>type: Symmetric<br/>port_range: 4"]
     ML --> NAT
-    NAT --> EXEC["Trigger execute_punch(node-b, nat_info)<br/>Build PunchRequest, call Puncher::punch_now"]
+    NAT --> EXEC["Trigger execute_punch(node-b, nat_info)<br/>Build PunchRequest, call Puncher.punch_now"]
 ```
 
 #### Step 3: node-c Executes Punching (sends to node-b)
 
 ```mermaid
 flowchart TD
-    START["node-c Puncher: punch_udp<br/>Peer is Symmetric NAT → Two-phase strategy"]
+    START["node-c Puncher: punch_udp<br/>Peer is Symmetric NAT, use two-phase strategy"]
 
     subgraph P1["Phase 1: Range Prediction (max 60 ports)"]
-        P1A["predict_range = max(4 × 10, 100) = 100<br/>Candidate range: [39912, 40112]"]
-        P1B["201 candidates → deduplicate + shuffle<br/>Take first 60"]
-        P1C["Send via main socket to 198.51.100.20:candidate_port<br/>Each packet through Cone NAT creates:<br/>'Allow inbound from 198.51.100.20'"]
+        P1A["predict_range = max(port_range * 10, 100)<br/>here port_range = 4, so max(40, 100) = 100<br/>Candidate range: &#91;39912, 40112&#93;"]
+        P1B["201 candidates, then deduplicate + shuffle<br/>Take first 60"]
+        P1C["Send via main socket to 198.51.100.20:candidate_port<br/>Each packet through Cone NAT creates an inbound rule<br/>allowing packets from 198.51.100.20"]
         P1A --> P1B
         P1B --> P1C
     end
@@ -615,12 +615,12 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    RECV["node-b receives node-c's PunchRequest via relay<br/>(metric > 0)"]
-    RATE["try_execute_punch triggers reverse punch<br/>Rate limit check: not punched in last 5s → allowed"]
-    CONE["Peer is Cone NAT → Direct send strategy"]
-    SEND1["Main socket: 198.51.100.20:40035 → 203.0.113.10:40000"]
-    SEND2["Assistant socket 1: 198.51.100.20:40058 → 203.0.113.10:40000"]
-    SEND3["Assistant socket 2: 198.51.100.20:40081 → 203.0.113.10:40000"]
+    RECV["node-b receives node-c's PunchRequest via relay<br/>(metric above 0)"]
+    RATE["try_execute_punch triggers reverse punch<br/>Rate limit check: not punched in last 5s, allowed"]
+    CONE["Peer is Cone NAT, use direct-send strategy"]
+    SEND1["Main socket: 198.51.100.20:40035 to 203.0.113.10:40000"]
+    SEND2["Assistant socket 1: 198.51.100.20:40058 to 203.0.113.10:40000"]
+    SEND3["Assistant socket 2: 198.51.100.20:40081 to 203.0.113.10:40000"]
 
     RECV --> RATE
     RATE --> CONE
@@ -645,7 +645,7 @@ flowchart TD
         CB1 --> CB2
     end
 
-    RESULT["Both cases result in:<br/>node-c route table: node-b → direct (metric=0, via 198.51.100.20:40035)<br/>node-b route table: node-c → direct (metric=0, via 203.0.113.10:40000)<br/>QUIC handshake packets prefer direct route<br/>Direct QUIC connection established!"]
+    RESULT["Both cases result in:<br/>node-c route table: node-b is direct (metric=0, via 198.51.100.20:40035)<br/>node-b route table: node-c is direct (metric=0, via 203.0.113.10:40000)<br/>QUIC handshake packets prefer direct route<br/>Direct QUIC connection established!"]
 
     CA2 --> RESULT
     CB2 --> RESULT
@@ -661,15 +661,15 @@ The health check mechanism has been implemented with three key components: heart
 
 ```mermaid
 flowchart TD
-    HB["Heartbeat loop (start_heartbeat_loop, every 15s)<br/>Finds all peers with direct routes -> sends EchoRequest (8-byte timestamp)<br/>via direct route_key. Packets traverse UDP socket -> refreshes NAT mapping"]
+    HB["Heartbeat loop (start_heartbeat_loop, every 15s)<br/>Finds all peers with direct routes and sends EchoRequest (8-byte timestamp)<br/>via direct route_key. Packets traverse UDP socket and refresh NAT mapping"]
     HB -->|EchoRequest via direct route_key| PEER
-    PEER["Peer receives EchoRequest -> sends EchoReply (echoes back original timestamp)<br/>Also calls confirm_tcp_route() to ensure direct route is registered"]
+    PEER["Peer receives EchoRequest and sends EchoReply (echoes back original timestamp)<br/>Also calls confirm_tcp_route() to ensure direct route is registered"]
     PEER -->|EchoReply, metric=0| RTT
-    RTT["EchoReply handler: RTT calculation<br/>rtt = now_millis() - sent_timestamp (discards replies older than 60s)<br/>-> transport.update_route_rtt(peer, route_key, rtt)"]
+    RTT["EchoReply handler: RTT calculation<br/>rtt = now_millis() - sent_timestamp (discards replies older than 60s)<br/>then transport.update_route_rtt(peer, route_key, rtt)"]
     RTT -->|updates route| TBL
-    TBL["RouteTable::update_rtt()<br/>Updates Route.rtt for the specific route_key<br/>If LoadBalance::LowestLatency -> re-sorts routes by RTT"]
+    TBL["RouteTable.update_rtt()<br/>Updates Route.rtt for the specific route_key<br/>If LoadBalance.LowestLatency, re-sorts routes by RTT"]
     TBL -->|if no read activity| IDLE
-    IDLE["Route idle -> IdleRouteManager detects read-idle timeout<br/>-> remove_route() evicts stale route -> maintenance loop detects gap -> re-punch"]
+    IDLE["Route idle: IdleRouteManager detects read-idle timeout<br/>remove_route() evicts stale route, then maintenance loop detects gap and re-punches"]
 ```
 
 ### 7.2 Heartbeat + RTT Measurement
@@ -761,16 +761,16 @@ flowchart TD
     subgraph IRM["IdleRouteManager (rustp2p-core/src/idle.rs)"]
         direction TB
         RI["read_idle: Duration<br/>(configured idle threshold)"]
-        RT["route_table: RouteTable&lt;PeerID&gt;<br/>(shared with TransportLayer)"]
-        NI["next_idle() —&gt; (PeerID, Route, Instant)<br/>Returns the next route whose last-read time exceeds read_idle<br/>Called by the maintenance loop to detect stale routes"]
-        DL["delay(peer_id, route_key) —&gt; bool<br/>Pushes the route's read deadline forward (resets idle timer)<br/>Called when any traffic arrives on this route"]
+        RT["route_table: RouteTable(PeerID)<br/>(shared with TransportLayer)"]
+        NI["next_idle() returns (PeerID, Route, Instant)<br/>Returns the next route whose last-read time exceeds read_idle<br/>Called by the maintenance loop to detect stale routes"]
+        DL["delay(peer_id, route_key) returns bool<br/>Pushes the route's read deadline forward (resets idle timer)<br/>Called when any traffic arrives on this route"]
         RM["remove_route(peer_id, route_key)<br/>Evicts a single stale route from the route table<br/>This is what triggers re-punching"]
         RI --> NI
         RI --> DL
         RI --> RM
     end
 
-    IDLE["IdleRouteManager detects route with no read activity<br/>for &gt; read_idle (via next_idle)"]
+    IDLE["IdleRouteManager detects route with no read activity<br/>for longer than read_idle (via next_idle)"]
     IDLE --> RM
 
     CHECK{"Was it the last direct route?"}
@@ -779,8 +779,8 @@ flowchart TD
     CHECK -->|"No"| PRES["Relay/other routes preserved as fallback"]
     GD --> MAINT["Maintenance loop detects gap (next 10s cycle)"]
     MAINT --> RATE{"Rate limit check<br/>(should_punch / try_execute_punch)"}
-    RATE -->|"Allowed"| PUNCH["Auto-punch triggered<br/>(execute_punch → Puncher::punch_now)"]
-    RATE -->|"Limited"| SKIP["Skipped — waiting for next cycle"]
+    RATE -->|"Allowed"| PUNCH["Auto-punch triggered<br/>(execute_punch to Puncher.punch_now)"]
+    RATE -->|"Limited"| SKIP["Skipped - waiting for next cycle"]
     PRES --> MAINT
 ```
 
@@ -810,11 +810,11 @@ The heartbeat loop (Section 7.2) serves a dual role here: every `EchoRequest` /
 
 ```mermaid
 flowchart TB
-    REG["VirtualPeer registration<br/>register_virtual_peer_via(peer, route_key)<br/>-> allocates synthetic address 127.0.0.1:9999<br/>-> VirtualPeer: peer_id, route_key Some(rk)<br/>-> via_virtual_addrs[(peer, rk)] = addr"]
-    QUI["Quinn endpoint binds to synthetic addr<br/>Quinn thinks it sends to 127.0.0.1:9999<br/>QuicPeerSocket::try_send intercepts:<br/>-> finds VirtualPeer by destination addr<br/>-> route_key=Some -> try_send_quic_payload_via"]
-    BYP["try_send_quic_payload_via bypasses the route table<br/>Wraps payload as QuicRelay packet<br/>-> try_send_wire_to_route(route_key) -> direct UDP send"]
-    DEF["Default connection, route_key=None<br/>Uses route table default (lowest metric)<br/>try_send_quic_payload -> route table lookup"]
-    VIA["Via connection, route_key=Some<br/>Bypasses route table entirely<br/>try_send_quic_payload_via -> direct wire send"]
+    REG["VirtualPeer registration<br/>register_virtual_peer_via(peer, route_key)<br/>allocates synthetic address 127.0.0.1:9999<br/>VirtualPeer: peer_id, route_key Some(rk)<br/>via_virtual_addrs[(peer, rk)] = addr"]
+    QUI["Quinn endpoint binds to synthetic addr<br/>Quinn thinks it sends to 127.0.0.1:9999<br/>QuicPeerSocket.try_send intercepts:<br/>finds VirtualPeer by destination addr<br/>route_key=Some then try_send_quic_payload_via"]
+    BYP["try_send_quic_payload_via bypasses the route table<br/>Wraps payload as QuicRelay packet<br/>calls try_send_wire_to_route(route_key) for direct UDP send"]
+    DEF["Default connection, route_key=None<br/>Uses route table default (lowest metric)<br/>try_send_quic_payload uses route table lookup"]
+    VIA["Via connection, route_key=Some<br/>Bypasses route table entirely<br/>try_send_quic_payload_via sends direct wire data"]
 
     REG -->|binds| QUI
     QUI --> BYP
@@ -833,9 +833,9 @@ The mechanism is built on **synthetic address binding**:
 ```mermaid
 flowchart TD
     APP["Application calls<br/>endpoint.open_bi_via(peer_id, route_key)"]
-    CONN["QuicEndpoint::connection_to_via(peer_id, route_key)"]
-    REG["register_virtual_peer_via(peer_id, route_key)<br/>— Allocates synthetic SocketAddr (e.g. 127.0.0.1:XXXX)<br/>— Creates VirtualPeer { peer_id, route_key: Some(route_key) }<br/>— Stores in via_virtual_addrs[(peer_id, route_key)]"]
-    QUINN["Quinn Endpoint connects to the synthetic address<br/>All QUIC packets (handshake, stream data, datagrams, ACKs)<br/>go through QuicPeerSocket::try_send"]
+    CONN["QuicEndpoint.connection_to_via(peer_id, route_key)"]
+    REG["register_virtual_peer_via(peer_id, route_key)<br/>Allocates synthetic SocketAddr (e.g. 127.0.0.1:XXXX)<br/>Creates VirtualPeer with route_key Some(route_key)<br/>Stores in via_virtual_addrs[(peer_id, route_key)]"]
+    QUINN["Quinn Endpoint connects to the synthetic address<br/>All QUIC packets (handshake, stream data, datagrams, ACKs)<br/>go through QuicPeerSocket.try_send"]
     LOOKUP["try_send looks up VirtualPeer by destination address"]
     CHECK{"route_key is Some?"}
     VIA2["try_send_quic_payload_via()<br/>Wraps payload as QuicRelay Packet<br/>Calls transport.try_send_wire_to_route(route_key)<br/>Sends directly on the specified UDP/TCP path"]
@@ -846,8 +846,8 @@ flowchart TD
     REG --> QUINN
     QUINN --> LOOKUP
     LOOKUP --> CHECK
-    CHECK -->|"Yes — via connection"| VIA2
-    CHECK -->|"No — default connection"| DEFAULT2
+    CHECK -->|"Yes - via connection"| VIA2
+    CHECK -->|"No - default connection"| DEFAULT2
 ```
 
 #### Key Data Structures
@@ -1007,7 +1007,7 @@ route yet. The goal is to create a direct (metric = 0) route via hole punching.
 ```mermaid
 flowchart LR
     subgraph PUB["Public Internet"]
-        NA["node-a (Public relay / bootstrap)<br/>203.0.113.1<br/>no NAT — directly reachable"]
+        NA["node-a (Public relay / bootstrap)<br/>203.0.113.1<br/>no NAT, directly reachable"]
     end
 
     subgraph NBN["node-b network (Symmetric NAT)"]
@@ -1024,8 +1024,8 @@ flowchart LR
         NCI --> NCNAT
     end
 
-    NBNAT -- "bootstrap (--relay node-a)<br/>relay route, metric > 0" --> NA
-    NCNAT -- "bootstrap (--relay node-a)<br/>relay route, metric > 0" --> NA
+    NBNAT -->|"bootstrap (--relay node-a)<br/>relay route, metric above 0"| NA
+    NCNAT -->|"bootstrap (--relay node-a)<br/>relay route, metric above 0"| NA
 
     NBNAT -.->|"target: direct route metric = 0"| NCNAT
 ```
@@ -1044,7 +1044,7 @@ flowchart TD
         direction TB
         S1A["node-b starts with --relay node-a<br/>establishes QUIC connection to node-a"]
         S1B["node-c starts with --relay node-a<br/>establishes QUIC connection to node-a"]
-        S1C["Result: both have relay routes to each other<br/>via node-a (metric > 0)"]
+        S1C["Result: both have relay routes to each other<br/>via node-a (metric above 0)"]
         S1A --> S1C
         S1B --> S1C
     end
@@ -1053,8 +1053,8 @@ flowchart TD
         direction TB
         S2A["node-b sends NatObserveRequest to node-a"]
         S2B["node-c sends NatObserveRequest to node-a"]
-        S2C["node-a observes source addresses:<br/>node-b -> 198.51.100.20:40012<br/>node-c -> 203.0.113.10:40000"]
-        S2D["node-a replies NatObserveReply:<br/>node-b learns public_ips=[198.51.100.20], ports=[40012]<br/>node-c learns public_ips=[203.0.113.10], ports=[40000]"]
+        S2C["node-a observes source addresses:<br/>node-b to 198.51.100.20:40012<br/>node-c to 203.0.113.10:40000"]
+        S2D["node-a replies NatObserveReply:<br/>node-b learns public_ips=&#91;198.51.100.20&#93;, ports=&#91;40012&#93;<br/>node-c learns public_ips=&#91;203.0.113.10&#93;, ports=&#91;40000&#93;"]
         S2A --> S2C
         S2B --> S2C
         S2C --> S2D
@@ -1063,9 +1063,9 @@ flowchart TD
     subgraph S3["Stage 3: Peer discovery + PunchRequest exchange"]
         direction TB
         S3A["Maintenance loop (1s tick) + QueryRoutes<br/>both learn the other peer exists"]
-        S3B{"has_direct_route?<br/>peer has only metric > 0 relay route"}
+        S3B{"has_direct_route?<br/>peer has only relay route with metric above 0"}
         S3C["Auto-punch trigger (every 10s/peer):<br/>send PunchRequest via relay<br/>carrying own NatInfo"]
-        S3D["Receive peer's PunchRequest<br/>-> store in peer_nat<br/>-> try_execute_punch (reverse punch)"]
+        S3D["Receive peer's PunchRequest<br/>store in peer_nat<br/>then try_execute_punch (reverse punch)"]
         S3A --> S3B
         S3B -->|"No"| S3C
         S3C --> S3D
@@ -1080,7 +1080,7 @@ flowchart TD
         S4B --> S4C
     end
 
-    subgraph S5["Stage 5: Hit -> confirm -> promote"]
+    subgraph S5["Stage 5: Hit, confirm, and promote"]
         direction TB
         S5A["A punch reaches peer's open mapping<br/>PunchRequest/PunchReply arrives metric = 0"]
         S5B["confirm_direct_and_promote()<br/>confirm_peer_route(peer, route_key, metric=0)"]
@@ -1128,7 +1128,7 @@ flowchart TD
     subgraph L1["Layer 1: Maintenance loop (protocol.rs:1478)"]
         direction TB
         L1A["1s interval tick"]
-        L1B{"now - last_punch_time < 10s?"}
+        L1B{"now minus last_punch_time is less than 10s?"}
         L1C["Skip"]
         L1D["Send PunchRequest + execute_punch"]
         L1A --> L1B
@@ -1138,13 +1138,13 @@ flowchart TD
 
     subgraph L2["Layer 2: PunchRequest handler (protocol.rs:1095)"]
         direction TB
-        L2A{"metric > 0? (relay arrival)"}
-        L2B{"now - last &lt; 5s?"}
+        L2A{"metric above 0? (relay arrival)"}
+        L2B{"now minus last is less than 5s?"}
         L2C["Skip execute_punch (relay rate limited)"]
         L2D["No limit (direct arrival)<br/>best-hit opportunity"]
         L2E{"has_direct_route?"}
         L2F["Skip entirely"]
-        L2G["Proceed to Puncher::punch_now"]
+        L2G["Proceed to Puncher.punch_now"]
         L2A -->|"Yes"| L2B
         L2B -->|"Yes"| L2C
         L2B -->|"No"| L2E
@@ -1156,10 +1156,10 @@ flowchart TD
 
     subgraph L3["Layer 3: Puncher backoff (punch/mod.rs:45 should_punch)"]
         direction TB
-        L3A{"batch_count <= 8?"}
+        L3A{"batch_count at most 8?"}
         L3B["Punch immediately (no backoff)"]
-        L3C{"interval = (batch_count / 8).min(360)<br/>elapsed >= interval?"}
-        L3D["Punch now<br/>batch_count += 1"]
+        L3C{"interval = min(batch_count / 8, 360)<br/>elapsed is at least interval?"}
+        L3D["Punch now<br/>batch_count incremented by 1"]
         L3E["Skip this round"]
         L3A -->|"Yes"| L3B
         L3A -->|"No"| L3C
