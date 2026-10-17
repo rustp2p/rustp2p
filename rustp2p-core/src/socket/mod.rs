@@ -139,7 +139,7 @@ pub(crate) fn bind_tcp_listener(
     }
     socket.set_reuse_address(true)?;
     #[cfg(unix)]
-    socket.set_reuse_port(true)?;
+    let _ = socket.set_reuse_port(true);
     socket.set_nonblocking(true)?;
     socket.bind(&addr.into())?;
     socket.listen(1024)?;
