@@ -33,7 +33,7 @@ protoc-bin-vendored = "3"
 [dev-dependencies]
 tokio = { version = "1.42", features = ["full"] }
 env_logger = "0.11.5"
-serial_test = "3"
+serial_test = "4"
 clap = { version = "4", features = ["derive"] }
 
 [[example]]
