@@ -11,7 +11,7 @@ rustp2p-core = { workspace = true }
 quinn = "0.11"
 quinn-udp = "0.5"
 rustls = { version = "0.23", default-features = false, features = ["std", "ring"] }
-rcgen = "0.13"
+rcgen = "0.14"
 tokio = { workspace = true }
 rand = { workspace = true }
 parking_lot = { workspace = true }
