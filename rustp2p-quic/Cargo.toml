@@ -27,7 +27,7 @@ sha2 = "0.11"
 x25519-dalek = { version = "3", features = ["static_secrets"] }
 
 [build-dependencies]
-prost-build = "0.13"
+prost-build = "0.14"
 protoc-bin-vendored = "3"
 
 [dev-dependencies]
