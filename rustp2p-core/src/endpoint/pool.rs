@@ -833,27 +833,27 @@ impl SocketPool {
     }
 }
 
+#[cfg(any(target_os = "linux", target_os = "android"))]
 fn is_recoverable_udp_recv_error(error: &io::Error) -> bool {
-    if error.kind() == io::ErrorKind::Interrupted {
-        return true;
-    }
+    error.kind() == io::ErrorKind::Interrupted
+        || matches!(
+            error.raw_os_error(),
+            Some(
+                libc::ECONNREFUSED
+                    | libc::ECONNRESET
+                    | libc::ECONNABORTED
+                    | libc::EHOSTUNREACH
+                    | libc::ENETUNREACH
+                    | libc::EADDRNOTAVAIL
+                    | libc::EPROTO
+                    | libc::EMSGSIZE
+            )
+        )
+}
 
-    #[cfg(any(target_os = "linux", target_os = "android"))]
-    if let Some(code) = error.raw_os_error() {
-        return matches!(
-            code,
-            libc::ECONNREFUSED
-                | libc::ECONNRESET
-                | libc::ECONNABORTED
-                | libc::EHOSTUNREACH
-                | libc::ENETUNREACH
-                | libc::EADDRNOTAVAIL
-                | libc::EPROTO
-                | libc::EMSGSIZE
-        );
-    }
-
-    false
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+fn is_recoverable_udp_recv_error(error: &io::Error) -> bool {
+    error.kind() == io::ErrorKind::Interrupted
 }
 
 #[cfg(all(feature = "sendmmsg", any(target_os = "linux", target_os = "android")))]
