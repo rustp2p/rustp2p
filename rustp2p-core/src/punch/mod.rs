@@ -137,6 +137,10 @@ impl Puncher {
     }
 
     /// Returns all UDP sockets: main IPv4, optional main IPv6, then assistants.
+    ///
+    /// These are owning socket handles. Drop them before calling
+    /// [`TunnelIncoming::close`](crate::endpoint::TunnelIncoming::close)
+    /// if the listening ports need to be reused.
     pub fn udp_sockets(&self) -> Vec<Arc<tokio::net::UdpSocket>> {
         self.pool.udp_sockets()
     }
@@ -153,6 +157,7 @@ impl Puncher {
         addr: SocketAddr,
         initial_data: Option<Bytes>,
     ) -> io::Result<()> {
+        self.pool.ensure_open()?;
         let stream = crate::socket::connect_tcp(
             addr,
             Some(self.tcp_bind_addr(addr, 0)?),
@@ -223,12 +228,7 @@ impl Puncher {
         if ipv6.is_none() && self.nat_config.enable_ipv6 {
             ipv6 = crate::util::addr::local_ipv6(interface, stun_servers).await;
         }
-        let local_udp_ports = self
-            .pool
-            .udp_sockets()
-            .iter()
-            .filter_map(|socket| socket.local_addr().ok().map(|addr| addr.port()))
-            .collect();
+        let local_udp_ports = self.pool.local_udp_ports();
 
         // STUN uses a temporary UDP socket, so its mapped ports do not belong
         // to the actual tunnel sockets. Real mapped ports are learned later by
@@ -263,6 +263,7 @@ impl Puncher {
     /// - [`NatType::Cone`] removes all assistant sockets.
     pub fn apply_nat_model(&self, nat_type: NatType) -> io::Result<()> {
         let _model_guard = self.pool.lock_assistant_model();
+        self.pool.ensure_open()?;
         match nat_type {
             NatType::Symmetric => {
                 let current = self.pool.assistant_count();
@@ -282,7 +283,7 @@ impl Puncher {
                         )?;
                         let std_socket: std::net::UdpSocket = socket.into();
                         let tokio_socket = tokio::net::UdpSocket::from_std(std_socket)?;
-                        self.pool.add_assistant_udp(tokio_socket);
+                        self.pool.add_assistant_udp(tokio_socket)?;
                     }
                 }
             }

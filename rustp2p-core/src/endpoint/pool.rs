@@ -10,6 +10,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::OwnedWriteHalf;
 use tokio::net::UdpSocket;
 use tokio::sync::{broadcast, mpsc};
+use tokio::task::JoinSet;
 
 use crate::endpoint::codec::InitCodec;
 use crate::endpoint::tunnel::{Tunnel, UdpDispatcher};
@@ -25,20 +26,32 @@ struct UdpEntry {
     _shutdown: broadcast::Sender<()>,
 }
 
-/// A shared pool of sockets. Owns all Arcs.
-///
-/// The main IPv4 UDP socket is fixed at construction time and never changes,
-/// so it needs no lock. A main IPv6 UDP socket is optionally bound when IPv6
-/// is enabled and supported. Assistant UDP sockets are created and removed
-/// dynamically (e.g. symmetric NAT probing) and live in a locked list.
-pub struct SocketPool {
-    main_udp_v4: Arc<UdpSocket>,
+struct SocketState {
+    main_udp_v4: Option<Arc<UdpSocket>>,
     main_udp_v6: Option<Arc<UdpSocket>>,
-    /// Serializes whole assistant-socket model transitions. The list's own
-    /// lock only protects individual reads and writes and cannot make a
-    /// count-then-add sequence atomic.
+    assistant_udp: Vec<UdpEntry>,
+    // Includes sockets previously removed from the assistant set, so an
+    // externally held raw socket can still be reported by close().
+    udp_refs: Vec<Weak<UdpSocket>>,
+    // None is a permanent shutdown. Task registration and socket creation
+    // are serialized with taking this set.
+    tasks: Option<JoinSet<()>>,
+}
+
+impl SocketState {
+    fn udp_sockets(&self) -> impl Iterator<Item = &Arc<UdpSocket>> {
+        self.main_udp_v4
+            .iter()
+            .chain(&self.main_udp_v6)
+            .chain(self.assistant_udp.iter().map(|entry| &entry.socket))
+    }
+}
+
+/// A shared pool of sockets. Retaining a Puncher does not keep sockets alive
+/// after the endpoint shuts down.
+pub struct SocketPool {
+    state: parking_lot::RwLock<SocketState>,
     assistant_model_lock: parking_lot::Mutex<()>,
-    assistant_udp: parking_lot::RwLock<Vec<UdpEntry>>,
     accept_tx: mpsc::Sender<Tunnel>,
     udp_dispatcher: Arc<UdpDispatcher>,
     /// Global shutdown - kills ALL tasks (main + sub)
@@ -62,30 +75,30 @@ impl SocketPool {
         let udp_dispatcher = UdpDispatcher::new();
 
         let main_udp_v4 = Arc::new(main_udp_v4);
-        Self::spawn_udp_tasks(
-            main_udp_v4.clone(),
-            &accept_tx,
-            &udp_dispatcher,
-            &global_shutdown,
-            max_udp_datagram_size,
-        );
-        let main_udp_v6 = main_udp_v6.map(|s| {
-            let s = Arc::new(s);
+        let main_udp_v6 = main_udp_v6.map(Arc::new);
+        let mut tasks = JoinSet::new();
+        let mut udp_refs = Vec::new();
+        for socket in std::iter::once(&main_udp_v4).chain(main_udp_v6.iter()) {
+            udp_refs.push(Arc::downgrade(socket));
             Self::spawn_udp_tasks(
-                s.clone(),
+                &mut tasks,
+                socket.clone(),
                 &accept_tx,
                 &udp_dispatcher,
                 &global_shutdown,
                 max_udp_datagram_size,
             );
-            s
-        });
+        }
 
         Self {
-            main_udp_v4,
-            main_udp_v6,
+            state: parking_lot::RwLock::new(SocketState {
+                main_udp_v4: Some(main_udp_v4),
+                main_udp_v6,
+                assistant_udp: Vec::new(),
+                udp_refs,
+                tasks: Some(tasks),
+            }),
             assistant_model_lock: parking_lot::Mutex::new(()),
-            assistant_udp: parking_lot::RwLock::new(Vec::new()),
             accept_tx,
             udp_dispatcher,
             global_shutdown,
@@ -96,6 +109,7 @@ impl SocketPool {
 
     /// Spawn the read and write tasks for one UDP socket.
     fn spawn_udp_tasks(
+        tasks: &mut JoinSet<()>,
         socket: Arc<UdpSocket>,
         accept_tx: &mpsc::Sender<Tunnel>,
         udp_dispatcher: &Arc<UdpDispatcher>,
@@ -109,7 +123,7 @@ impl SocketPool {
         let accept_tx = accept_tx.clone();
         let udp_dispatcher = udp_dispatcher.clone();
         let s = socket.clone();
-        tokio::spawn(async move {
+        tasks.spawn(async move {
             Self::run_udp_reader(
                 s,
                 write_tx,
@@ -125,7 +139,7 @@ impl SocketPool {
         let mut global_shutdown_rx = global_shutdown.subscribe();
         let mut socket_shutdown_rx = global_shutdown.subscribe();
         let s = socket.clone();
-        tokio::spawn(async move {
+        tasks.spawn(async move {
             Self::run_udp_writer(
                 s,
                 write_rx,
@@ -138,7 +152,10 @@ impl SocketPool {
 
     /// Add an assistant UDP socket (for symmetric NAT probing).
     /// Its reader task exits when the assistant socket is removed.
-    pub fn add_assistant_udp(&self, socket: UdpSocket) -> Weak<UdpSocket> {
+    pub fn add_assistant_udp(&self, socket: UdpSocket) -> io::Result<()> {
+        let mut state = self.state.write();
+        let tasks = state.tasks.as_mut().ok_or_else(Self::closed)?;
+        Self::reap_finished(tasks);
         let socket = Arc::new(socket);
         let weak = Arc::downgrade(&socket);
 
@@ -151,7 +168,7 @@ impl SocketPool {
         let s = socket.clone();
         let max_udp_datagram_size = self.max_udp_datagram_size;
 
-        tokio::spawn(async move {
+        tasks.spawn(async move {
             Self::run_udp_reader(
                 s,
                 write_tx,
@@ -167,7 +184,7 @@ impl SocketPool {
         let mut writer_shutdown_rx = socket_shutdown.subscribe();
         let mut writer_global_shutdown_rx = self.global_shutdown.subscribe();
         let s = socket.clone();
-        tokio::spawn(async move {
+        tasks.spawn(async move {
             Self::run_udp_writer(
                 s,
                 write_rx,
@@ -182,18 +199,15 @@ impl SocketPool {
             _shutdown: socket_shutdown,
         };
 
-        let mut sockets = self.assistant_udp.write();
-        sockets.push(entry);
-        drop(sockets);
-
-        weak
+        state.assistant_udp.push(entry);
+        state.udp_refs.retain(|socket| socket.strong_count() != 0);
+        state.udp_refs.push(weak);
+        Ok(())
     }
 
-    /// Clean all assistant UDP sockets and cancel their reader tasks.
+    /// Drop the per-socket shutdown senders to stop assistant tasks.
     pub fn clean_assistant_udp(&self) {
-        let mut sockets = self.assistant_udp.write();
-        // Dropping UdpEntry drops _shutdown Sender, reader task exits.
-        sockets.clear();
+        self.state.write().assistant_udp.clear();
     }
 
     /// Locks a complete assistant-socket model transition across all Puncher
@@ -219,6 +233,9 @@ impl SocketPool {
             .local_addr()
             .unwrap_or_else(|_| SocketAddr::from(([0, 0, 0, 0], 0)));
         let (mut decoder, encoder) = self.init_codec.codec(peer_addr)?;
+        let mut state = self.state.write();
+        let tasks = state.tasks.as_mut().ok_or_else(Self::closed)?;
+        Self::reap_finished(tasks);
         let (write_tx, mut write_rx) = mpsc::channel::<Bytes>(64);
         let (data_tx, data_rx) = mpsc::channel(64);
         let (read_shutdown, _) = broadcast::channel(1);
@@ -226,7 +243,7 @@ impl SocketPool {
         let mut read_tunnel_shutdown = read_shutdown.subscribe();
 
         // Read loop using Decoder
-        tokio::spawn(async move {
+        tasks.spawn(async move {
             let mut read = read_half;
             let mut buf = BytesMut::with_capacity(64 * 1024);
             'read: loop {
@@ -270,7 +287,7 @@ impl SocketPool {
 
         // Write loop using Encoder
         let mut write_global_shutdown = self.global_shutdown.subscribe();
-        tokio::spawn(async move {
+        tasks.spawn(async move {
             let mut encoder = encoder;
             loop {
                 tokio::select! {
@@ -331,8 +348,8 @@ impl SocketPool {
         if addr.is_ipv6() {
             return Ok(());
         }
-        let sockets = self.assistant_udp.read();
-        for entry in sockets.iter() {
+        let state = self.state.read();
+        for entry in &state.assistant_udp {
             // Best effort per socket, mirroring try_send_via_all: a transient
             // failure on one assistant must not skip the remaining ones,
             // punch probes need the full coverage.
@@ -345,65 +362,133 @@ impl SocketPool {
 
     /// Send data to an address via the matching family main UDP socket.
     pub fn send_to(&self, buf: &[u8], addr: SocketAddr) -> io::Result<()> {
-        if addr.is_ipv4() {
-            return self
-                .main_udp_v4
-                .try_send_to(buf, addr)
-                .map(|_| ())
-                .map_err(|e| io::Error::other(format!("send failed: {e}")));
-        }
-        let v6 = self
-            .main_udp_v6
-            .as_ref()
-            .ok_or_else(|| io::Error::other("IPv6 main socket not available"))?;
-        v6.try_send_to(buf, addr)
+        let state = self.state.read();
+        let v4 = state.main_udp_v4.as_ref().ok_or_else(Self::closed)?;
+        let socket = if addr.is_ipv4() {
+            v4
+        } else {
+            state
+                .main_udp_v6
+                .as_ref()
+                .ok_or_else(|| io::Error::other("IPv6 main socket not available"))?
+        };
+        socket
+            .try_send_to(buf, addr)
             .map(|_| ())
             .map_err(|e| io::Error::other(format!("send failed: {e}")))
     }
 
-    /// Send data through the UDP sockets matching the target's address family:
-    /// the matching main socket, plus the (IPv4-only) assistant sockets for
-    /// IPv4 targets. Sockets of the other family are skipped, so no doomed
-    /// syscalls are made.
+    /// Best-effort send through the matching main UDP socket and assistants.
     pub fn try_send_via_all(&self, buf: &[u8], addr: SocketAddr) {
+        let state = self.state.read();
         if addr.is_ipv4() {
-            let _ = self.main_udp_v4.try_send_to(buf, addr);
-            let sockets = self.assistant_udp.read();
-            for entry in sockets.iter() {
+            if let Some(v4) = &state.main_udp_v4 {
+                let _ = v4.try_send_to(buf, addr);
+            }
+            for entry in &state.assistant_udp {
                 let _ = entry.socket.try_send_to(buf, addr);
             }
-        } else if let Some(v6) = &self.main_udp_v6 {
+        } else if let Some(v6) = &state.main_udp_v6 {
             let _ = v6.try_send_to(buf, addr);
         }
     }
 
-    /// Shutdown all tasks (program exit).
-    pub fn shutdown(&self) {
-        self.udp_dispatcher.clear();
+    fn closed() -> io::Error {
+        io::Error::new(io::ErrorKind::BrokenPipe, "tunnel endpoint is closed")
+    }
+
+    pub(crate) fn ensure_open(&self) -> io::Result<()> {
+        self.state
+            .read()
+            .tasks
+            .as_ref()
+            .map(|_| ())
+            .ok_or_else(Self::closed)
+    }
+
+    fn reap_finished(tasks: &mut JoinSet<()>) {
+        while let Some(result) = tasks.try_join_next() {
+            if let Err(error) = result {
+                log::debug!("endpoint worker exited: {error}");
+            }
+        }
+    }
+
+    pub(crate) fn spawn_listener(
+        &self,
+        worker: impl std::future::Future<Output = ()> + Send + 'static,
+    ) {
+        if let Some(tasks) = self.state.write().tasks.as_mut() {
+            tasks.spawn(worker);
+        }
+    }
+
+    /// Prevent new tasks, drop the pool's socket references and abort workers.
+    /// Dropping the returned set is sufficient for non-blocking Drop.
+    fn begin_shutdown(&self) -> Option<(JoinSet<()>, Vec<Weak<UdpSocket>>)> {
+        let _model_guard = self.lock_assistant_model();
+        let mut state = self.state.write();
+        let mut tasks = state.tasks.take()?;
         let _ = self.global_shutdown.send(());
+        tasks.abort_all();
+        state.main_udp_v4 = None;
+        state.main_udp_v6 = None;
+        state.assistant_udp.clear();
+        Some((tasks, std::mem::take(&mut state.udp_refs)))
     }
 
-    /// Get a shutdown receiver to listen for shutdown signals.
-    pub fn shutdown_rx(&self) -> broadcast::Receiver<()> {
-        self.global_shutdown.subscribe()
+    pub(crate) fn shutdown(&self) {
+        if self.begin_shutdown().is_some() {
+            self.udp_dispatcher.clear();
+        }
     }
 
-    /// Get local address of the main IPv4 UDP socket.
+    pub(crate) async fn close(&self) -> io::Result<()> {
+        let Some((mut tasks, refs)) = self.begin_shutdown() else {
+            return Ok(());
+        };
+        // Clear on cancellation as well as on successful completion.
+        struct ClearRoutes<'a>(&'a UdpDispatcher);
+        impl Drop for ClearRoutes<'_> {
+            fn drop(&mut self) {
+                self.0.clear();
+            }
+        }
+        let _clear = ClearRoutes(&self.udp_dispatcher);
+        tasks.shutdown().await;
+        if refs.iter().any(|socket| socket.strong_count() != 0) {
+            return Err(io::Error::new(
+                io::ErrorKind::AddrInUse,
+                "endpoint closed, but a raw UDP socket handle still holds a port",
+            ));
+        }
+        Ok(())
+    }
+
     pub fn local_addr(&self) -> io::Result<SocketAddr> {
-        self.main_udp_v4.local_addr()
+        self.state
+            .read()
+            .main_udp_v4
+            .as_ref()
+            .ok_or_else(Self::closed)?
+            .local_addr()
     }
 
     /// Get all UDP sockets: main IPv4, main IPv6 (if present), then assistants.
     pub fn udp_sockets(&self) -> Vec<Arc<UdpSocket>> {
-        let mut sockets = vec![self.main_udp_v4.clone()];
-        sockets.extend(self.main_udp_v6.iter().cloned());
-        sockets.extend(self.assistant_udp.read().iter().map(|e| e.socket.clone()));
-        sockets
+        self.state.read().udp_sockets().cloned().collect()
     }
 
-    /// Get the number of assistant sockets.
+    pub fn local_udp_ports(&self) -> Vec<u16> {
+        self.state
+            .read()
+            .udp_sockets()
+            .filter_map(|socket| socket.local_addr().ok().map(|addr| addr.port()))
+            .collect()
+    }
+
     pub fn assistant_count(&self) -> usize {
-        self.assistant_udp.read().len()
+        self.state.read().assistant_udp.len()
     }
 
     async fn run_udp_reader(

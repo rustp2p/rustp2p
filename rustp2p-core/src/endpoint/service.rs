@@ -61,14 +61,6 @@ impl TunnelIncoming {
         .await?;
         let local_udp_ipv6_addr = main_v6.as_ref().and_then(|s| s.local_addr().ok());
         let udp_v4_port = main_v4.local_addr()?.port();
-        let pool = Arc::new(SocketPool::new(
-            main_v4,
-            main_v6,
-            accept_tx,
-            codec.clone(),
-            config.max_udp_datagram_size,
-        ));
-
         let (tcp_v4, tcp_v6) = if let Some(port) = config.tcp_port {
             bind_tcp(
                 port,
@@ -84,6 +76,14 @@ impl TunnelIncoming {
 
         let local_tcp_addr = tcp_v4.as_ref().and_then(|l| l.local_addr().ok());
         let local_tcp_ipv6_addr = tcp_v6.as_ref().and_then(|l| l.local_addr().ok());
+
+        let pool = Arc::new(SocketPool::new(
+            main_v4,
+            main_v6,
+            accept_tx,
+            codec.clone(),
+            config.max_udp_datagram_size,
+        ));
 
         let incoming = Self {
             pool,
@@ -111,6 +111,23 @@ impl TunnelIncoming {
         self.tunnel_rx.recv().await
     }
 
+    /// Stops accepting tunnels and waits for the endpoint's internal workers
+    /// to exit and release their TCP and UDP sockets.
+    ///
+    /// Outstanding `Puncher` or `Tunnel` handles do not keep the listeners
+    /// open. Raw UDP sockets returned by
+    /// [`Puncher::udp_sockets`](crate::punch::Puncher::udp_sockets) are different:
+    /// drop those socket handles before closing. If one still owns a socket,
+    /// this method returns [`io::ErrorKind::AddrInUse`] after shutting down the
+    /// endpoint. After success the endpoint itself no longer holds the ports.
+    ///
+    /// Dropping the endpoint (or cancelling this future) requests shutdown
+    /// without waiting for the workers.
+    pub async fn close(mut self) -> io::Result<()> {
+        self.tunnel_rx.close();
+        self.pool.close().await
+    }
+
     /// Returns the local address this incoming source is bound to.
     pub fn local_addr(&self) -> io::Result<SocketAddr> {
         self.pool.local_addr()
@@ -134,11 +151,7 @@ impl TunnelIncoming {
 
     /// Get local UDP ports.
     pub fn local_udp_ports(&self) -> Vec<u16> {
-        self.pool
-            .udp_sockets()
-            .iter()
-            .filter_map(|s| s.local_addr().ok().map(|addr| addr.port()))
-            .collect()
+        self.pool.local_udp_ports()
     }
 
     /// The local IPv6 UDP socket address, if IPv6 UDP handling is enabled.
@@ -279,37 +292,33 @@ fn spawn_tcp_accept_loop(
     pool: Arc<SocketPool>,
     default_interface: Option<LocalInterface>,
 ) {
-    let mut shutdown_rx = pool.shutdown_rx();
-    tokio::spawn(async move {
+    let handle = Arc::downgrade(&pool);
+    pool.spawn_listener(async move {
         loop {
-            tokio::select! {
-                result = tcp_listener.accept() => {
-                    match result {
-                        Ok((stream, peer_addr)) => {
-                            log::debug!("TCP connection from {peer_addr}");
-                            if let Err(e) = crate::socket::configure_accepted_tcp_stream(
-                                &stream,
-                                default_interface.as_ref(),
-                            ) {
-                                log::warn!("TCP stream setup error for {peer_addr}: {e}");
-                                continue;
-                            }
-                            if let Err(e) = pool.publish_tcp(stream, peer_addr, None).await {
-                                log::warn!("TCP setup error: {e}");
-                            }
+            match tcp_listener.accept().await {
+                Ok((stream, peer_addr)) => {
+                    let Some(pool) = handle.upgrade() else {
+                        break;
+                    };
+                    log::debug!("TCP connection from {peer_addr}");
+                    if let Err(e) = crate::socket::configure_accepted_tcp_stream(
+                        &stream,
+                        default_interface.as_ref(),
+                    ) {
+                        log::warn!("TCP stream setup error for {peer_addr}: {e}");
+                        continue;
+                    }
+                    if let Err(e) = pool.publish_tcp(stream, peer_addr, None).await {
+                        if pool.ensure_open().is_err() {
+                            break;
                         }
-                        Err(e) => {
-                            log::warn!("TCP accept error: {e}");
-                            // Back off on persistent errors (e.g. fd
-                            // exhaustion) so the loop does not spin at
-                            // 100% CPU and flood the logs.
-                            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                        }
+                        log::warn!("TCP setup error: {e}");
                     }
                 }
-                _ = shutdown_rx.recv() => {
-                    log::debug!("TCP accept loop shutting down");
-                    break;
+                Err(e) => {
+                    log::warn!("TCP accept error: {e}");
+                    // Back off on persistent errors (e.g. fd exhaustion).
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                 }
             }
         }
@@ -477,6 +486,115 @@ mod tests {
 
     fn loopback(addr: SocketAddr) -> SocketAddr {
         SocketAddr::new("127.0.0.1".parse().unwrap(), addr.port())
+    }
+
+    #[tokio::test]
+    async fn close_releases_ports_with_live_puncher_and_tunnels() {
+        let config = Config::new()
+            .enable_ipv6(false)
+            .bind_ipv4(std::net::Ipv4Addr::LOCALHOST)
+            .udp_port(0)
+            .tcp_port(0)
+            .max_assistant_sockets(2);
+        let mut endpoint = TunnelIncoming::bind(config).await.unwrap();
+        let puncher = endpoint.puncher();
+        let udp_addr = endpoint.local_addr().unwrap();
+        let tcp_addr = endpoint.local_tcp_addr().unwrap();
+        puncher.apply_nat_model(NatType::Symmetric).unwrap();
+        let assistants = puncher
+            .udp_sockets()
+            .into_iter()
+            .skip(1)
+            .map(|socket| socket.local_addr().unwrap())
+            .collect::<Vec<_>>();
+
+        let udp = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        udp.send_to(b"first packet", udp_addr).await.unwrap();
+        let mut udp_tunnel = tokio::time::timeout(Duration::from_secs(2), endpoint.next())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(udp_tunnel.is_udp());
+        assert!(udp_tunnel.recv().await.is_some());
+        let _peer = TcpStream::connect(tcp_addr).await.unwrap();
+        let mut tcp_tunnel = tokio::time::timeout(Duration::from_secs(2), endpoint.next())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(tcp_tunnel.is_tcp());
+
+        // Also wait for workers from an assistant generation retired earlier.
+        puncher.apply_nat_model(NatType::Cone).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), endpoint.close())
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert!(udp_tunnel.recv().await.is_none());
+        assert!(tcp_tunnel.recv().await.is_none());
+        assert!(puncher.udp_sockets().is_empty());
+        assert_eq!(
+            puncher.send_to(b"closed", udp_addr).unwrap_err().kind(),
+            std::io::ErrorKind::BrokenPipe
+        );
+        assert_eq!(
+            puncher
+                .apply_nat_model(NatType::Symmetric)
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::BrokenPipe
+        );
+
+        // No sleeps or retries: the original ports must be available now.
+        let replacement = TunnelIncoming::bind(
+            Config::new()
+                .enable_ipv6(false)
+                .bind_ipv4(std::net::Ipv4Addr::LOCALHOST)
+                .udp_port(udp_addr.port())
+                .tcp_port(tcp_addr.port()),
+        )
+        .await
+        .unwrap();
+        let _assistants = assistants
+            .into_iter()
+            .map(|addr| std::net::UdpSocket::bind(addr).unwrap())
+            .collect::<Vec<_>>();
+        replacement.close().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn close_reports_outstanding_raw_udp_socket() {
+        let endpoint = udp_incoming().await;
+        let addr = endpoint.local_addr().unwrap();
+        let sockets = endpoint.puncher().udp_sockets();
+        let error = endpoint.close().await.unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::AddrInUse);
+        drop(sockets);
+        let _rebound = UdpSocket::bind(addr).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn close_releases_ipv6_listeners_when_available() {
+        if UdpSocket::bind("[::1]:0").await.is_err() || TcpListener::bind("[::1]:0").await.is_err()
+        {
+            return;
+        }
+        let endpoint = TunnelIncoming::bind(
+            Config::new()
+                .enable_ipv6(true)
+                .bind_ipv4(std::net::Ipv4Addr::LOCALHOST)
+                .bind_ipv6(std::net::Ipv6Addr::LOCALHOST)
+                .udp_port(0)
+                .tcp_port(0),
+        )
+        .await
+        .unwrap();
+        let udp = endpoint.local_udp_ipv6_addr().unwrap();
+        let tcp = endpoint.local_tcp_ipv6_addr().unwrap();
+        let _puncher = endpoint.puncher();
+        endpoint.close().await.unwrap();
+        let _udp = UdpSocket::bind(udp).await.unwrap();
+        let _tcp = TcpListener::bind(tcp).await.unwrap();
     }
 
     #[tokio::test]
