@@ -1,4 +1,5 @@
 use bytes::{Bytes, BytesMut};
+use std::collections::HashMap;
 use std::io::{self, IoSlice};
 use std::net::SocketAddr;
 use std::sync::{Arc, Weak};
@@ -12,9 +13,11 @@ use tokio::net::{TcpStream, UdpSocket};
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio::task::JoinSet;
 
-use crate::endpoint::codec::InitCodec;
+use crate::endpoint::codec::{Decoder, Encoder, InitCodec};
 use crate::endpoint::tunnel::{Tunnel, UdpDispatcher};
 use crate::route_table::{Protocol, RouteKey};
+
+type TcpCodec = (Box<dyn Decoder>, Box<dyn Encoder>);
 
 #[cfg(all(feature = "sendmmsg", any(target_os = "linux", target_os = "android")))]
 const UDP_BATCH_SIZE: usize = 16;
@@ -36,6 +39,10 @@ struct SocketState {
     // None is a permanent shutdown. Task registration and socket creation
     // are serialized with taking this set.
     tasks: Option<JoinSet<()>>,
+    next_tcp_attempt: u64,
+    // A slot is reserved while dialing, then owns the connected stream
+    // until the caller registers its tunnel or either side cancels.
+    pending_tcp: HashMap<u64, Option<TcpStream>>,
 }
 
 impl SocketState {
@@ -59,6 +66,17 @@ pub struct SocketPool {
     init_codec: Box<dyn InitCodec>,
     /// Maximum UDP datagram size; receive buffers are sized by this.
     max_udp_datagram_size: usize,
+}
+
+struct PendingTcp<'a> {
+    pool: &'a SocketPool,
+    id: u64,
+}
+
+impl Drop for PendingTcp<'_> {
+    fn drop(&mut self) {
+        self.pool.state.write().pending_tcp.remove(&self.id);
+    }
 }
 
 impl SocketPool {
@@ -97,6 +115,8 @@ impl SocketPool {
                 assistant_udp: Vec::new(),
                 udp_refs,
                 tasks: Some(tasks),
+                next_tcp_attempt: 0,
+                pending_tcp: HashMap::new(),
             }),
             assistant_model_lock: parking_lot::Mutex::new(()),
             accept_tx,
@@ -216,25 +236,24 @@ impl SocketPool {
         self.assistant_model_lock.lock()
     }
 
-    /// Build one TCP tunnel with independent framing and lifetime.
-    fn tcp_tunnel(
+    /// A dual-stack listener reports IPv4 peers as IPv4-mapped addresses.
+    /// Canonicalize once so the codec, route key and remote address agree.
+    fn canonical_tcp_peer(peer_addr: SocketAddr) -> SocketAddr {
+        SocketAddr::new(peer_addr.ip().to_canonical(), peer_addr.port())
+    }
+
+    /// Register both halves under the same lock used for endpoint shutdown.
+    fn register_tcp_tunnel(
         &self,
-        stream: tokio::net::TcpStream,
+        tasks: &mut JoinSet<()>,
+        stream: TcpStream,
         peer_addr: SocketAddr,
-    ) -> io::Result<Tunnel> {
-        // A dual-stack listener reports IPv4 peers as IPv4-mapped `::ffff:`
-        // addresses. A TCP connection's peer address is fixed for its whole
-        // life, so canonicalizing once at the tunnel boundary keeps the route
-        // key and `remote_addr` consistent with the view of a real IPv4
-        // socket (and with the outbound punch path).
-        let peer_addr = SocketAddr::new(peer_addr.ip().to_canonical(), peer_addr.port());
+        (mut decoder, encoder): TcpCodec,
+    ) -> Tunnel {
         let (read_half, mut write_half) = stream.into_split();
         let local_addr = read_half
             .local_addr()
             .unwrap_or_else(|_| SocketAddr::from(([0, 0, 0, 0], 0)));
-        let (mut decoder, encoder) = self.init_codec.codec(peer_addr)?;
-        let mut state = self.state.write();
-        let tasks = state.tasks.as_mut().ok_or_else(Self::closed)?;
         Self::reap_finished(tasks);
         let (write_tx, mut write_rx) = mpsc::channel::<Bytes>(64);
         let (data_tx, data_rx) = mpsc::channel(64);
@@ -317,22 +336,27 @@ impl SocketPool {
             }
         });
 
-        Ok(Tunnel::tcp(
+        Tunnel::tcp(
             write_tx,
             RouteKey::new(Protocol::TCP, local_addr, peer_addr),
             data_rx,
             read_shutdown,
-        ))
+        )
     }
 
-    /// Publish an accepted or punched TCP connection to `TunnelIncoming::next`.
-    pub async fn publish_tcp(
-        &self,
-        stream: tokio::net::TcpStream,
-        peer_addr: SocketAddr,
-        initial_data: Option<Bytes>,
-    ) -> io::Result<()> {
-        let tunnel = self.tcp_tunnel(stream, peer_addr)?;
+    /// Publish an accepted TCP connection to `TunnelIncoming::next`.
+    pub async fn publish_tcp(&self, stream: TcpStream, peer_addr: SocketAddr) -> io::Result<()> {
+        let peer_addr = Self::canonical_tcp_peer(peer_addr);
+        let codec = self.init_codec.codec(peer_addr)?;
+        let tunnel = {
+            let mut state = self.state.write();
+            let tasks = state.tasks.as_mut().ok_or_else(Self::closed)?;
+            self.register_tcp_tunnel(tasks, stream, peer_addr, codec)
+        };
+        self.publish_tunnel(tunnel, None).await
+    }
+
+    async fn publish_tunnel(&self, tunnel: Tunnel, initial_data: Option<Bytes>) -> io::Result<()> {
         if let Some(data) = initial_data {
             tunnel.send(data).await?;
         }
@@ -413,27 +437,84 @@ impl SocketPool {
         Ok(self.global_shutdown.subscribe())
     }
 
-    /// Track the TCP dial so close can abort and join it. Only the waiting
-    /// caller can turn the resulting stream into a tunnel.
-    pub(crate) async fn run_tcp_attempt(
-        &self,
+    /// Track the dial and keep the connected stream in the endpoint until
+    /// its caller can register the tunnel. The channel carries only status.
+    pub(crate) async fn connect_outgoing_tcp(
+        self: &Arc<Self>,
+        peer_addr: SocketAddr,
+        initial_data: Option<Bytes>,
         attempt: impl std::future::Future<Output = io::Result<TcpStream>> + Send + 'static,
-    ) -> io::Result<TcpStream> {
+    ) -> io::Result<()> {
         let (mut result_tx, result_rx) = oneshot::channel();
-        {
+        let pending = {
             let mut state = self.state.write();
-            let tasks = state.tasks.as_mut().ok_or_else(Self::closed)?;
+            let SocketState {
+                tasks,
+                pending_tcp,
+                next_tcp_attempt,
+                ..
+            } = &mut *state;
+            let tasks = tasks.as_mut().ok_or_else(Self::closed)?;
+            let id = *next_tcp_attempt;
+            *next_tcp_attempt = id
+                .checked_add(1)
+                .ok_or_else(|| io::Error::other("exhausted outgoing TCP attempt IDs"))?;
+            pending_tcp.insert(id, None);
             Self::reap_finished(tasks);
+            let pool = Arc::downgrade(self);
             tasks.spawn(async move {
                 tokio::select! {
                     biased;
-                    // Also stop when the caller drops or times out the attempt.
                     _ = result_tx.closed() => {}
-                    result = attempt => { let _ = result_tx.send(result); }
+                    result = attempt => {
+                        let result = result.and_then(|stream| {
+                            let pool = pool.upgrade().ok_or_else(Self::closed)?;
+                            let mut state = pool.state.write();
+                            let slot = state.pending_tcp.get_mut(&id).ok_or_else(Self::closed)?;
+                            *slot = Some(stream);
+                            Ok(())
+                        });
+                        let _ = result_tx.send(result);
+                    }
                 }
             });
-        }
-        result_rx.await.map_err(|_| Self::closed())?
+            PendingTcp { pool: self, id }
+        };
+        result_rx.await.map_err(|_| Self::closed())??;
+        self.ensure_open()?;
+        let peer_addr = Self::canonical_tcp_peer(peer_addr);
+        // User-defined codec factories run without the state lock. Keep the
+        // stream in the pool while they run so close need not wait for them.
+        let codec = self.init_codec.codec(peer_addr);
+        let tunnel = {
+            let mut state = self.state.write();
+            let SocketState {
+                tasks, pending_tcp, ..
+            } = &mut *state;
+            let tasks = tasks.as_mut().ok_or_else(Self::closed)?;
+            let codec = codec?;
+            let stream = pending_tcp
+                .remove(&pending.id)
+                .flatten()
+                .ok_or_else(Self::closed)?;
+            self.register_tcp_tunnel(tasks, stream, peer_addr, codec)
+        };
+        self.publish_tunnel(tunnel, initial_data).await
+    }
+
+    #[cfg(test)]
+    pub(super) async fn join_tcp_dial_for_test(&self) {
+        std::future::poll_fn(|cx| {
+            self.state
+                .write()
+                .tasks
+                .as_mut()
+                .unwrap()
+                .poll_join_next(cx)
+        })
+        .await
+        .expect("dial worker should be tracked")
+        .expect("dial worker should finish normally");
     }
 
     fn reap_finished(tasks: &mut JoinSet<()>) {
@@ -464,6 +545,7 @@ impl SocketPool {
         state.main_udp_v4 = None;
         state.main_udp_v6 = None;
         state.assistant_udp.clear();
+        state.pending_tcp.clear();
         Some((tasks, std::mem::take(&mut state.udp_refs)))
     }
 
@@ -1048,79 +1130,6 @@ async fn write_all_vectored(write: &mut OwnedWriteHalf, iov: &mut [IoSlice<'_>])
         }
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tcp_tests {
-    use super::*;
-    use crate::endpoint::{codec::BytesInitCodec, Config};
-    use crate::punch::Puncher;
-    use std::future::{poll_fn, Future};
-    use std::time::Duration;
-    use tokio::net::TcpListener;
-    use tokio::time::timeout;
-
-    #[tokio::test]
-    async fn dropping_connect_after_dial_does_not_publish_tunnel() {
-        let (accept_tx, mut accept_rx) = mpsc::channel(1);
-        let pool = Arc::new(SocketPool::new(
-            UdpSocket::bind("127.0.0.1:0").await.unwrap(),
-            None,
-            accept_tx,
-            Box::new(BytesInitCodec),
-            2048,
-        ));
-        let puncher = Puncher::new(pool.clone(), &Config::udp(0).enable_ipv6(false), 0);
-        let peer = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let mut connecting = Box::pin(puncher.connect_tcp(
-            peer.local_addr().unwrap(),
-            Some(Bytes::from_static(b"initial data")),
-        ));
-
-        // Start the dial without polling its receiver again. The only task
-        // that can finish here is the dial; the UDP workers stay running.
-        assert!(
-            poll_fn(|cx| std::task::Poll::Ready(connecting.as_mut().poll(cx)))
-                .await
-                .is_pending()
-        );
-        let joined = timeout(
-            Duration::from_secs(5),
-            poll_fn(|cx| {
-                pool.state
-                    .write()
-                    .tasks
-                    .as_mut()
-                    .unwrap()
-                    .poll_join_next(cx)
-            }),
-        )
-        .await
-        .expect("dial worker should finish")
-        .expect("dial worker should be tracked");
-        joined.unwrap();
-        let (mut stream, _) = timeout(Duration::from_secs(5), peer.accept())
-            .await
-            .unwrap()
-            .unwrap();
-
-        drop(connecting);
-        assert!(matches!(
-            accept_rx.try_recv(),
-            Err(mpsc::error::TryRecvError::Empty)
-        ));
-        // Dropping the caller also drops the stream, without sending the
-        // supplied initial data or leaving a tunnel task holding it open.
-        let mut bytes = [0; 1];
-        assert_eq!(
-            timeout(Duration::from_secs(5), stream.read(&mut bytes))
-                .await
-                .unwrap()
-                .unwrap(),
-            0,
-        );
-        pool.close().await.unwrap();
-    }
 }
 
 #[cfg(all(

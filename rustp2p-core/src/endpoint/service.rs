@@ -114,7 +114,8 @@ impl TunnelIncoming {
     /// Stops accepting tunnels and waits for the endpoint's internal workers
     /// to exit and release their TCP and UDP sockets.
     ///
-    /// This also cancels pending outgoing TCP attempts. Outstanding
+    /// This also cancels pending outgoing TCP attempts and closes
+    /// connected sockets not yet registered as tunnels. Outstanding
     /// `Puncher` or `Tunnel` handles do not keep the listeners open.
     ///
     /// The port-release guarantee covers sockets owned by the endpoint.
@@ -312,7 +313,7 @@ fn spawn_tcp_accept_loop(
                         log::warn!("TCP stream setup error for {peer_addr}: {e}");
                         continue;
                     }
-                    if let Err(e) = pool.publish_tcp(stream, peer_addr, None).await {
+                    if let Err(e) = pool.publish_tcp(stream, peer_addr).await {
                         if pool.ensure_open().is_err() {
                             break;
                         }
@@ -602,6 +603,161 @@ mod tests {
         );
     }
 
+    // Poll just enough to start the dial. This joins its worker without
+    // letting the caller consume the success notification.
+    async fn complete_outgoing_dial(
+        endpoint: &TunnelIncoming,
+        mut connecting: std::pin::Pin<&mut impl std::future::Future>,
+        peer: &TcpListener,
+    ) -> TcpStream {
+        let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+        assert!(connecting.as_mut().poll(&mut cx).is_pending());
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            endpoint.pool.join_tcp_dial_for_test(),
+        )
+        .await
+        .unwrap();
+        tokio::time::timeout(Duration::from_secs(5), peer.accept())
+            .await
+            .unwrap()
+            .unwrap()
+            .0
+    }
+
+    async fn assert_peer_eof(mut stream: TcpStream) {
+        let mut bytes = [0; 1];
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(5), stream.read(&mut bytes))
+                .await
+                .expect("peer should see EOF, even if the caller is still paused")
+                .unwrap(),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn dropping_connect_after_dial_does_not_publish_tunnel() {
+        let mut endpoint = udp_incoming().await;
+        let puncher = endpoint.puncher();
+        let peer = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut connecting = Box::pin(puncher.connect_tcp(
+            peer.local_addr().unwrap(),
+            Some(Bytes::from_static(b"initial data")),
+        ));
+        let stream = complete_outgoing_dial(&endpoint, connecting.as_mut(), &peer).await;
+
+        drop(connecting);
+        assert!(matches!(
+            endpoint.tunnel_rx.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        ));
+        assert_peer_eof(stream).await;
+        endpoint.close().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn close_reclaims_outgoing_tcp_before_caller_resumes() {
+        let endpoint = udp_incoming().await;
+        let puncher = endpoint.puncher();
+        let peer = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut connecting = Box::pin(puncher.connect_tcp(peer.local_addr().unwrap(), None));
+        let stream = complete_outgoing_dial(&endpoint, connecting.as_mut(), &peer).await;
+
+        endpoint.close().await.unwrap();
+        assert_peer_eof(stream).await;
+        // Only now let the caller resume. The earlier dial success cannot
+        // produce a tunnel after the endpoint closed.
+        assert_eq!(
+            connecting.await.unwrap_err().kind(),
+            std::io::ErrorKind::BrokenPipe
+        );
+    }
+
+    #[tokio::test]
+    async fn outgoing_tcp_handoff_registers_the_connection_for_close() {
+        let mut endpoint = udp_incoming().await;
+        let puncher = endpoint.puncher();
+        let peer = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = peer.local_addr().unwrap();
+        let data = Bytes::from_static(b"hello");
+        let mut connecting = Box::pin(puncher.connect_tcp(addr, Some(data.clone())));
+        let mut stream = complete_outgoing_dial(&endpoint, connecting.as_mut(), &peer).await;
+
+        connecting.await.unwrap();
+        let tunnel = tokio::time::timeout(Duration::from_secs(5), endpoint.next())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(tunnel.remote_addr(), addr);
+        let mut frame = [0; 9]; // four-byte length prefix, then "hello"
+        tokio::time::timeout(Duration::from_secs(5), stream.read_exact(&mut frame))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(&frame[..4], &5u32.to_be_bytes());
+        assert_eq!(&frame[4..], data.as_ref());
+
+        endpoint.close().await.unwrap();
+        assert_peer_eof(stream).await;
+        drop(tunnel);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn close_reclaims_outgoing_tcp_during_codec_init() {
+        use crate::endpoint::codec::{BytesInitCodec, Decoder, Encoder, InitCodec};
+        use std::io;
+        use std::sync::Arc;
+
+        #[derive(Clone)]
+        struct PausedCodec {
+            entered: Arc<parking_lot::Mutex<Option<tokio::sync::oneshot::Sender<()>>>>,
+            resume: Arc<parking_lot::Mutex<std::sync::mpsc::Receiver<()>>>,
+        }
+
+        impl InitCodec for PausedCodec {
+            fn codec(&self, peer: SocketAddr) -> io::Result<(Box<dyn Decoder>, Box<dyn Encoder>)> {
+                self.entered.lock().take().unwrap().send(()).unwrap();
+                self.resume
+                    .lock()
+                    .recv_timeout(Duration::from_secs(10))
+                    .unwrap();
+                BytesInitCodec.codec(peer)
+            }
+        }
+
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (resume_tx, resume_rx) = std::sync::mpsc::channel();
+        let endpoint = TunnelIncoming::bind(Config::udp(0).enable_ipv6(false).tcp_codec(Box::new(
+            PausedCodec {
+                entered: Arc::new(parking_lot::Mutex::new(Some(entered_tx))),
+                resume: Arc::new(parking_lot::Mutex::new(resume_rx)),
+            },
+        )))
+        .await
+        .unwrap();
+        let peer = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = peer.local_addr().unwrap();
+        let puncher = endpoint.puncher();
+        let connecting = tokio::spawn(async move { puncher.connect_tcp(addr, None).await });
+        tokio::time::timeout(Duration::from_secs(5), entered_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        let (stream, _) = tokio::time::timeout(Duration::from_secs(5), peer.accept())
+            .await
+            .unwrap()
+            .unwrap();
+
+        endpoint.close().await.unwrap();
+        assert_peer_eof(stream).await;
+        resume_tx.send(()).unwrap();
+        assert_eq!(
+            connecting.await.unwrap().unwrap_err().kind(),
+            io::ErrorKind::BrokenPipe
+        );
+    }
+
     #[tokio::test]
     async fn close_cancels_and_joins_in_flight_tcp_attempt() {
         let endpoint = udp_incoming().await;
@@ -609,7 +765,7 @@ mod tests {
         let (started_tx, started_rx) = tokio::sync::oneshot::channel();
         let (resource, mut released) = tokio::sync::oneshot::channel::<()>();
         let connecting = tokio::spawn(async move {
-            pool.run_tcp_attempt(async move {
+            pool.connect_outgoing_tcp(SocketAddr::from(([127, 0, 0, 1], 0)), None, async move {
                 let _resource = resource;
                 let _ = started_tx.send(());
                 std::future::pending().await

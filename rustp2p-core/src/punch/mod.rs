@@ -171,9 +171,8 @@ impl Puncher {
         ttl: Option<u8>,
     ) -> io::Result<()> {
         let puncher = self.clone();
-        let stream = self
-            .pool
-            .run_tcp_attempt(async move {
+        self.pool
+            .connect_outgoing_tcp(addr, initial_data, async move {
                 crate::socket::connect_tcp(
                     addr,
                     Some(puncher.tcp_bind_addr(addr, 0)?),
@@ -182,11 +181,7 @@ impl Puncher {
                 )
                 .await
             })
-            .await?;
-        // The tracked worker only connects. If this future is dropped,
-        // the result is discarded instead of creating or publishing a tunnel.
-        self.pool.ensure_open()?;
-        self.pool.publish_tcp(stream, addr, initial_data).await
+            .await
     }
 
     /// Gets NAT information using the STUN and mapping configuration captured
