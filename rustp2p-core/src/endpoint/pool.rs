@@ -1,4 +1,5 @@
 use bytes::{Bytes, BytesMut};
+use std::collections::HashMap;
 use std::io::{self, IoSlice};
 use std::net::SocketAddr;
 use std::sync::{Arc, Weak};
@@ -8,12 +9,15 @@ use std::{mem, os::fd::AsRawFd};
 use tokio::io::Interest;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::OwnedWriteHalf;
-use tokio::net::UdpSocket;
-use tokio::sync::{broadcast, mpsc};
+use tokio::net::{TcpStream, UdpSocket};
+use tokio::sync::{broadcast, mpsc, oneshot};
+use tokio::task::JoinSet;
 
-use crate::endpoint::codec::InitCodec;
+use crate::endpoint::codec::{Decoder, Encoder, InitCodec};
 use crate::endpoint::tunnel::{Tunnel, UdpDispatcher};
 use crate::route_table::{Protocol, RouteKey};
+
+type TcpCodec = (Box<dyn Decoder>, Box<dyn Encoder>);
 
 #[cfg(all(feature = "sendmmsg", any(target_os = "linux", target_os = "android")))]
 const UDP_BATCH_SIZE: usize = 16;
@@ -25,20 +29,36 @@ struct UdpEntry {
     _shutdown: broadcast::Sender<()>,
 }
 
-/// A shared pool of sockets. Owns all Arcs.
-///
-/// The main IPv4 UDP socket is fixed at construction time and never changes,
-/// so it needs no lock. A main IPv6 UDP socket is optionally bound when IPv6
-/// is enabled and supported. Assistant UDP sockets are created and removed
-/// dynamically (e.g. symmetric NAT probing) and live in a locked list.
-pub struct SocketPool {
-    main_udp_v4: Arc<UdpSocket>,
+struct SocketState {
+    main_udp_v4: Option<Arc<UdpSocket>>,
     main_udp_v6: Option<Arc<UdpSocket>>,
-    /// Serializes whole assistant-socket model transitions. The list's own
-    /// lock only protects individual reads and writes and cannot make a
-    /// count-then-add sequence atomic.
+    assistant_udp: Vec<UdpEntry>,
+    // Tracks the original Arcs, including retired assistants. It does not
+    // track sockets extracted from an Arc or independently duplicated.
+    udp_refs: Vec<Weak<UdpSocket>>,
+    // None is a permanent shutdown. Task registration and socket creation
+    // are serialized with taking this set.
+    tasks: Option<JoinSet<()>>,
+    next_tcp_attempt: u64,
+    // A slot is reserved while dialing, then owns the connected stream
+    // until the caller registers its tunnel or either side cancels.
+    pending_tcp: HashMap<u64, Option<TcpStream>>,
+}
+
+impl SocketState {
+    fn udp_sockets(&self) -> impl Iterator<Item = &Arc<UdpSocket>> {
+        self.main_udp_v4
+            .iter()
+            .chain(&self.main_udp_v6)
+            .chain(self.assistant_udp.iter().map(|entry| &entry.socket))
+    }
+}
+
+/// A shared pool of sockets. Retaining a Puncher does not keep sockets alive
+/// after the endpoint shuts down.
+pub struct SocketPool {
+    state: parking_lot::RwLock<SocketState>,
     assistant_model_lock: parking_lot::Mutex<()>,
-    assistant_udp: parking_lot::RwLock<Vec<UdpEntry>>,
     accept_tx: mpsc::Sender<Tunnel>,
     udp_dispatcher: Arc<UdpDispatcher>,
     /// Global shutdown - kills ALL tasks (main + sub)
@@ -46,6 +66,17 @@ pub struct SocketPool {
     init_codec: Box<dyn InitCodec>,
     /// Maximum UDP datagram size; receive buffers are sized by this.
     max_udp_datagram_size: usize,
+}
+
+struct PendingTcp<'a> {
+    pool: &'a SocketPool,
+    id: u64,
+}
+
+impl Drop for PendingTcp<'_> {
+    fn drop(&mut self) {
+        self.pool.state.write().pending_tcp.remove(&self.id);
+    }
 }
 
 impl SocketPool {
@@ -62,30 +93,32 @@ impl SocketPool {
         let udp_dispatcher = UdpDispatcher::new();
 
         let main_udp_v4 = Arc::new(main_udp_v4);
-        Self::spawn_udp_tasks(
-            main_udp_v4.clone(),
-            &accept_tx,
-            &udp_dispatcher,
-            &global_shutdown,
-            max_udp_datagram_size,
-        );
-        let main_udp_v6 = main_udp_v6.map(|s| {
-            let s = Arc::new(s);
+        let main_udp_v6 = main_udp_v6.map(Arc::new);
+        let mut tasks = JoinSet::new();
+        let mut udp_refs = Vec::new();
+        for socket in std::iter::once(&main_udp_v4).chain(main_udp_v6.iter()) {
+            udp_refs.push(Arc::downgrade(socket));
             Self::spawn_udp_tasks(
-                s.clone(),
+                &mut tasks,
+                socket.clone(),
                 &accept_tx,
                 &udp_dispatcher,
                 &global_shutdown,
                 max_udp_datagram_size,
             );
-            s
-        });
+        }
 
         Self {
-            main_udp_v4,
-            main_udp_v6,
+            state: parking_lot::RwLock::new(SocketState {
+                main_udp_v4: Some(main_udp_v4),
+                main_udp_v6,
+                assistant_udp: Vec::new(),
+                udp_refs,
+                tasks: Some(tasks),
+                next_tcp_attempt: 0,
+                pending_tcp: HashMap::new(),
+            }),
             assistant_model_lock: parking_lot::Mutex::new(()),
-            assistant_udp: parking_lot::RwLock::new(Vec::new()),
             accept_tx,
             udp_dispatcher,
             global_shutdown,
@@ -96,6 +129,7 @@ impl SocketPool {
 
     /// Spawn the read and write tasks for one UDP socket.
     fn spawn_udp_tasks(
+        tasks: &mut JoinSet<()>,
         socket: Arc<UdpSocket>,
         accept_tx: &mpsc::Sender<Tunnel>,
         udp_dispatcher: &Arc<UdpDispatcher>,
@@ -109,7 +143,7 @@ impl SocketPool {
         let accept_tx = accept_tx.clone();
         let udp_dispatcher = udp_dispatcher.clone();
         let s = socket.clone();
-        tokio::spawn(async move {
+        tasks.spawn(async move {
             Self::run_udp_reader(
                 s,
                 write_tx,
@@ -125,7 +159,7 @@ impl SocketPool {
         let mut global_shutdown_rx = global_shutdown.subscribe();
         let mut socket_shutdown_rx = global_shutdown.subscribe();
         let s = socket.clone();
-        tokio::spawn(async move {
+        tasks.spawn(async move {
             Self::run_udp_writer(
                 s,
                 write_rx,
@@ -138,7 +172,10 @@ impl SocketPool {
 
     /// Add an assistant UDP socket (for symmetric NAT probing).
     /// Its reader task exits when the assistant socket is removed.
-    pub fn add_assistant_udp(&self, socket: UdpSocket) -> Weak<UdpSocket> {
+    pub fn add_assistant_udp(&self, socket: UdpSocket) -> io::Result<()> {
+        let mut state = self.state.write();
+        let tasks = state.tasks.as_mut().ok_or_else(Self::closed)?;
+        Self::reap_finished(tasks);
         let socket = Arc::new(socket);
         let weak = Arc::downgrade(&socket);
 
@@ -151,7 +188,7 @@ impl SocketPool {
         let s = socket.clone();
         let max_udp_datagram_size = self.max_udp_datagram_size;
 
-        tokio::spawn(async move {
+        tasks.spawn(async move {
             Self::run_udp_reader(
                 s,
                 write_tx,
@@ -167,7 +204,7 @@ impl SocketPool {
         let mut writer_shutdown_rx = socket_shutdown.subscribe();
         let mut writer_global_shutdown_rx = self.global_shutdown.subscribe();
         let s = socket.clone();
-        tokio::spawn(async move {
+        tasks.spawn(async move {
             Self::run_udp_writer(
                 s,
                 write_rx,
@@ -182,18 +219,15 @@ impl SocketPool {
             _shutdown: socket_shutdown,
         };
 
-        let mut sockets = self.assistant_udp.write();
-        sockets.push(entry);
-        drop(sockets);
-
-        weak
+        state.assistant_udp.push(entry);
+        state.udp_refs.retain(|socket| socket.strong_count() != 0);
+        state.udp_refs.push(weak);
+        Ok(())
     }
 
-    /// Clean all assistant UDP sockets and cancel their reader tasks.
+    /// Drop the per-socket shutdown senders to stop assistant tasks.
     pub fn clean_assistant_udp(&self) {
-        let mut sockets = self.assistant_udp.write();
-        // Dropping UdpEntry drops _shutdown Sender, reader task exits.
-        sockets.clear();
+        self.state.write().assistant_udp.clear();
     }
 
     /// Locks a complete assistant-socket model transition across all Puncher
@@ -202,23 +236,25 @@ impl SocketPool {
         self.assistant_model_lock.lock()
     }
 
-    /// Build one TCP tunnel with independent framing and lifetime.
-    fn tcp_tunnel(
+    /// A dual-stack listener reports IPv4 peers as IPv4-mapped addresses.
+    /// Canonicalize once so the codec, route key and remote address agree.
+    fn canonical_tcp_peer(peer_addr: SocketAddr) -> SocketAddr {
+        SocketAddr::new(peer_addr.ip().to_canonical(), peer_addr.port())
+    }
+
+    /// Register both halves under the same lock used for endpoint shutdown.
+    fn register_tcp_tunnel(
         &self,
-        stream: tokio::net::TcpStream,
+        tasks: &mut JoinSet<()>,
+        stream: TcpStream,
         peer_addr: SocketAddr,
-    ) -> io::Result<Tunnel> {
-        // A dual-stack listener reports IPv4 peers as IPv4-mapped `::ffff:`
-        // addresses. A TCP connection's peer address is fixed for its whole
-        // life, so canonicalizing once at the tunnel boundary keeps the route
-        // key and `remote_addr` consistent with the view of a real IPv4
-        // socket (and with the outbound punch path).
-        let peer_addr = SocketAddr::new(peer_addr.ip().to_canonical(), peer_addr.port());
+        (mut decoder, encoder): TcpCodec,
+    ) -> Tunnel {
         let (read_half, mut write_half) = stream.into_split();
         let local_addr = read_half
             .local_addr()
             .unwrap_or_else(|_| SocketAddr::from(([0, 0, 0, 0], 0)));
-        let (mut decoder, encoder) = self.init_codec.codec(peer_addr)?;
+        Self::reap_finished(tasks);
         let (write_tx, mut write_rx) = mpsc::channel::<Bytes>(64);
         let (data_tx, data_rx) = mpsc::channel(64);
         let (read_shutdown, _) = broadcast::channel(1);
@@ -226,7 +262,7 @@ impl SocketPool {
         let mut read_tunnel_shutdown = read_shutdown.subscribe();
 
         // Read loop using Decoder
-        tokio::spawn(async move {
+        tasks.spawn(async move {
             let mut read = read_half;
             let mut buf = BytesMut::with_capacity(64 * 1024);
             'read: loop {
@@ -270,7 +306,7 @@ impl SocketPool {
 
         // Write loop using Encoder
         let mut write_global_shutdown = self.global_shutdown.subscribe();
-        tokio::spawn(async move {
+        tasks.spawn(async move {
             let mut encoder = encoder;
             loop {
                 tokio::select! {
@@ -300,22 +336,27 @@ impl SocketPool {
             }
         });
 
-        Ok(Tunnel::tcp(
+        Tunnel::tcp(
             write_tx,
             RouteKey::new(Protocol::TCP, local_addr, peer_addr),
             data_rx,
             read_shutdown,
-        ))
+        )
     }
 
-    /// Publish an accepted or punched TCP connection to `TunnelIncoming::next`.
-    pub async fn publish_tcp(
-        &self,
-        stream: tokio::net::TcpStream,
-        peer_addr: SocketAddr,
-        initial_data: Option<Bytes>,
-    ) -> io::Result<()> {
-        let tunnel = self.tcp_tunnel(stream, peer_addr)?;
+    /// Publish an accepted TCP connection to `TunnelIncoming::next`.
+    pub async fn publish_tcp(&self, stream: TcpStream, peer_addr: SocketAddr) -> io::Result<()> {
+        let peer_addr = Self::canonical_tcp_peer(peer_addr);
+        let codec = self.init_codec.codec(peer_addr)?;
+        let tunnel = {
+            let mut state = self.state.write();
+            let tasks = state.tasks.as_mut().ok_or_else(Self::closed)?;
+            self.register_tcp_tunnel(tasks, stream, peer_addr, codec)
+        };
+        self.publish_tunnel(tunnel, None).await
+    }
+
+    async fn publish_tunnel(&self, tunnel: Tunnel, initial_data: Option<Bytes>) -> io::Result<()> {
         if let Some(data) = initial_data {
             tunnel.send(data).await?;
         }
@@ -331,8 +372,8 @@ impl SocketPool {
         if addr.is_ipv6() {
             return Ok(());
         }
-        let sockets = self.assistant_udp.read();
-        for entry in sockets.iter() {
+        let state = self.state.read();
+        for entry in &state.assistant_udp {
             // Best effort per socket, mirroring try_send_via_all: a transient
             // failure on one assistant must not skip the remaining ones,
             // punch probes need the full coverage.
@@ -345,65 +386,221 @@ impl SocketPool {
 
     /// Send data to an address via the matching family main UDP socket.
     pub fn send_to(&self, buf: &[u8], addr: SocketAddr) -> io::Result<()> {
-        if addr.is_ipv4() {
-            return self
-                .main_udp_v4
-                .try_send_to(buf, addr)
-                .map(|_| ())
-                .map_err(|e| io::Error::other(format!("send failed: {e}")));
-        }
-        let v6 = self
-            .main_udp_v6
-            .as_ref()
-            .ok_or_else(|| io::Error::other("IPv6 main socket not available"))?;
-        v6.try_send_to(buf, addr)
+        let state = self.state.read();
+        let v4 = state.main_udp_v4.as_ref().ok_or_else(Self::closed)?;
+        let socket = if addr.is_ipv4() {
+            v4
+        } else {
+            state
+                .main_udp_v6
+                .as_ref()
+                .ok_or_else(|| io::Error::other("IPv6 main socket not available"))?
+        };
+        socket
+            .try_send_to(buf, addr)
             .map(|_| ())
             .map_err(|e| io::Error::other(format!("send failed: {e}")))
     }
 
-    /// Send data through the UDP sockets matching the target's address family:
-    /// the matching main socket, plus the (IPv4-only) assistant sockets for
-    /// IPv4 targets. Sockets of the other family are skipped, so no doomed
-    /// syscalls are made.
+    /// Best-effort send through the matching main UDP socket and assistants.
     pub fn try_send_via_all(&self, buf: &[u8], addr: SocketAddr) {
+        let state = self.state.read();
         if addr.is_ipv4() {
-            let _ = self.main_udp_v4.try_send_to(buf, addr);
-            let sockets = self.assistant_udp.read();
-            for entry in sockets.iter() {
+            if let Some(v4) = &state.main_udp_v4 {
+                let _ = v4.try_send_to(buf, addr);
+            }
+            for entry in &state.assistant_udp {
                 let _ = entry.socket.try_send_to(buf, addr);
             }
-        } else if let Some(v6) = &self.main_udp_v6 {
+        } else if let Some(v6) = &state.main_udp_v6 {
             let _ = v6.try_send_to(buf, addr);
         }
     }
 
-    /// Shutdown all tasks (program exit).
-    pub fn shutdown(&self) {
-        self.udp_dispatcher.clear();
+    fn closed() -> io::Error {
+        io::Error::new(io::ErrorKind::BrokenPipe, "tunnel endpoint is closed")
+    }
+
+    pub(crate) fn ensure_open(&self) -> io::Result<()> {
+        self.state
+            .read()
+            .tasks
+            .as_ref()
+            .map(|_| ())
+            .ok_or_else(Self::closed)
+    }
+
+    pub(crate) fn subscribe_shutdown(&self) -> io::Result<broadcast::Receiver<()>> {
+        // Subscribe while holding the same lock used to publish shutdown.
+        let state = self.state.read();
+        state.tasks.as_ref().ok_or_else(Self::closed)?;
+        Ok(self.global_shutdown.subscribe())
+    }
+
+    /// Track the dial and keep the connected stream in the endpoint until
+    /// its caller can register the tunnel. The channel carries only status.
+    pub(crate) async fn connect_outgoing_tcp(
+        self: &Arc<Self>,
+        peer_addr: SocketAddr,
+        initial_data: Option<Bytes>,
+        attempt: impl std::future::Future<Output = io::Result<TcpStream>> + Send + 'static,
+    ) -> io::Result<()> {
+        let (mut result_tx, result_rx) = oneshot::channel();
+        let pending = {
+            let mut state = self.state.write();
+            let SocketState {
+                tasks,
+                pending_tcp,
+                next_tcp_attempt,
+                ..
+            } = &mut *state;
+            let tasks = tasks.as_mut().ok_or_else(Self::closed)?;
+            let id = *next_tcp_attempt;
+            *next_tcp_attempt = id
+                .checked_add(1)
+                .ok_or_else(|| io::Error::other("exhausted outgoing TCP attempt IDs"))?;
+            pending_tcp.insert(id, None);
+            Self::reap_finished(tasks);
+            let pool = Arc::downgrade(self);
+            tasks.spawn(async move {
+                tokio::select! {
+                    biased;
+                    _ = result_tx.closed() => {}
+                    result = attempt => {
+                        let result = result.and_then(|stream| {
+                            let pool = pool.upgrade().ok_or_else(Self::closed)?;
+                            let mut state = pool.state.write();
+                            let slot = state.pending_tcp.get_mut(&id).ok_or_else(Self::closed)?;
+                            *slot = Some(stream);
+                            Ok(())
+                        });
+                        let _ = result_tx.send(result);
+                    }
+                }
+            });
+            PendingTcp { pool: self, id }
+        };
+        result_rx.await.map_err(|_| Self::closed())??;
+        self.ensure_open()?;
+        let peer_addr = Self::canonical_tcp_peer(peer_addr);
+        // User-defined codec factories run without the state lock. Keep the
+        // stream in the pool while they run so close need not wait for them.
+        let codec = self.init_codec.codec(peer_addr);
+        let tunnel = {
+            let mut state = self.state.write();
+            let SocketState {
+                tasks, pending_tcp, ..
+            } = &mut *state;
+            let tasks = tasks.as_mut().ok_or_else(Self::closed)?;
+            let codec = codec?;
+            let stream = pending_tcp
+                .remove(&pending.id)
+                .flatten()
+                .ok_or_else(Self::closed)?;
+            self.register_tcp_tunnel(tasks, stream, peer_addr, codec)
+        };
+        self.publish_tunnel(tunnel, initial_data).await
+    }
+
+    #[cfg(test)]
+    pub(super) async fn join_tcp_dial_for_test(&self) {
+        std::future::poll_fn(|cx| {
+            self.state
+                .write()
+                .tasks
+                .as_mut()
+                .unwrap()
+                .poll_join_next(cx)
+        })
+        .await
+        .expect("dial worker should be tracked")
+        .expect("dial worker should finish normally");
+    }
+
+    fn reap_finished(tasks: &mut JoinSet<()>) {
+        while let Some(result) = tasks.try_join_next() {
+            if let Err(error) = result {
+                log::debug!("endpoint worker exited: {error}");
+            }
+        }
+    }
+
+    pub(crate) fn spawn_listener(
+        &self,
+        worker: impl std::future::Future<Output = ()> + Send + 'static,
+    ) {
+        if let Some(tasks) = self.state.write().tasks.as_mut() {
+            tasks.spawn(worker);
+        }
+    }
+
+    /// Prevent new tasks, drop the pool's socket references and abort workers.
+    /// Dropping the returned set is sufficient for non-blocking Drop.
+    fn begin_shutdown(&self) -> Option<(JoinSet<()>, Vec<Weak<UdpSocket>>)> {
+        let _model_guard = self.lock_assistant_model();
+        let mut state = self.state.write();
+        let mut tasks = state.tasks.take()?;
         let _ = self.global_shutdown.send(());
+        tasks.abort_all();
+        state.main_udp_v4 = None;
+        state.main_udp_v6 = None;
+        state.assistant_udp.clear();
+        state.pending_tcp.clear();
+        Some((tasks, std::mem::take(&mut state.udp_refs)))
     }
 
-    /// Get a shutdown receiver to listen for shutdown signals.
-    pub fn shutdown_rx(&self) -> broadcast::Receiver<()> {
-        self.global_shutdown.subscribe()
+    pub(crate) fn shutdown(&self) {
+        if self.begin_shutdown().is_some() {
+            self.udp_dispatcher.clear();
+        }
     }
 
-    /// Get local address of the main IPv4 UDP socket.
+    pub(crate) async fn close(&self) -> io::Result<()> {
+        let Some((mut tasks, refs)) = self.begin_shutdown() else {
+            return Ok(());
+        };
+        // Clear on cancellation as well as on successful completion.
+        struct ClearRoutes<'a>(&'a UdpDispatcher);
+        impl Drop for ClearRoutes<'_> {
+            fn drop(&mut self) {
+                self.0.clear();
+            }
+        }
+        let _clear = ClearRoutes(&self.udp_dispatcher);
+        tasks.shutdown().await;
+        if refs.iter().any(|socket| socket.strong_count() != 0) {
+            return Err(io::Error::new(
+                io::ErrorKind::AddrInUse,
+                "endpoint closed, but a shared Arc<UdpSocket> still holds a port",
+            ));
+        }
+        Ok(())
+    }
+
     pub fn local_addr(&self) -> io::Result<SocketAddr> {
-        self.main_udp_v4.local_addr()
+        self.state
+            .read()
+            .main_udp_v4
+            .as_ref()
+            .ok_or_else(Self::closed)?
+            .local_addr()
     }
 
     /// Get all UDP sockets: main IPv4, main IPv6 (if present), then assistants.
     pub fn udp_sockets(&self) -> Vec<Arc<UdpSocket>> {
-        let mut sockets = vec![self.main_udp_v4.clone()];
-        sockets.extend(self.main_udp_v6.iter().cloned());
-        sockets.extend(self.assistant_udp.read().iter().map(|e| e.socket.clone()));
-        sockets
+        self.state.read().udp_sockets().cloned().collect()
     }
 
-    /// Get the number of assistant sockets.
+    pub fn local_udp_ports(&self) -> Vec<u16> {
+        self.state
+            .read()
+            .udp_sockets()
+            .filter_map(|socket| socket.local_addr().ok().map(|addr| addr.port()))
+            .collect()
+    }
+
     pub fn assistant_count(&self) -> usize {
-        self.assistant_udp.read().len()
+        self.state.read().assistant_udp.len()
     }
 
     async fn run_udp_reader(
@@ -718,27 +915,27 @@ impl SocketPool {
     }
 }
 
+#[cfg(any(target_os = "linux", target_os = "android"))]
 fn is_recoverable_udp_recv_error(error: &io::Error) -> bool {
-    if error.kind() == io::ErrorKind::Interrupted {
-        return true;
-    }
+    error.kind() == io::ErrorKind::Interrupted
+        || matches!(
+            error.raw_os_error(),
+            Some(
+                libc::ECONNREFUSED
+                    | libc::ECONNRESET
+                    | libc::ECONNABORTED
+                    | libc::EHOSTUNREACH
+                    | libc::ENETUNREACH
+                    | libc::EADDRNOTAVAIL
+                    | libc::EPROTO
+                    | libc::EMSGSIZE
+            )
+        )
+}
 
-    #[cfg(any(target_os = "linux", target_os = "android"))]
-    if let Some(code) = error.raw_os_error() {
-        return matches!(
-            code,
-            libc::ECONNREFUSED
-                | libc::ECONNRESET
-                | libc::ECONNABORTED
-                | libc::EHOSTUNREACH
-                | libc::ENETUNREACH
-                | libc::EADDRNOTAVAIL
-                | libc::EPROTO
-                | libc::EMSGSIZE
-        );
-    }
-
-    false
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+fn is_recoverable_udp_recv_error(error: &io::Error) -> bool {
+    error.kind() == io::ErrorKind::Interrupted
 }
 
 #[cfg(all(feature = "sendmmsg", any(target_os = "linux", target_os = "android")))]
