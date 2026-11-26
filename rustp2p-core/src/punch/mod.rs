@@ -138,9 +138,11 @@ impl Puncher {
 
     /// Returns all UDP sockets: main IPv4, optional main IPv6, then assistants.
     ///
-    /// These are owning socket handles. Drop them before calling
+    /// These are owning socket handles. Drop them (and any underlying socket
+    /// extracted or duplicated from them) before calling
     /// [`TunnelIncoming::close`](crate::endpoint::TunnelIncoming::close)
-    /// if the listening ports need to be reused.
+    /// if the ports need to be reused. The endpoint cannot track or close
+    /// sockets whose ownership has been taken out of the returned Arcs.
     pub fn udp_sockets(&self) -> Vec<Arc<tokio::net::UdpSocket>> {
         self.pool.udp_sockets()
     }
@@ -157,15 +159,28 @@ impl Puncher {
         addr: SocketAddr,
         initial_data: Option<Bytes>,
     ) -> io::Result<()> {
-        self.pool.ensure_open()?;
-        let stream = crate::socket::connect_tcp(
-            addr,
-            Some(self.tcp_bind_addr(addr, 0)?),
-            self.nat_config.default_interface.as_ref(),
-            None,
-        )
-        .await?;
-        self.pool.publish_tcp(stream, addr, initial_data).await
+        self.connect_tcp_inner(addr, initial_data, None).await
+    }
+
+    async fn connect_tcp_inner(
+        &self,
+        addr: SocketAddr,
+        initial_data: Option<Bytes>,
+        ttl: Option<u8>,
+    ) -> io::Result<()> {
+        let puncher = self.clone();
+        self.pool
+            .run_tcp_attempt(async move {
+                let stream = crate::socket::connect_tcp(
+                    addr,
+                    Some(puncher.tcp_bind_addr(addr, 0)?),
+                    puncher.nat_config.default_interface.as_ref(),
+                    ttl,
+                )
+                .await?;
+                puncher.pool.publish_tcp(stream, addr, initial_data).await
+            })
+            .await
     }
 
     /// Gets NAT information using the STUN and mapping configuration captured
@@ -321,6 +336,7 @@ impl Puncher {
     /// Note: like [`Puncher::punch_now`], the returned future is
     /// long-running; spawn it instead of awaiting it inline.
     pub async fn punch(&self, buf: Bytes, punch_info: PunchInfo) -> io::Result<()> {
+        self.pool.ensure_open()?;
         if !self.need_punch(&punch_info) {
             return Ok(());
         }
@@ -341,6 +357,15 @@ impl Puncher {
         udp_buf: Bytes,
         punch_info: PunchInfo,
     ) -> io::Result<()> {
+        let mut shutdown = self.pool.subscribe_shutdown()?;
+        tokio::select! {
+            biased;
+            _ = shutdown.recv() => self.pool.ensure_open(),
+            () = self.punch_round(tcp_buf, udp_buf, punch_info) => self.pool.ensure_open(),
+        }
+    }
+
+    async fn punch_round(&self, tcp_buf: Option<Bytes>, udp_buf: Bytes, punch_info: PunchInfo) {
         let peer = punch_info
             .peer_nat_info
             .flag()
@@ -379,55 +404,52 @@ impl Puncher {
             .await;
 
         // TCP punch
-        let mut tcp_tasks = Vec::new();
+        let mut tcp_tasks = tokio::task::JoinSet::new();
         let tcp_buf_owned = tcp_buf;
         if !peer_nat_info.mapping_tcp_addr.is_empty() {
             for addr in &peer_nat_info.mapping_tcp_addr {
                 let buf = tcp_buf_owned.clone();
                 let a = *addr;
                 let puncher = self.clone();
-                tcp_tasks.push(tokio::spawn(async move {
+                tcp_tasks.spawn(async move {
                     puncher
                         .connect_tcp_punch(buf, a, ttl, Duration::from_secs(3))
                         .await;
-                }));
+                });
             }
         }
         if punch_model.is_match(PunchPolicy::IPv4Tcp) {
             if let Some(addr) = peer_nat_info.local_ipv4_tcp() {
                 let buf = tcp_buf_owned.clone();
                 let puncher = self.clone();
-                tcp_tasks.push(tokio::spawn(async move {
+                tcp_tasks.spawn(async move {
                     puncher
                         .connect_tcp_punch(buf, addr, ttl, Duration::from_millis(100))
                         .await;
-                }));
+                });
             }
             for addr in peer_nat_info.public_ipv4_tcp() {
                 let buf = tcp_buf_owned.clone();
                 let puncher = self.clone();
-                tcp_tasks.push(tokio::spawn(async move {
+                tcp_tasks.spawn(async move {
                     puncher
                         .connect_tcp_punch(buf, addr, ttl, Duration::from_secs(3))
                         .await;
-                }));
+                });
             }
         }
         if punch_model.is_match(PunchPolicy::IPv6Tcp) {
             if let Some(addr) = peer_nat_info.ipv6_tcp_addr() {
                 let buf = tcp_buf_owned.clone();
                 let puncher = self.clone();
-                tcp_tasks.push(tokio::spawn(async move {
+                tcp_tasks.spawn(async move {
                     puncher
                         .connect_tcp_punch(buf, addr, ttl, Duration::from_secs(3))
                         .await;
-                }));
+                });
             }
         }
-        for task in tcp_tasks {
-            let _ = task.await;
-        }
-        Ok(())
+        while tcp_tasks.join_next().await.is_some() {}
     }
 
     async fn connect_tcp_punch(
@@ -437,22 +459,13 @@ impl Puncher {
         ttl: Option<u8>,
         timeout: Duration,
     ) {
-        match tokio::time::timeout(timeout, async {
-            let stream = crate::socket::connect_tcp(
-                addr,
-                Some(self.tcp_bind_addr(addr, 0)?),
-                self.nat_config.default_interface.as_ref(),
-                ttl,
-            )
-            .await?;
-            let initial_data = buf;
-            self.pool.publish_tcp(stream, addr, initial_data).await
-        })
-        .await
-        {
+        match tokio::time::timeout(timeout, self.connect_tcp_inner(addr, buf, ttl)).await {
             Ok(Ok(())) => {}
-            Ok(Err(e)) => log::warn!("tcp punch error: {e}"),
-            Err(_) => log::warn!("tcp punch timeout"),
+            Ok(Err(error)) if self.pool.ensure_open().is_ok() => {
+                log::warn!("tcp punch error: {error}");
+            }
+            Err(_) if self.pool.ensure_open().is_ok() => log::warn!("tcp punch timeout"),
+            _ => {}
         }
     }
 

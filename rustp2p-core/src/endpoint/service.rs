@@ -114,12 +114,16 @@ impl TunnelIncoming {
     /// Stops accepting tunnels and waits for the endpoint's internal workers
     /// to exit and release their TCP and UDP sockets.
     ///
-    /// Outstanding `Puncher` or `Tunnel` handles do not keep the listeners
-    /// open. Raw UDP sockets returned by
-    /// [`Puncher::udp_sockets`](crate::punch::Puncher::udp_sockets) are different:
-    /// drop those socket handles before closing. If one still owns a socket,
-    /// this method returns [`io::ErrorKind::AddrInUse`] after shutting down the
-    /// endpoint. After success the endpoint itself no longer holds the ports.
+    /// This also cancels pending outgoing TCP attempts. Outstanding
+    /// `Puncher` or `Tunnel` handles do not keep the listeners open.
+    ///
+    /// The port-release guarantee covers sockets owned by the endpoint.
+    /// Before closing, drop any raw sockets obtained from
+    /// [`Puncher::udp_sockets`](crate::punch::Puncher::udp_sockets).
+    /// This method returns [`io::ErrorKind::AddrInUse`] after shutdown if the
+    /// original `Arc<UdpSocket>` still has owners. It cannot detect a socket
+    /// taken out of its Arc (e.g. with `Arc::try_unwrap`) or a duplicated
+    /// socket handle; those can keep a port bound even after `Ok(())`.
     ///
     /// Dropping the endpoint (or cancelling this future) requests shutdown
     /// without waiting for the workers.
@@ -560,6 +564,104 @@ mod tests {
             .map(|addr| std::net::UdpSocket::bind(addr).unwrap())
             .collect::<Vec<_>>();
         replacement.close().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn retained_puncher_cannot_connect_after_close() {
+        use crate::nat::NatInfo;
+        use crate::punch::{PunchInfo, PunchModel};
+
+        let endpoint = udp_incoming().await;
+        let puncher = endpoint.puncher();
+        let peer = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = peer.local_addr().unwrap();
+        let info = PunchInfo::new(
+            PunchModel::all(),
+            NatInfo {
+                mapping_tcp_addr: vec![addr],
+                ..Default::default()
+            },
+        );
+        endpoint.close().await.unwrap();
+        assert_eq!(
+            puncher.connect_tcp(addr, None).await.unwrap_err().kind(),
+            std::io::ErrorKind::BrokenPipe
+        );
+        assert_eq!(
+            puncher
+                .punch_now(None, Bytes::new(), info)
+                .await
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::BrokenPipe
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), peer.accept())
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn close_cancels_and_joins_in_flight_tcp_attempt() {
+        let endpoint = udp_incoming().await;
+        let pool = endpoint.pool.clone();
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (resource, mut released) = tokio::sync::oneshot::channel::<()>();
+        let connecting = tokio::spawn(async move {
+            pool.run_tcp_attempt(async move {
+                let _resource = resource;
+                let _ = started_tx.send(());
+                std::future::pending().await
+            })
+            .await
+        });
+        tokio::time::timeout(Duration::from_secs(2), started_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(2), endpoint.close())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            released.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Closed)
+        ));
+        assert_eq!(
+            connecting.await.unwrap().unwrap_err().kind(),
+            std::io::ErrorKind::BrokenPipe
+        );
+    }
+
+    #[tokio::test]
+    async fn extracted_udp_socket_remains_callers_responsibility() {
+        let endpoint =
+            TunnelIncoming::bind(Config::udp(0).enable_ipv6(false).max_assistant_sockets(1))
+                .await
+                .unwrap();
+        let puncher = endpoint.puncher();
+        puncher.apply_nat_model(NatType::Symmetric).unwrap();
+        let assistant = puncher.udp_sockets().pop().unwrap();
+        puncher.apply_nat_model(NatType::Cone).unwrap();
+        let socket = tokio::time::timeout(Duration::from_secs(2), async {
+            let mut assistant = assistant;
+            loop {
+                match std::sync::Arc::try_unwrap(assistant) {
+                    Ok(socket) => break socket,
+                    Err(shared) => assistant = shared,
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let addr = socket.local_addr().unwrap();
+        endpoint.close().await.unwrap();
+        // This socket is now owned directly by the caller, not an endpoint Arc.
+        assert!(UdpSocket::bind(addr).await.is_err());
+        drop(socket);
+        let _rebound = UdpSocket::bind(addr).await.unwrap();
     }
 
     #[tokio::test]

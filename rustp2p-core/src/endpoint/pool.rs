@@ -9,7 +9,7 @@ use tokio::io::Interest;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::OwnedWriteHalf;
 use tokio::net::UdpSocket;
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio::task::JoinSet;
 
 use crate::endpoint::codec::InitCodec;
@@ -30,8 +30,8 @@ struct SocketState {
     main_udp_v4: Option<Arc<UdpSocket>>,
     main_udp_v6: Option<Arc<UdpSocket>>,
     assistant_udp: Vec<UdpEntry>,
-    // Includes sockets previously removed from the assistant set, so an
-    // externally held raw socket can still be reported by close().
+    // Tracks the original Arcs, including retired assistants. It does not
+    // track sockets extracted from an Arc or independently duplicated.
     udp_refs: Vec<Weak<UdpSocket>>,
     // None is a permanent shutdown. Task registration and socket creation
     // are serialized with taking this set.
@@ -406,6 +406,36 @@ impl SocketPool {
             .ok_or_else(Self::closed)
     }
 
+    pub(crate) fn subscribe_shutdown(&self) -> io::Result<broadcast::Receiver<()>> {
+        // Subscribe while holding the same lock used to publish shutdown.
+        let state = self.state.read();
+        state.tasks.as_ref().ok_or_else(Self::closed)?;
+        Ok(self.global_shutdown.subscribe())
+    }
+
+    /// Register an outgoing TCP attempt so close can abort and join it,
+    /// including time spent connecting or waiting to publish the tunnel.
+    pub(crate) async fn run_tcp_attempt(
+        &self,
+        attempt: impl std::future::Future<Output = io::Result<()>> + Send + 'static,
+    ) -> io::Result<()> {
+        let (mut result_tx, result_rx) = oneshot::channel();
+        {
+            let mut state = self.state.write();
+            let tasks = state.tasks.as_mut().ok_or_else(Self::closed)?;
+            Self::reap_finished(tasks);
+            tasks.spawn(async move {
+                tokio::select! {
+                    biased;
+                    // Also stop when the caller drops or times out the attempt.
+                    _ = result_tx.closed() => {}
+                    result = attempt => { let _ = result_tx.send(result); }
+                }
+            });
+        }
+        result_rx.await.map_err(|_| Self::closed())?
+    }
+
     fn reap_finished(tasks: &mut JoinSet<()>) {
         while let Some(result) = tasks.try_join_next() {
             if let Err(error) = result {
@@ -459,7 +489,7 @@ impl SocketPool {
         if refs.iter().any(|socket| socket.strong_count() != 0) {
             return Err(io::Error::new(
                 io::ErrorKind::AddrInUse,
-                "endpoint closed, but a raw UDP socket handle still holds a port",
+                "endpoint closed, but a shared Arc<UdpSocket> still holds a port",
             ));
         }
         Ok(())
