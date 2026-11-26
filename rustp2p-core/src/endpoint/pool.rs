@@ -8,7 +8,7 @@ use std::{mem, os::fd::AsRawFd};
 use tokio::io::Interest;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::OwnedWriteHalf;
-use tokio::net::UdpSocket;
+use tokio::net::{TcpStream, UdpSocket};
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio::task::JoinSet;
 
@@ -413,12 +413,12 @@ impl SocketPool {
         Ok(self.global_shutdown.subscribe())
     }
 
-    /// Register an outgoing TCP attempt so close can abort and join it,
-    /// including time spent connecting or waiting to publish the tunnel.
+    /// Track the TCP dial so close can abort and join it. Only the waiting
+    /// caller can turn the resulting stream into a tunnel.
     pub(crate) async fn run_tcp_attempt(
         &self,
-        attempt: impl std::future::Future<Output = io::Result<()>> + Send + 'static,
-    ) -> io::Result<()> {
+        attempt: impl std::future::Future<Output = io::Result<TcpStream>> + Send + 'static,
+    ) -> io::Result<TcpStream> {
         let (mut result_tx, result_rx) = oneshot::channel();
         {
             let mut state = self.state.write();
@@ -1048,6 +1048,79 @@ async fn write_all_vectored(write: &mut OwnedWriteHalf, iov: &mut [IoSlice<'_>])
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tcp_tests {
+    use super::*;
+    use crate::endpoint::{codec::BytesInitCodec, Config};
+    use crate::punch::Puncher;
+    use std::future::{poll_fn, Future};
+    use std::time::Duration;
+    use tokio::net::TcpListener;
+    use tokio::time::timeout;
+
+    #[tokio::test]
+    async fn dropping_connect_after_dial_does_not_publish_tunnel() {
+        let (accept_tx, mut accept_rx) = mpsc::channel(1);
+        let pool = Arc::new(SocketPool::new(
+            UdpSocket::bind("127.0.0.1:0").await.unwrap(),
+            None,
+            accept_tx,
+            Box::new(BytesInitCodec),
+            2048,
+        ));
+        let puncher = Puncher::new(pool.clone(), &Config::udp(0).enable_ipv6(false), 0);
+        let peer = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut connecting = Box::pin(puncher.connect_tcp(
+            peer.local_addr().unwrap(),
+            Some(Bytes::from_static(b"initial data")),
+        ));
+
+        // Start the dial without polling its receiver again. The only task
+        // that can finish here is the dial; the UDP workers stay running.
+        assert!(
+            poll_fn(|cx| std::task::Poll::Ready(connecting.as_mut().poll(cx)))
+                .await
+                .is_pending()
+        );
+        let joined = timeout(
+            Duration::from_secs(5),
+            poll_fn(|cx| {
+                pool.state
+                    .write()
+                    .tasks
+                    .as_mut()
+                    .unwrap()
+                    .poll_join_next(cx)
+            }),
+        )
+        .await
+        .expect("dial worker should finish")
+        .expect("dial worker should be tracked");
+        joined.unwrap();
+        let (mut stream, _) = timeout(Duration::from_secs(5), peer.accept())
+            .await
+            .unwrap()
+            .unwrap();
+
+        drop(connecting);
+        assert!(matches!(
+            accept_rx.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        ));
+        // Dropping the caller also drops the stream, without sending the
+        // supplied initial data or leaving a tunnel task holding it open.
+        let mut bytes = [0; 1];
+        assert_eq!(
+            timeout(Duration::from_secs(5), stream.read(&mut bytes))
+                .await
+                .unwrap()
+                .unwrap(),
+            0,
+        );
+        pool.close().await.unwrap();
+    }
 }
 
 #[cfg(all(

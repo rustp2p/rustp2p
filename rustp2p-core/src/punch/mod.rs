@@ -153,7 +153,9 @@ impl Puncher {
     /// The connection is established through the configured default
     /// interface. `initial_data`, when present, is sent to the peer before
     /// the tunnel is published, replaying leading bytes that were consumed
-    /// while the connection was established.
+    /// while the connection was established. Dropping the future before
+    /// publication prevents the tunnel from appearing in
+    /// [`TunnelIncoming::next`](crate::endpoint::TunnelIncoming::next).
     pub async fn connect_tcp(
         &self,
         addr: SocketAddr,
@@ -169,18 +171,22 @@ impl Puncher {
         ttl: Option<u8>,
     ) -> io::Result<()> {
         let puncher = self.clone();
-        self.pool
+        let stream = self
+            .pool
             .run_tcp_attempt(async move {
-                let stream = crate::socket::connect_tcp(
+                crate::socket::connect_tcp(
                     addr,
                     Some(puncher.tcp_bind_addr(addr, 0)?),
                     puncher.nat_config.default_interface.as_ref(),
                     ttl,
                 )
-                .await?;
-                puncher.pool.publish_tcp(stream, addr, initial_data).await
+                .await
             })
-            .await
+            .await?;
+        // The tracked worker only connects. If this future is dropped,
+        // the result is discarded instead of creating or publishing a tunnel.
+        self.pool.ensure_open()?;
+        self.pool.publish_tcp(stream, addr, initial_data).await
     }
 
     /// Gets NAT information using the STUN and mapping configuration captured
