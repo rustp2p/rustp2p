@@ -3,7 +3,7 @@ resolver = "2"
 members = ["rustp2p-core", "rustp2p-quic"]
 
 [workspace.dependencies]
-rustp2p-core = { path = "rustp2p-core", version = "0.1" }
+rustp2p-core = { path = "rustp2p-core", version = "0.2.0" }
 tachyonix = "0.3"
 thiserror = "2"
 tokio = { version = "1.42", features = ["full"] }
