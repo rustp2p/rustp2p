@@ -933,7 +933,40 @@ fn is_recoverable_udp_recv_error(error: &io::Error) -> bool {
         )
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "android")))]
+#[cfg(windows)]
+fn is_recoverable_udp_recv_error(error: &io::Error) -> bool {
+    error.kind() == io::ErrorKind::Interrupted
+        || matches!(
+            error.raw_os_error(),
+            Some(
+                10040 // WSAEMSGSIZE
+                | 10051 // WSAENETUNREACH
+                | 10054 // WSAECONNRESET, ICMP port unreachable
+                | 10061 // WSAECONNREFUSED
+                | 10065 // WSAEHOSTUNREACH
+            )
+        )
+}
+
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
+fn is_recoverable_udp_recv_error(error: &io::Error) -> bool {
+    error.kind() == io::ErrorKind::Interrupted
+        || matches!(
+            error.raw_os_error(),
+            Some(
+                libc::ECONNREFUSED
+                    | libc::ECONNRESET
+                    | libc::ECONNABORTED
+                    | libc::EHOSTUNREACH
+                    | libc::ENETUNREACH
+                    | libc::EADDRNOTAVAIL
+                    | libc::EPROTO
+                    | libc::EMSGSIZE
+            )
+        )
+}
+
+#[cfg(not(any(unix, windows)))]
 fn is_recoverable_udp_recv_error(error: &io::Error) -> bool {
     error.kind() == io::ErrorKind::Interrupted
 }
